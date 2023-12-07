@@ -19,6 +19,7 @@ import (
 	"github.com/trezor/blockbook/bchain/coins/bsc"
 	"github.com/trezor/blockbook/bchain/coins/btc"
 	"github.com/trezor/blockbook/bchain/coins/btg"
+	"github.com/trezor/blockbook/bchain/coins/clore"
 	"github.com/trezor/blockbook/bchain/coins/cpuchain"
 	"github.com/trezor/blockbook/bchain/coins/dash"
 	"github.com/trezor/blockbook/bchain/coins/dcr"
@@ -140,6 +141,7 @@ func init() {
 	BlockChainFactories["BNB Smart Chain Archive"] = bsc.NewBNBSmartChainRPC
 	BlockChainFactories["Polygon"] = polygon.NewPolygonRPC
 	BlockChainFactories["Polygon Archive"] = polygon.NewPolygonRPC
+	BlockChainFactories["Clore"] = clore.NewCloreRPC
 }
 
 // NewBlockChain creates bchain.BlockChain and bchain.Mempool for the coin passed by the parameter coin
