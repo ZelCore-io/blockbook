@@ -8,7 +8,10 @@ RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y build-essential git wget pkg-config lxc-dev libzmq3-dev \
                        libgflags-dev libsnappy-dev zlib1g-dev libbz2-dev \
-                       libzstd-dev liblz4-dev graphviz && \
+                       libzstd-dev liblz4-dev graphviz libboost-filesystem1.74.0 \
+                       libboost-program-options1.74.0 libboost-thread1.74.0 \
+                       libboost-chrono1.74.0 libdb5.3++ libevent-pthreads-2.1-7 \
+                       libevent-2.1-7 && \
     apt-get clean
 ARG GOLANG_VERSION
 ENV GOLANG_VERSION=go1.19.2
