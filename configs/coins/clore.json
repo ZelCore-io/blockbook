@@ -49,7 +49,7 @@
     "internal_binding_template": ":{{.Ports.BlockbookInternal}}",
     "public_binding_template": ":{{.Ports.BlockbookPublic}}",
     "explorer_url": "",
-    "additional_params": "-resyncindexperiod=30011 -resyncmempoolperiod=2011",
+    "additional_params": "-resyncindexperiod=30011 -resyncmempoolperiod=2011 -workers=1",
     "block_chain": {
       "parse": true,
       "mempool_workers": 8,
