@@ -22,7 +22,7 @@ import (
 	"github.com/trezor/blockbook/common"
 )
 
-const dbVersion = 6
+const dbVersion = 7
 
 const packedHeightBytes = 4
 const maxAddrDescLen = 1024
@@ -59,18 +59,19 @@ const (
 
 // RocksDB handle
 type RocksDB struct {
-	path          string
-	db            *grocksdb.DB
-	wo            *grocksdb.WriteOptions
-	ro            *grocksdb.ReadOptions
-	cfh           []*grocksdb.ColumnFamilyHandle
-	chainParser   bchain.BlockChainParser
-	is            *common.InternalState
-	metrics       *common.Metrics
-	cache         *grocksdb.Cache
-	maxOpenFiles  int
-	cbs           connectBlockStats
-	extendedIndex bool
+	path            string
+	db              *grocksdb.DB
+	wo              *grocksdb.WriteOptions
+	ro              *grocksdb.ReadOptions
+	cfh             []*grocksdb.ColumnFamilyHandle
+	chainParser     bchain.BlockChainParser
+	is              *common.InternalState
+	metrics         *common.Metrics
+	cache           *grocksdb.Cache
+	maxOpenFiles    int
+	cbs             connectBlockStats
+	extendedIndex   bool
+	connectBlockMux sync.Mutex
 }
 
 const (
@@ -149,7 +150,7 @@ func NewRocksDB(path string, cacheSize, maxOpenFiles int, parser bchain.BlockCha
 	}
 	wo := grocksdb.NewDefaultWriteOptions()
 	ro := grocksdb.NewDefaultReadOptions()
-	return &RocksDB{path, db, wo, ro, cfh, parser, nil, metrics, c, maxOpenFiles, connectBlockStats{}, extendedIndex}, nil
+	return &RocksDB{path, db, wo, ro, cfh, parser, nil, metrics, c, maxOpenFiles, connectBlockStats{}, extendedIndex, sync.Mutex{}}, nil
 }
 
 func (d *RocksDB) closeDB() error {
@@ -333,6 +334,9 @@ const (
 
 // ConnectBlock indexes addresses in the block and stores them in db
 func (d *RocksDB) ConnectBlock(block *bchain.Block) error {
+	d.connectBlockMux.Lock()
+	defer d.connectBlockMux.Unlock()
+
 	wb := grocksdb.NewWriteBatch()
 	defer wb.Destroy()
 
@@ -375,12 +379,12 @@ func (d *RocksDB) ConnectBlock(block *bchain.Block) error {
 			}
 		}
 	} else if chainType == bchain.ChainEthereumType {
-		addressContracts := make(map[string]*AddrContracts)
+		addressContracts := make(map[string]*unpackedAddrContracts)
 		blockTxs, err := d.processAddressesEthereumType(block, addresses, addressContracts)
 		if err != nil {
 			return err
 		}
-		if err := d.storeAddressContracts(wb, addressContracts); err != nil {
+		if err := d.storeUnpackedAddressContracts(wb, addressContracts); err != nil {
 			return err
 		}
 		if err := d.storeInternalDataEthereumType(wb, blockTxs); err != nil {
@@ -401,7 +405,7 @@ func (d *RocksDB) ConnectBlock(block *bchain.Block) error {
 	if err := d.WriteBatch(wb); err != nil {
 		return err
 	}
-	avg := d.is.AppendBlockTime(uint32(block.Time))
+	avg := d.is.SetBlockTime(block.Height, uint32(block.Time))
 	if d.metrics != nil {
 		d.metrics.AvgBlockPeriod.Set(float64(avg))
 	}
@@ -864,7 +868,7 @@ func (d *RocksDB) cleanupBlockTxs(wb *grocksdb.WriteBatch, block *bchain.Block) 
 				break
 			}
 			val.Free()
-			d.db.DeleteCF(d.wo, d.cfh[cfBlockTxs], key)
+			wb.DeleteCF(d.cfh[cfBlockTxs], key)
 		}
 	}
 	return nil
@@ -1848,6 +1852,101 @@ func (d *RocksDB) loadBlockTimes() ([]uint32, error) {
 	return times, nil
 }
 
+func (d *RocksDB) setBlockTimes() {
+	start := time.Now()
+	bt, err := d.loadBlockTimes()
+	if err != nil {
+		glog.Error("rocksdb: cannot load block times ", err)
+		return
+	}
+	avg := d.is.SetBlockTimes(bt)
+	if d.metrics != nil {
+		d.metrics.AvgBlockPeriod.Set(float64(avg))
+	}
+	glog.Info("rocksdb: processed block times in ", time.Since(start))
+}
+
+func (d *RocksDB) migrateVersion5To6(sc, nc *common.InternalStateColumn) error {
+	// upgrade of DB 5 to 6 for BitcoinType coins is possible
+	// columns transactions and fiatRates must be cleared as they are not compatible
+	if d.chainParser.GetChainType() == bchain.ChainBitcoinType {
+		if nc.Name == "transactions" {
+			d.db.DeleteRangeCF(d.wo, d.cfh[cfTransactions], []byte{0}, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
+		} else if nc.Name == "fiatRates" {
+			d.db.DeleteRangeCF(d.wo, d.cfh[cfFiatRates], []byte{0}, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
+		}
+		glog.Infof("Column %s upgraded from v%d to v%d", nc.Name, sc.Version, dbVersion)
+	} else {
+		return errors.Errorf("DB version %v of column '%v' does not match the required version %v. DB is not compatible.", sc.Version, sc.Name, dbVersion)
+	}
+	return nil
+}
+
+func (d *RocksDB) migrateAddrContractsToV7(approxRows int64) error {
+	glog.Info("MigrateAddrContracts: starting, will process approximately ", approxRows, " rows")
+	var row int64
+	var seekKey []byte
+	// do not use cache
+	ro := grocksdb.NewDefaultReadOptions()
+	ro.SetFillCache(false)
+	for {
+		var addrDesc bchain.AddressDescriptor
+		it := d.db.NewIteratorCF(ro, d.cfh[cfAddressContracts])
+		if row == 0 {
+			it.SeekToFirst()
+		} else {
+			glog.Info("MigrateAddrContracts: row ", row)
+			it.Seek(seekKey)
+			it.Next()
+		}
+
+		wb := grocksdb.NewWriteBatch()
+		for count := 0; it.Valid() && count < refreshIterator; it.Next() {
+			addrDesc = append([]byte{}, it.Key().Data()...)
+			buf := it.Value().Data()
+			count++
+			row++
+			acs, err := unpackAddrContractsV6(buf, addrDesc)
+			if err != nil {
+				glog.Error(err, ", ", hex.EncodeToString(buf))
+				acs = &AddrContracts{}
+			}
+			repacked := packAddrContracts(acs)
+			wb.PutCF(d.cfh[cfAddressContracts], addrDesc, repacked)
+		}
+		err := d.WriteBatch(wb)
+		wb.Destroy()
+		if err != nil {
+			return errors.Errorf("error storing repacked data %v", err)
+		}
+
+		seekKey = addrDesc
+		valid := it.Valid()
+		it.Close()
+		if !valid {
+			break
+		}
+	}
+	glog.Info("MigrateAddrContracts: finished, migrated ", row, " rows")
+	return nil
+}
+
+func (d *RocksDB) migrateVersion6To7(sc, nc *common.InternalStateColumn) error {
+	// DB v7 must migrate ethereum type column addressContracts
+	if d.chainParser.GetChainType() == bchain.ChainEthereumType {
+		if nc.Name == "addressContracts" {
+			err := d.migrateAddrContractsToV7(sc.Rows)
+			if err != nil {
+				return err
+			}
+		} else if nc.Name == "transactions" {
+			d.db.DeleteRangeCF(d.wo, d.cfh[cfTransactions], []byte{0}, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
+		}
+		glog.Infof("Column %s migrated from v%d to v%d", nc.Name, sc.Version, dbVersion)
+	}
+	return nil
+}
+
 func (d *RocksDB) checkColumns(is *common.InternalState) ([]common.InternalStateColumn, error) {
 	// make sure that column stats match the columns
 	sc := is.DbColumns
@@ -1859,15 +1958,16 @@ func (d *RocksDB) checkColumns(is *common.InternalState) ([]common.InternalState
 			if sc[j].Name == nc[i].Name {
 				// check the version of the column, if it does not match, the db is not compatible
 				if sc[j].Version != dbVersion {
-					// upgrade of DB 5 to 6 for BitcoinType coins is possible
-					// columns transactions and fiatRates must be cleared as they are not compatible
-					if sc[j].Version == 5 && dbVersion == 6 && d.chainParser.GetChainType() == bchain.ChainBitcoinType {
-						if nc[i].Name == "transactions" {
-							d.db.DeleteRangeCF(d.wo, d.cfh[cfTransactions], []byte{0}, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
-						} else if nc[i].Name == "fiatRates" {
-							d.db.DeleteRangeCF(d.wo, d.cfh[cfFiatRates], []byte{0}, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
+					if sc[j].Version == 5 && dbVersion == 6 {
+						err := d.migrateVersion5To6(&sc[j], &nc[i])
+						if err != nil {
+							return nil, err
 						}
-						glog.Infof("Column %s upgraded from v%d to v%d", nc[i].Name, sc[j].Version, dbVersion)
+					} else if sc[j].Version == 6 && dbVersion == 7 {
+						err := d.migrateVersion6To7(&sc[j], &nc[i])
+						if err != nil {
+							return nil, err
+						}
 					} else {
 						return nil, errors.Errorf("DB version %v of column '%v' does not match the required version %v. DB is not compatible.", sc[j].Version, sc[j].Name, dbVersion)
 					}
@@ -1932,15 +2032,14 @@ func (d *RocksDB) LoadInternalState(config *common.Config) (*common.InternalStat
 		return nil, err
 	}
 	is.DbColumns = nc
-	bt, err := d.loadBlockTimes()
-	if err != nil {
-		return nil, err
-	}
-	avg := is.SetBlockTimes(bt)
-	if d.metrics != nil {
-		d.metrics.AvgBlockPeriod.Set(float64(avg))
-	}
 
+	d.is = is
+	// set block times asynchronously (if not in unit test), it slows server startup for chains with large number of blocks
+	if is.Coin == "coin-unittest" {
+		d.setBlockTimes()
+	} else {
+		go d.setBlockTimes()
+	}
 	// after load, reset the synchronization data
 	is.IsSynchronized = false
 	is.IsMempoolSynchronized = false
@@ -1962,6 +2061,7 @@ func (d *RocksDB) LoadInternalState(config *common.Config) (*common.InternalStat
 	} else {
 		is.CoinLabel = config.CoinLabel
 	}
+	is.Network = config.Network
 
 	return is, nil
 }
@@ -2032,13 +2132,13 @@ func (d *RocksDB) computeColumnSize(col int, stopCompute chan os.Signal) (int64,
 				return 0, 0, 0, errors.New("Interrupted")
 			default:
 			}
-			key = it.Key().Data()
+			key = append([]byte{}, it.Key().Data()...)
 			count++
 			rows++
 			keysSum += int64(len(key))
 			valuesSum += int64(len(it.Value().Data()))
 		}
-		seekKey = append([]byte{}, key...)
+		seekKey = key
 		valid := it.Valid()
 		it.Close()
 		if !valid {
@@ -2213,7 +2313,7 @@ func (d *RocksDB) FixUtxos(stop chan os.Signal) error {
 				return errors.New("Interrupted")
 			default:
 			}
-			addrDesc = it.Key().Data()
+			addrDesc = append([]byte{}, it.Key().Data()...)
 			buf := it.Value().Data()
 			count++
 			row++
@@ -2240,7 +2340,7 @@ func (d *RocksDB) FixUtxos(stop chan os.Signal) error {
 				fixedCount++
 			}
 		}
-		seekKey = append([]byte{}, addrDesc...)
+		seekKey = addrDesc
 		valid := it.Valid()
 		it.Close()
 		if !valid {
@@ -2401,6 +2501,10 @@ func packBigint(bi *big.Int, buf []byte) int {
 	}
 	buf[0] = byte(fb)
 	return fb + 1
+}
+
+func packedBigintLen(buf []byte) int {
+	return int(buf[0]) + 1
 }
 
 func unpackBigint(buf []byte) (big.Int, int) {

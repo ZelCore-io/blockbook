@@ -3,8 +3,10 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/trezor/blockbook/bchain"
@@ -87,6 +89,21 @@ func (a *Amount) MarshalJSON() (out []byte, err error) {
 	return []byte(`"` + (*big.Int)(a).String() + `"`), nil
 }
 
+func (a *Amount) UnmarshalJSON(data []byte) error {
+	s := strings.Trim(string(data), "\"")
+	if len(s) > 0 {
+		bigValue, parsed := new(big.Int).SetString(s, 10)
+		if !parsed {
+			return fmt.Errorf("couldn't parse number: %s", s)
+		}
+		*a = Amount(*bigValue)
+	} else {
+		// assuming empty string means zero
+		*a = Amount{}
+	}
+	return nil
+}
+
 func (a *Amount) String() string {
 	if a == nil {
 		return ""
@@ -158,21 +175,23 @@ type MultiTokenValue struct {
 
 // Token contains info about tokens held by an address
 type Token struct {
-	Type             bchain.TokenTypeName `json:"type" ts_type:"'XPUBAddress' | 'ERC20' | 'ERC721' | 'ERC1155'"`
-	Name             string               `json:"name"`
-	Path             string               `json:"path,omitempty"`
-	Contract         string               `json:"contract,omitempty"`
-	Transfers        int                  `json:"transfers"`
-	Symbol           string               `json:"symbol,omitempty"`
-	Decimals         int                  `json:"decimals,omitempty"`
-	BalanceSat       *Amount              `json:"balance,omitempty"`
-	BaseValue        float64              `json:"baseValue,omitempty"`        // value in the base currency (ETH for Ethereum)
-	SecondaryValue   float64              `json:"secondaryValue,omitempty"`   // value in secondary (fiat) currency, if specified
-	Ids              []Amount             `json:"ids,omitempty"`              // multiple ERC721 tokens
-	MultiTokenValues []MultiTokenValue    `json:"multiTokenValues,omitempty"` // multiple ERC1155 tokens
-	TotalReceivedSat *Amount              `json:"totalReceived,omitempty"`
-	TotalSentSat     *Amount              `json:"totalSent,omitempty"`
-	ContractIndex    string               `json:"-"`
+	// Deprecated: Use Standard instead.
+	Type             bchain.TokenStandardName `json:"type" ts_type:"'' | 'XPUBAddress' | 'ERC20' | 'ERC721' | 'ERC1155' | 'BEP20' | 'BEP721' | 'BEP1155'" ts_doc:"@deprecated: Use standard instead."`
+	Standard         bchain.TokenStandardName `json:"standard" ts_type:"'' | 'XPUBAddress' | 'ERC20' | 'ERC721' | 'ERC1155' | 'BEP20' | 'BEP721' | 'BEP1155'"`
+	Name             string                   `json:"name"`
+	Path             string                   `json:"path,omitempty"`
+	Contract         string                   `json:"contract,omitempty"`
+	Transfers        int                      `json:"transfers"`
+	Symbol           string                   `json:"symbol,omitempty"`
+	Decimals         int                      `json:"decimals"`
+	BalanceSat       *Amount                  `json:"balance,omitempty"`
+	BaseValue        float64                  `json:"baseValue,omitempty"`        // value in the base currency (ETH for Ethereum)
+	SecondaryValue   float64                  `json:"secondaryValue,omitempty"`   // value in secondary (fiat) currency, if specified
+	Ids              []Amount                 `json:"ids,omitempty"`              // multiple ERC721 tokens
+	MultiTokenValues []MultiTokenValue        `json:"multiTokenValues,omitempty"` // multiple ERC1155 tokens
+	TotalReceivedSat *Amount                  `json:"totalReceived,omitempty"`
+	TotalSentSat     *Amount                  `json:"totalSent,omitempty"`
+	ContractIndex    string                   `json:"-"`
 }
 
 // Tokens is array of Token
@@ -204,15 +223,17 @@ func (a Tokens) Less(i, j int) bool {
 
 // TokenTransfer contains info about a token transfer done in a transaction
 type TokenTransfer struct {
-	Type             bchain.TokenTypeName `json:"type"`
-	From             string               `json:"from"`
-	To               string               `json:"to"`
-	Contract         string               `json:"contract"`
-	Name             string               `json:"name"`
-	Symbol           string               `json:"symbol"`
-	Decimals         int                  `json:"decimals"`
-	Value            *Amount              `json:"value,omitempty"`
-	MultiTokenValues []MultiTokenValue    `json:"multiTokenValues,omitempty"`
+	// Deprecated: Use Standard instead.
+	Type             bchain.TokenStandardName `json:"type" ts_type:"'' | 'XPUBAddress' | 'ERC20' | 'ERC721' | 'ERC1155' | 'BEP20' | 'BEP721' | 'BEP1155'" ts_doc:"@deprecated: Use standard instead."`
+	Standard         bchain.TokenStandardName `json:"standard" ts_type:"'' | 'XPUBAddress' | 'ERC20' | 'ERC721' | 'ERC1155' | 'BEP20' | 'BEP721' | 'BEP1155'"`
+	From             string                   `json:"from"`
+	To               string                   `json:"to"`
+	Contract         string                   `json:"contract"`
+	Name             string                   `json:"name,omitempty"`
+	Symbol           string                   `json:"symbol,omitempty"`
+	Decimals         int                      `json:"decimals"`
+	Value            *Amount                  `json:"value,omitempty"`
+	MultiTokenValues []MultiTokenValue        `json:"multiTokenValues,omitempty"`
 }
 
 type EthereumInternalTransfer struct {
@@ -224,17 +245,24 @@ type EthereumInternalTransfer struct {
 
 // EthereumSpecific contains ethereum specific transaction data
 type EthereumSpecific struct {
-	Type              bchain.EthereumInternalTransactionType `json:"type,omitempty"`
-	CreatedContract   string                                 `json:"createdContract,omitempty"`
-	Status            eth.TxStatus                           `json:"status"` // 1 OK, 0 Fail, -1 pending
-	Error             string                                 `json:"error,omitempty"`
-	Nonce             uint64                                 `json:"nonce"`
-	GasLimit          *big.Int                               `json:"gasLimit"`
-	GasUsed           *big.Int                               `json:"gasUsed,omitempty"`
-	GasPrice          *Amount                                `json:"gasPrice"`
-	Data              string                                 `json:"data,omitempty"`
-	ParsedData        *bchain.EthereumParsedInputData        `json:"parsedData,omitempty"`
-	InternalTransfers []EthereumInternalTransfer             `json:"internalTransfers,omitempty"`
+	Type                 bchain.EthereumInternalTransactionType `json:"type,omitempty"`
+	CreatedContract      string                                 `json:"createdContract,omitempty"`
+	Status               eth.TxStatus                           `json:"status"` // 1 OK, 0 Fail, -1 pending
+	Error                string                                 `json:"error,omitempty"`
+	Nonce                uint64                                 `json:"nonce"`
+	GasLimit             *big.Int                               `json:"gasLimit"`
+	GasUsed              *big.Int                               `json:"gasUsed,omitempty"`
+	GasPrice             *Amount                                `json:"gasPrice,omitempty"`
+	MaxPriorityFeePerGas *Amount                                `json:"maxPriorityFeePerGas,omitempty"`
+	MaxFeePerGas         *Amount                                `json:"maxFeePerGas,omitempty"`
+	BaseFeePerGas        *Amount                                `json:"baseFeePerGas,omitempty"`
+	L1Fee                *big.Int                               `json:"l1Fee,omitempty"`
+	L1FeeScalar          string                                 `json:"l1FeeScalar,omitempty"`
+	L1GasPrice           *Amount                                `json:"l1GasPrice,omitempty"`
+	L1GasUsed            *big.Int                               `json:"l1GasUsed,omitempty"`
+	Data                 string                                 `json:"data,omitempty"`
+	ParsedData           *bchain.EthereumParsedInputData        `json:"parsedData,omitempty"`
+	InternalTransfers    []EthereumInternalTransfer             `json:"internalTransfers,omitempty"`
 }
 
 type AddressAlias struct {
@@ -316,6 +344,19 @@ type AddressFilter struct {
 	OnlyConfirmed bool
 }
 
+// StakingPool holds data about address participation in a staking pool contract
+type StakingPool struct {
+	Contract                string  `json:"contract"`
+	Name                    string  `json:"name"`
+	PendingBalance          *Amount `json:"pendingBalance"`
+	PendingDepositedBalance *Amount `json:"pendingDepositedBalance"`
+	DepositedBalance        *Amount `json:"depositedBalance"`
+	WithdrawTotalAmount     *Amount `json:"withdrawTotalAmount"`
+	ClaimableAmount         *Amount `json:"claimableAmount"`
+	RestakedReward          *Amount `json:"restakedReward"`
+	AutocompoundBalance     *Amount `json:"autocompoundBalance"`
+}
+
 // Address holds information about address and its transactions
 type Address struct {
 	Paging
@@ -340,8 +381,10 @@ type Address struct {
 	TotalBaseValue        float64              `json:"totalBaseValue,omitempty"`      // value including tokens in base currency
 	TotalSecondaryValue   float64              `json:"totalSecondaryValue,omitempty"` // value including tokens in secondary currency
 	ContractInfo          *bchain.ContractInfo `json:"contractInfo,omitempty"`
-	Erc20Contract         *bchain.ContractInfo `json:"erc20Contract,omitempty"` // deprecated
-	AddressAliases        AddressAliasesMap    `json:"addressAliases,omitempty"`
+	// Deprecated: replaced by ContractInfo
+	Erc20Contract  *bchain.ContractInfo `json:"erc20Contract,omitempty" ts_doc:"@deprecated: replaced by contractInfo"`
+	AddressAliases AddressAliasesMap    `json:"addressAliases,omitempty"`
+	StakingPools   []StakingPool        `json:"stakingPools,omitempty"`
 	// helpers for explorer
 	Filter        string              `json:"-"`
 	XPubAddresses map[string]struct{} `json:"-"`
@@ -485,6 +528,7 @@ type BlockRaw struct {
 // BlockbookInfo contains information about the running blockbook instance
 type BlockbookInfo struct {
 	Coin                         string                       `json:"coin"`
+	Network                      string                       `json:"network"`
 	Host                         string                       `json:"host"`
 	Version                      string                       `json:"version"`
 	GitCommit                    string                       `json:"gitCommit"`
@@ -504,6 +548,7 @@ type BlockbookInfo struct {
 	CurrentFiatRatesTime         *time.Time                   `json:"currentFiatRatesTime,omitempty"`
 	HistoricalFiatRatesTime      *time.Time                   `json:"historicalFiatRatesTime,omitempty"`
 	HistoricalTokenFiatRatesTime *time.Time                   `json:"historicalTokenFiatRatesTime,omitempty"`
+	SupportedStakingPools        []string                     `json:"supportedStakingPools,omitempty"`
 	DbSizeFromColumns            int64                        `json:"dbSizeFromColumns,omitempty"`
 	DbColumns                    []common.InternalStateColumn `json:"dbColumns,omitempty"`
 	About                        string                       `json:"about"`
@@ -545,4 +590,27 @@ type AvailableVsCurrencies struct {
 	Timestamp int64    `json:"ts,omitempty"`
 	Tickers   []string `json:"available_currencies"`
 	Error     string   `json:"error,omitempty"`
+}
+
+// Eip1559Fee
+type Eip1559Fee struct {
+	MaxFeePerGas         *Amount `json:"maxFeePerGas"`
+	MaxPriorityFeePerGas *Amount `json:"maxPriorityFeePerGas"`
+	MinWaitTimeEstimate  int     `json:"minWaitTimeEstimate,omitempty"`
+	MaxWaitTimeEstimate  int     `json:"maxWaitTimeEstimate,omitempty"`
+}
+
+// Eip1559Fees
+type Eip1559Fees struct {
+	BaseFeePerGas              *Amount     `json:"baseFeePerGas,omitempty"`
+	Low                        *Eip1559Fee `json:"low,omitempty"`
+	Medium                     *Eip1559Fee `json:"medium,omitempty"`
+	High                       *Eip1559Fee `json:"high,omitempty"`
+	Instant                    *Eip1559Fee `json:"instant,omitempty"`
+	NetworkCongestion          float64     `json:"networkCongestion,omitempty"`
+	LatestPriorityFeeRange     []*Amount   `json:"latestPriorityFeeRange,omitempty"`
+	HistoricalPriorityFeeRange []*Amount   `json:"historicalPriorityFeeRange,omitempty"`
+	HistoricalBaseFeeRange     []*Amount   `json:"historicalBaseFeeRange,omitempty"`
+	PriorityFeeTrend           string      `json:"priorityFeeTrend,omitempty" ts_type:"'up' | 'down'"`
+	BaseFeeTrend               string      `json:"baseFeeTrend,omitempty" ts_type:"'up' | 'down'"`
 }

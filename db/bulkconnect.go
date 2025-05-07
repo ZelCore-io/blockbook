@@ -29,7 +29,7 @@ type BulkConnect struct {
 	txAddressesMap     map[string]*TxAddresses
 	blockFilters       map[string][]byte
 	balances           map[string]*AddrBalance
-	addressContracts   map[string]*AddrContracts
+	addressContracts   map[string]*unpackedAddrContracts
 	height             uint32
 }
 
@@ -51,7 +51,7 @@ func (d *RocksDB) InitBulkConnect() (*BulkConnect, error) {
 		chainType:        d.chainParser.GetChainType(),
 		txAddressesMap:   make(map[string]*TxAddresses),
 		balances:         make(map[string]*AddrBalance),
-		addressContracts: make(map[string]*AddrContracts),
+		addressContracts: make(map[string]*unpackedAddrContracts),
 		blockFilters:     make(map[string][]byte),
 	}
 	if err := d.SetInconsistentState(true); err != nil {
@@ -264,12 +264,12 @@ func (b *BulkConnect) connectBlockBitcoinType(block *bchain.Block, storeBlockTxs
 }
 
 func (b *BulkConnect) storeAddressContracts(wb *grocksdb.WriteBatch, all bool) (int, error) {
-	var ac map[string]*AddrContracts
+	var ac map[string]*unpackedAddrContracts
 	if all {
 		ac = b.addressContracts
-		b.addressContracts = make(map[string]*AddrContracts)
+		b.addressContracts = make(map[string]*unpackedAddrContracts)
 	} else {
-		ac = make(map[string]*AddrContracts)
+		ac = make(map[string]*unpackedAddrContracts)
 		// store some random address contracts
 		for k, a := range b.addressContracts {
 			ac[k] = a
@@ -279,7 +279,7 @@ func (b *BulkConnect) storeAddressContracts(wb *grocksdb.WriteBatch, all bool) (
 			}
 		}
 	}
-	if err := b.d.storeAddressContracts(wb, ac); err != nil {
+	if err := b.d.storeUnpackedAddressContracts(wb, ac); err != nil {
 		return 0, err
 	}
 	return len(ac), nil
@@ -438,19 +438,18 @@ func (b *BulkConnect) Close() error {
 			return err
 		}
 	}
-	bt, err := b.d.loadBlockTimes()
-	if err != nil {
-		return err
-	}
-	avg := b.d.is.SetBlockTimes(bt)
-	if b.d.metrics != nil {
-		b.d.metrics.AvgBlockPeriod.Set(float64(avg))
-	}
-
 	if err := b.d.SetInconsistentState(false); err != nil {
 		return err
 	}
 	glog.Info("rocksdb: bulk connect closed, db set to open state")
+
+	// set block times asynchronously (if not in unit test), it slows server startup for chains with large number of blocks
+	if b.d.is.Coin == "coin-unittest" {
+		b.d.setBlockTimes()
+	} else {
+		go b.d.setBlockTimes()
+	}
+
 	b.d = nil
 	return nil
 }
