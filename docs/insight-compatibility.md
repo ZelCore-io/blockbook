@@ -155,3 +155,6 @@ clients. Before a user-run canary:
 
 This work performs no deployment, daemon integration, production snapshot rehearsal or source
 publication. No production connectivity is required for the local test suite.
+
+The [2026-10-15 forward-port validation record](fork-forward-port-validation-2026-10-15.md)
+records exact candidate revisions, local evidence, reproduction commands and outstanding qualification.

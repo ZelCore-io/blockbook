@@ -1,0 +1,33 @@
+//go:build unittest
+
+package server
+
+import (
+    "fmt"
+    "io"
+    "net/http/httptest"
+    "os"
+    "path/filepath"
+    "testing"
+)
+
+func TestTask3Preview(t *testing.T) {
+    parser, chain := setupChain(t)
+    s, path := setupPublicHTTPServer(parser, chain, t, false)
+    defer closeAndDestroyPublicServer(t, s, path)
+    s.ConnectFullPublicInterface()
+    for _, debug := range []bool{false, true} {
+        s.debug = debug
+        s.templates = s.parseTemplates()
+        dir := filepath.Join(".superpowers/sdd/2026-10-15-fork-release-management/preview",os.Getenv("TASK3_PREVIEW_VARIANT"),fmt.Sprintf("debug-%v",debug))
+        if err := os.MkdirAll(dir,0755); err != nil { t.Fatal(err) }
+        for name, url := range map[string]string{"status":"/", "transaction":"/tx/fdd824a780cbb718eeb766eb05d83fdefc793a27082cd5e67f856d69798cf7db", "address":"/address/mtGXQvBowMkBpnhLckhxhbwYK44Gs9eEtz"} {
+            response := httptest.NewRecorder()
+            s.https.Handler.ServeHTTP(response,httptest.NewRequest("GET",url,nil))
+            if response.Code != 200 { t.Fatalf("%s: %d",url,response.Code) }
+            html, err := io.ReadAll(response.Result().Body)
+            if err != nil { t.Fatal(err) }
+            if err := os.WriteFile(filepath.Join(dir,name+".html"),html,0644); err != nil { t.Fatal(err) }
+        }
+    }
+}
