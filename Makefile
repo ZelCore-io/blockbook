@@ -1,3 +1,5 @@
+.DEFAULT_GOAL := build
+
 BIN_IMAGE = blockbook-build
 DEB_IMAGE = blockbook-build-deb
 PACKAGER = $(shell id -u):$(shell id -g)
@@ -6,17 +8,28 @@ BASE_IMAGE = $$(awk -F= '$$1=="ID" { print $$2 ;}' /etc/os-release):$$(awk -F= '
 NO_CACHE = false
 TCMALLOC =
 PORTABLE = 0
+GITCOMMIT ?= $(shell git rev-parse HEAD)$(shell test -z "$$(git status --porcelain --untracked-files=normal)" || printf '%s' -dirty)
 ARGS ?=
 
 TARGETS=$(subst .json,, $(shell ls configs/coins))
 
-.PHONY: build build-debug test deb
+.PHONY: build build-debug test deb check-release-source release-build
+
+# Release targets always identify the complete, clean source checkout.
+check-release-source:
+	@status=$$(git status --porcelain --untracked-files=normal) || exit 1; test -z "$$status" || { echo "Release requires a clean checkout (including untracked files)." >&2; exit 1; }
+
+release-build: check-release-source
+	$(MAKE) build GITCOMMIT="$$(git rev-parse HEAD)"
+
+release-deb-blockbook-%: check-release-source
+	$(MAKE) deb-blockbook-$* GITCOMMIT="$$(git rev-parse HEAD)"
 
 build: .bin-image
-	docker run -t --rm -e PACKAGER=$(PACKAGER) -v "$(CURDIR):/src" -v "$(CURDIR)/build:/out" $(BIN_IMAGE) make build ARGS="$(ARGS)"
+	docker run -t --rm -e PACKAGER=$(PACKAGER) -e GITCOMMIT="$(GITCOMMIT)" -v "$(CURDIR):/src" -v "$(CURDIR)/build:/out" $(BIN_IMAGE) make build ARGS="$(ARGS)"
 
 build-debug: .bin-image
-	docker run -t --rm -e PACKAGER=$(PACKAGER) -v "$(CURDIR):/src" -v "$(CURDIR)/build:/out" $(BIN_IMAGE) make build-debug ARGS="$(ARGS)"
+	docker run -t --rm -e PACKAGER=$(PACKAGER) -e GITCOMMIT="$(GITCOMMIT)" -v "$(CURDIR):/src" -v "$(CURDIR)/build:/out" $(BIN_IMAGE) make build-debug ARGS="$(ARGS)"
 
 test: .bin-image
 	docker run -t --rm -e PACKAGER=$(PACKAGER) -v "$(CURDIR):/src" --network="host" $(BIN_IMAGE) make test ARGS="$(ARGS)"
@@ -31,10 +44,10 @@ deb-backend-%: .deb-image
 	docker run -t --rm -e PACKAGER=$(PACKAGER) -v /var/run/docker.sock:/var/run/docker.sock -v "$(CURDIR):/src" -v "$(CURDIR)/build:/out" $(DEB_IMAGE) /build/build-deb.sh backend $* $(ARGS)
 
 deb-blockbook-%: .deb-image
-	docker run -t --rm -e PACKAGER=$(PACKAGER) -v "$(CURDIR):/src" -v "$(CURDIR)/build:/out" $(DEB_IMAGE) /build/build-deb.sh blockbook $* $(ARGS)
+	docker run -t --rm -e PACKAGER=$(PACKAGER) -e GITCOMMIT="$(GITCOMMIT)" -v "$(CURDIR):/src" -v "$(CURDIR)/build:/out" $(DEB_IMAGE) /build/build-deb.sh blockbook $* $(ARGS)
 
 deb-%: .deb-image
-	docker run -t --rm -e PACKAGER=$(PACKAGER) -v "$(CURDIR):/src" -v "$(CURDIR)/build:/out" $(DEB_IMAGE) /build/build-deb.sh all $* $(ARGS)
+	docker run -t --rm -e PACKAGER=$(PACKAGER) -e GITCOMMIT="$(GITCOMMIT)" -v "$(CURDIR):/src" -v "$(CURDIR)/build:/out" $(DEB_IMAGE) /build/build-deb.sh all $* $(ARGS)
 
 deb-blockbook-all: clean-deb $(addprefix deb-blockbook-, $(TARGETS))
 

@@ -1,6 +1,6 @@
 SHELL = /bin/bash
 VERSION ?= devel
-GITCOMMIT = $(shell cd /src && git config --global --add safe.directory /src && git describe --always --dirty)
+GITCOMMIT ?= $(shell git -c safe.directory=/src -C /src rev-parse HEAD)$(shell test -z "$$(git -c safe.directory=/src -C /src status --porcelain --untracked-files=normal)" || printf '%s' -dirty)
 BUILDTIME = $(shell date --iso-8601=seconds)
 LDFLAGS := -X github.com/trezor/blockbook/common.version=$(VERSION) -X github.com/trezor/blockbook/common.gitcommit=$(GITCOMMIT) -X github.com/trezor/blockbook/common.buildtime=$(BUILDTIME)
 BLOCKBOOK_BASE := $(GOPATH)/src/github.com/trezor

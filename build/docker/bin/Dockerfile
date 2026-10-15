@@ -43,16 +43,6 @@ RUN cd /opt/rocksdb && CFLAGS=-fPIC CXXFLAGS=-fPIC PORTABLE=$PORTABLE_ROCKSDB DI
 RUN strip /opt/rocksdb/ldb /opt/rocksdb/sst_dump && \
     cp /opt/rocksdb/ldb /opt/rocksdb/sst_dump /build
 
-# pre-load depencencies
-RUN \
-    cleanup() { rm -rf $GOPATH/src/github.com/trezor ; } && \
-    trap cleanup EXIT && \
-    mkdir -p $GOPATH/src/github.com/trezor && \
-    cd $GOPATH/src/github.com/trezor && \
-    git clone https://github.com/trezor/blockbook.git && \
-    cd blockbook && \
-    go mod download
-
 ADD Makefile /build/Makefile
 
 VOLUME /out

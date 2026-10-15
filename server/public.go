@@ -300,6 +300,7 @@ func (s *PublicServer) newTemplateData(r *http.Request) *TemplateData {
 		InternalExplorer: s.internalExplorer && !s.is.InitialSync,
 		TOSLink:          api.Text.TOSLink,
 	}
+	t.SourceURL, t.SourceLabel = sourceLink(common.GetVersionInfo().GitCommit)
 	if t.ChainType == bchain.ChainEthereumType {
 		t.FungibleTokenName = bchain.EthereumTokenStandardMap[bchain.FungibleToken]
 		t.NonFungibleTokenName = bchain.EthereumTokenStandardMap[bchain.NonFungibleToken]
@@ -397,6 +398,8 @@ type TemplateData struct {
 	PagingRange              []int
 	PageParams               template.URL
 	Minified                 string
+	SourceURL                string
+	SourceLabel              string
 	TOSLink                  string
 	SendTxHex                string
 	Status                   string
