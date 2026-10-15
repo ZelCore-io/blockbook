@@ -66,6 +66,8 @@ var (
 
 	publicBinding = flag.String("public", "", "public http server binding [address]:port[/path] (default no public server)")
 
+	insightBinding = flag.String("insight", "", "optional Insight HTTP binding host:port behind a trusted reverse proxy (default disabled)")
+
 	certFiles = flag.String("certfile", "", "to enable SSL specify path to certificate files without extension, expecting <certfile>.crt and <certfile>.key (default no SSL)")
 
 	explorerURL = flag.String("explorer", "", "address of blockchain explorer")
@@ -296,6 +298,32 @@ func mainWithExitCode() int {
 		}
 	}
 
+	var insightServer *server.InsightServer
+	if *insightBinding != "" {
+		worker, workerErr := api.NewWorker(index, chain, mempool, txCache, metrics, internalState, fiatRates)
+		if workerErr != nil {
+			glog.Error("Insight worker initialization failed")
+			return exitCodeFatal
+		}
+		parser := chain.GetChainParser()
+		insightServer, err = server.NewInsightServer(*insightBinding, parser.GetChainType(), parser.AmountDecimals(), worker, chain.SendRawTransaction)
+		if err == nil {
+			err = insightServer.Start()
+		}
+		if err != nil {
+			glog.Error("Insight listener: ", err)
+			return exitCodeFatal
+		}
+		// Registered before any subsequent return and before the deferred DB close.
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := insightServer.Shutdown(ctx); err != nil {
+				glog.Error("Insight listener shutdown deadline: ", err)
+			}
+		}()
+	}
+
 	if *synchronize {
 		internalState.SyncMode = true
 		internalState.InitialSync = true
@@ -336,6 +364,10 @@ func mainWithExitCode() int {
 		callbacksOnNewFiatRatesTicker = append(callbacksOnNewFiatRatesTicker, publicServer.OnNewFiatRatesTicker)
 		publicServer.ConnectFullPublicInterface()
 	}
+	if insightServer != nil {
+		// Without -sync this mirrors public API readiness, not index freshness.
+		insightServer.SetReady()
+	}
 
 	if *blockFrom >= 0 {
 		if *blockUntil < 0 {
@@ -358,7 +390,7 @@ func mainWithExitCode() int {
 	if internalServer != nil || publicServer != nil || chain != nil {
 		// start fiat rates downloader only if not shutting down immediately
 		initDownloaders(index, chain, config)
-		waitForSignalAndShutdown(internalServer, publicServer, chain, 10*time.Second)
+		waitForSignalAndShutdown(internalServer, publicServer, insightServer, chain, 10*time.Second)
 	}
 
 	if *synchronize {
@@ -653,11 +685,20 @@ func pushSynchronizationHandler(nt bchain.NotificationType) {
 	}
 }
 
-func waitForSignalAndShutdown(internal *server.InternalServer, public *server.PublicServer, chain bchain.BlockChain, timeout time.Duration) {
+func waitForSignalAndShutdown(internal *server.InternalServer, public *server.PublicServer, insight *server.InsightServer, chain bchain.BlockChain, timeout time.Duration) {
 	sig := <-chanOsSignal
 	common.SetInShutdown()
 	glog.Infof("shutdown: %v", sig)
 
+	if insight != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		if err := insight.Shutdown(ctx); err != nil {
+			glog.Error("Insight listener: shutdown error: ", err)
+		}
+		cancel()
+	}
+	// A legacy Insight call may outlast its HTTP deadline. Preserve the existing
+	// servers' and daemon's shutdown budget after that independent drain.
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 

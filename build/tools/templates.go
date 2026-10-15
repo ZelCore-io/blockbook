@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
+	"strings"
 	"text/template"
 	"time"
 )
@@ -57,6 +60,7 @@ type Config struct {
 		BackendAuthRpc      int `json:"backend_authrpc"`
 		BlockbookInternal   int `json:"blockbook_internal"`
 		BlockbookPublic     int `json:"blockbook_public"`
+		BlockbookInsight    int `json:"blockbook_insight,omitempty"`
 	} `json:"ports"`
 	IPC struct {
 		RPCURLTemplate              string `json:"rpc_url_template"`
@@ -71,6 +75,7 @@ type Config struct {
 		SystemUser              string `json:"system_user"`
 		InternalBindingTemplate string `json:"internal_binding_template"`
 		PublicBindingTemplate   string `json:"public_binding_template"`
+		InsightBindingTemplate  string `json:"insight_binding_template,omitempty"`
 		ExplorerURL             string `json:"explorer_url"`
 		AdditionalParams        string `json:"additional_params"`
 		BlockChain              struct {
@@ -133,6 +138,7 @@ func (c *Config) ParseTemplate() *template.Template {
 		"Backend.ServiceAdditionalParamsTemplate": c.Backend.ServiceAdditionalParamsTemplate,
 		"Blockbook.InternalBindingTemplate":       c.Blockbook.InternalBindingTemplate,
 		"Blockbook.PublicBindingTemplate":         c.Blockbook.PublicBindingTemplate,
+		"Blockbook.InsightBindingTemplate":        c.Blockbook.InsightBindingTemplate,
 	}
 
 	funcMap := template.FuncMap{
@@ -185,6 +191,9 @@ func LoadConfig(configsDir, coin string) (*Config, error) {
 
 	config.Meta.BuildDatetime = time.Now().Format("Mon, 02 Jan 2006 15:04:05 -0700")
 	config.Env.Architecture = runtime.GOARCH
+	if err := config.validateInsight(); err != nil {
+		return nil, err
+	}
 
 	if !isEmpty(config, "backend") {
 		// set platform specific fields to config
@@ -227,6 +236,9 @@ func isEmpty(config *Config, target string) bool {
 
 // GeneratePackageDefinitions generate the package definitions from the config
 func GeneratePackageDefinitions(config *Config, templateDir, outputDir string) error {
+	if err := config.validateInsight(); err != nil {
+		return err
+	}
 	templ := config.ParseTemplate()
 
 	err := makeOutputDir(outputDir)
@@ -297,6 +309,38 @@ func GeneratePackageDefinitions(config *Config, templateDir, outputDir string) e
 		}
 	}
 
+	return nil
+}
+
+// Validate the opt-in pair before template parsing or package output mutation.
+func (c *Config) validateInsight() error {
+	port, binding := c.Ports.BlockbookInsight, c.Blockbook.InsightBindingTemplate
+	if port == 0 && binding == "" {
+		return nil
+	}
+	if port < 1 || port > 65535 || binding == "" {
+		return fmt.Errorf("Insight requires both a valid blockbook_insight port and insight_binding_template")
+	}
+	t, err := template.New("insight").Option("missingkey=error").Parse(binding)
+	if err != nil {
+		return fmt.Errorf("invalid Insight binding template: %w", err)
+	}
+	var out bytes.Buffer
+	if err := t.Execute(&out, c); err != nil {
+		return fmt.Errorf("invalid Insight binding template: %w", err)
+	}
+	value := out.String()
+	host, renderedPort, err := net.SplitHostPort(value)
+	if err != nil || host == "" || renderedPort != strconv.Itoa(port) || strings.ContainsAny(value, " \t\r\n\"'\\%$") {
+		return fmt.Errorf("Insight binding must contain an explicit host and configured port")
+	}
+	if net.ParseIP(host) == nil {
+		for _, ch := range host {
+			if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '.' || ch == '-') {
+				return fmt.Errorf("invalid Insight bind host")
+			}
+		}
+	}
 	return nil
 }
 
