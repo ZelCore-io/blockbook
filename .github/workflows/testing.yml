@@ -1,0 +1,61 @@
+name: Testing
+
+on:
+  pull_request:
+    branches: [release/zelcore-0.5]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testing-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: [self-hosted, bb-dev-selfhosted]
+    timeout-minutes: 60
+    # Drafts and fork PRs must never schedule code on the shared runner.
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run unit tests
+        run: make test ARGS="-count=1"
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The PR merge commit and its base parent allow checking only the patch.
+          fetch-depth: 2
+
+      - name: Validate JSON configuration
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          from pathlib import Path
+
+          paths = sorted(Path("configs").rglob("*.json"))
+          if not paths:
+              raise SystemExit("No JSON configuration files found")
+          for path in paths:
+              with path.open(encoding="utf-8") as source:
+                  json.load(source)
+          print(f"Validated {len(paths)} JSON configuration files")
+          PYTHON
+
+      - name: Validate package script syntax
+        run: bash -n build/docker/deb/build-deb.sh
+
+      - name: Check patch whitespace
+        run: git diff --check HEAD^1 HEAD
