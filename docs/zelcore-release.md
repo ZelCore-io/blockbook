@@ -75,3 +75,6 @@ to capacity and acceptance checks; retained deployed binaries and their database
 snapshots provide rollback. No database, daemon, Ansible or deployment operation
 is performed by the branding change. See the approved fork release management
 design for the rolling fresh-index strategy and source/publication gates.
+
+The [2026-10-15 forward-port validation record](fork-forward-port-validation-2026-10-15.md)
+records exact candidate revisions, local evidence, reproduction commands and outstanding qualification.
