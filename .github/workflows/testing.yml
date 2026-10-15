@@ -5,6 +5,7 @@ on:
     branches: [ master, develop ]
   pull_request:
     branches: [ '**' ]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -24,10 +25,9 @@ jobs:
     # the 360-minute default; sized well above normal runtimes.
     timeout-minutes: 60
     # Defense-in-depth: never run untrusted fork-PR code on the self-hosted
-    # runner. connectivity/integration already carry this guard; without it
-    # here, unit-tests relied solely on the repo "require approval for fork
-    # PR workflows" setting.
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # runner, and keep draft PRs off the shared runner pool. The same guard
+    # applies to the dependent connectivity and integration jobs.
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft) }}
 
     steps:
       - name: Checkout code
@@ -45,7 +45,7 @@ jobs:
     runs-on: [self-hosted, bb-dev-selfhosted]
     timeout-minutes: 30
     needs: unit-tests
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft) }}
 
     steps:
       - name: Checkout code
@@ -72,7 +72,7 @@ jobs:
     runs-on: [self-hosted, bb-dev-selfhosted]
     timeout-minutes: 180
     needs: connectivity-tests
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft) }}
 
     steps:
       - name: Checkout code
