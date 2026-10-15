@@ -6,6 +6,24 @@ existing database, parsers, module versions, backend settings, Terms of Use,
 SatoshiLabs attribution, and AGPL notices in COPYING. It adds Zelcore,
 documentation, Flux, and corresponding-source links to the existing explorer.
 
+## Choose the release scope
+
+The recommended first release is branding only:
+`codex/blockbook-branding-0.5` at
+`a3bcc18a774d0122ff15832ee79763b34973a406`. The separately reviewable
+`codex/blockbook-insight-0.5` stacks the optional listener at
+`dda65ea2ee6ddce23966c2804483b6337f3ad771`. Later documentation commits
+record evidence without extending runtime behavior. Use a clean separate checkout
+of the selected revision for builds; the release targets embed that checkout's
+actual full HEAD, including any later commits.
+
+The [15 October validation record](zelcore-validation-2026-10-15.md) records
+native builds, unit/race checks, offline Bitcoin fixtures and GRS patch
+applicability. This is a locally verified candidate, with Linux packaging and
+production qualification still outstanding. The optional
+[Insight profile](insight-compatibility.md) uses the same database owner, is
+disabled by default, and needs separate wallet/daemon acceptance before use.
+
 ## Build and revision metadata
 
 Use the existing Docker toolchain on a working Docker host. The repository's
@@ -86,3 +104,25 @@ production database compatibility. Port allocation, production integration,
 source publication, snapshot qualification, deployment and rollback remain
 operator tasks; this change does not perform them. Keep branding independently
 reviewable from the optional Insight listener work.
+
+
+## GRS branding backports
+
+The branding commit's parent-to-commit patch applies cleanly to both recorded
+GRS bases, `9dfbb10c47ea8fb01491a2c69b5a1e86fba185e6` and
+`dcdb2bd25a36da6e5d90a148cc183692c4e14ef6`. In a separate local branch
+based on the intended GRS revision, apply only the branding implementation:
+
+```sh
+git cherry-pick a3bcc18a774d0122ff15832ee79763b34973a406
+```
+
+Resolve and review that branch independently, rerun its checks, and build with
+its new full HEAD. Do not embed the BTG branding SHA into a different GRS tree.
+The older base retains backend package metadata for GRS 28.0; the newer retains
+29.0 (including their original binary URLs/checksums). The branding patch does
+not upgrade either daemon. Applicability was checked with scratch Git indexes;
+no GRS binary, daemon, package or production database was qualified. The
+cumulative optional-Insight patch also applies; its precise scope and the
+retained checkers are in the validation record. Do not replace either deployed
+base with current upstream master to obtain these changes.

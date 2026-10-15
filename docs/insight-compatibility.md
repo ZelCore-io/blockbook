@@ -102,6 +102,24 @@ Legacy worker and broadcast methods cannot cancel, so a stalled backend call can
 shutdown beyond the HTTP deadline. The service manager's existing stop timeout is a separate
 operator consideration.
 
+## Recorded local verification
+
+The implementation is commit `dda65ea2ee6ddce23966c2804483b6337f3ad771`,
+stacked on branding-only commit `a3bcc18a774d0122ff15832ee79763b34973a406`.
+The [15 October validation record](zelcore-validation-2026-10-15.md) records
+61 selected / 49 tested packages passing before the final refinements, followed
+by passing final root/server/build-tool checks normally and with focused race
+detection, and a native main build. Bitcoin fixture reopen/advance/rollback
+also passed; that fixture does not exercise Insight HTTP or BTG/GRS daemons.
+
+Race checks use a fake query worker. They establish the exercised listener and
+lifecycle behavior, not race freedom of every inherited worker path. In
+particular, existing `api/worker.go` system-info reads of historical fiat
+timestamps can overlap writes in `fiat/fiat_rates.go`; gating startup status
+does not eliminate that inherited concurrency concern. Assess it separately
+when qualifying a real worker with fiat updates enabled. No core worker/fiat
+change is included here.
+
 ## Qualification before production use
 
 Local fake-worker and template tests cover the contract and lifecycle. They do not qualify an

@@ -1,0 +1,92 @@
+//go:build unittest
+
+package db
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/trezor/blockbook/common"
+	"github.com/trezor/blockbook/tests/dbtestdata"
+)
+
+// TestReleaseDatabaseFixture is injected only into scratch source extractions.
+// It shares the upstream Bitcoin fixture verifiers and never opens a live index.
+func TestReleaseDatabaseFixture(t *testing.T) {
+	path := os.Getenv("BB_RELEASE_FIXTURE_PATH")
+	mode := os.Getenv("BB_RELEASE_FIXTURE_MODE")
+	root := "/tmp/blockbook-toolchain-20261015/"
+	if !strings.HasPrefix(filepath.Clean(path)+"/", root) {
+		t.Fatal("fixture path must be inside scratch toolchain directory")
+	}
+	if mode == "create" {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("create requires a nonexistent fixture path")
+		}
+	} else if _, err := os.Stat(filepath.Join(path, "CURRENT")); err != nil {
+		t.Fatalf("existing fixture expected: %v", err)
+	}
+
+	d, err := NewRocksDB(path, 100000, -1, &testBitcoinParser{BitcoinParser: bitcoinTestnetParser()}, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	is, err := d.LoadInternalState(&common.Config{CoinName: "coin-unittest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if is.DbState != common.DbStateClosed {
+		t.Fatalf("fixture was not gracefully closed: dbState=%d", is.DbState)
+	}
+	d.SetInternalState(is)
+	is.DbState = common.DbStateOpen
+	if err := d.StoreInternalState(is); err != nil {
+		t.Fatal(err)
+	}
+
+	var expectedHeight uint32
+	var expectedHash string
+	switch mode {
+	case "create":
+		if err := d.ConnectBlock(dbtestdata.GetTestBitcoinTypeBlock1(d.chainParser)); err != nil {
+			t.Fatal(err)
+		}
+		verifyAfterBitcoinTypeBlock1(t, d, false)
+		expectedHeight = 225493
+	case "advance":
+		verifyAfterBitcoinTypeBlock1(t, d, false)
+		if err := d.ConnectBlock(dbtestdata.GetTestBitcoinTypeBlock2(d.chainParser)); err != nil {
+			t.Fatal(err)
+		}
+		verifyAfterBitcoinTypeBlock2(t, d)
+		expectedHeight = 225494
+	case "rollback":
+		verifyAfterBitcoinTypeBlock2(t, d)
+		if err := d.DisconnectBlockRangeBitcoinType(225494, 225494); err != nil {
+			t.Fatal(err)
+		}
+		verifyAfterBitcoinTypeBlock1(t, d, true)
+		expectedHeight = 225493
+	case "verify-rollback":
+		verifyAfterBitcoinTypeBlock1(t, d, true)
+		expectedHeight = 225493
+	default:
+		t.Fatalf("unsupported fixture mode %q", mode)
+	}
+	if expectedHeight == 225493 {
+		expectedHash = "0000000076fbbed90fd75b0e18856aa35baa984e9c9d444cf746ad85e94e2997"
+	} else {
+		expectedHash = "00000000eb0443fd7dc4a1ed5c686a8e995057805f9a161d9a5a77a95e72b7b6"
+	}
+	height, hash, err := d.GetBestBlock()
+	if err != nil || height != expectedHeight || hash != expectedHash {
+		t.Fatalf("tip mismatch: height=%d hash=%s err=%v", height, hash, err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("mode=%s dbVersion=%d height=%d hash=%s graceful-close=true", mode, dbVersion, height, hash)
+}
