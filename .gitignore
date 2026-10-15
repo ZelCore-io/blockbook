@@ -22,3 +22,7 @@ __pycache__/
 .spec/
 static/api-docs/swagger-ui/
 configs/grafana/grafana.json
+
+# Local Superpowers planning and agent scratch files
+superpowers/
+.superpowers/
