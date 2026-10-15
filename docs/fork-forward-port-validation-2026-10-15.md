@@ -111,8 +111,8 @@ compatibility. Original-baseline tests and old source-branch evidence remain dis
 Use a fresh **Blockbook index**, one server at a time. Preserve daemon/chain data where
 it contains the required history; pin the daemon version independently from Blockbook,
 configuration and artifact. Before choosing each coin, record parser/config support and
-RPC compatibility on this candidate. Existing PR #1's Clore/TLS changes are not merged
-by this stack; do not infer their adapters or TLS behavior are available here.
+RPC compatibility on this candidate. Existing PR #1's Clore/Telestai (TLS) changes are not merged
+by this stack; do not infer their coin adapters or configuration are available here.
 
 Preflight must verify historical blocks required for a full index are available. A
 pruned daemon may need an approved historical-block source or daemon resync before the
