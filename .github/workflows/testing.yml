@@ -6,13 +6,18 @@ on:
   pull_request:
     branches: [ '**' ]
     types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      run_live_tests:
+        description: Run live connectivity and integration tests on the self-hosted runner
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-# Rapid pushes queue full unit->connectivity->integration chains for
-# already-superseded commits on the shared self-hosted pool. Cancel only
-# superseded PR runs; pushes to master/develop are never cancelled.
+# Cancel superseded PR runs; pushes to master/develop and explicit manual
+# runs are never cancelled by a newer run.
 concurrency:
   group: testing-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -20,14 +25,11 @@ concurrency:
 jobs:
   unit-tests:
     name: Unit Tests
-    runs-on: [self-hosted, bb-dev-selfhosted]
-    # Generous ceilings so a hung step can't hold a self-hosted runner for
-    # the 360-minute default; sized well above normal runtimes.
-    timeout-minutes: 60
-    # Defense-in-depth: never run untrusted fork-PR code on the self-hosted
-    # runner, and keep draft PRs off the shared runner pool. The same guard
-    # applies to the dependent connectivity and integration jobs.
-    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft) }}
+    runs-on: ubuntu-24.04
+    # Fresh hosted runners build RocksDB before running the unit suite.
+    timeout-minutes: 90
+    # Hosted, secret-free unit tests also cover fork PRs once ready for review.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
 
     steps:
       - name: Checkout code
@@ -38,14 +40,15 @@ jobs:
       - name: Run unit tests
         env:
           BB_BUILD_ENV: dev
-        run: make test
+        run: make test BASE_IMAGE=ubuntu:24.04 PORTABLE=1
 
   connectivity-tests:
     name: Connectivity Tests
     runs-on: [self-hosted, bb-dev-selfhosted]
     timeout-minutes: 30
     needs: unit-tests
-    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft) }}
+    # Live backend access requires an explicit manual opt-in, never a PR/push.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live_tests }}
 
     steps:
       - name: Checkout code
@@ -72,7 +75,7 @@ jobs:
     runs-on: [self-hosted, bb-dev-selfhosted]
     timeout-minutes: 180
     needs: connectivity-tests
-    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live_tests }}
 
     steps:
       - name: Checkout code
@@ -95,10 +98,9 @@ jobs:
     name: Lint
     # Pure static analysis of configs/ (Grafana dashboards + coin backend
     # artifacts): no secrets, no backend access, safe to run for fork PRs on an
-    # ephemeral GitHub-hosted runner. Unlike unit-tests (self-hosted, skipped for
-    # fork PRs), this job runs for forks too, so dashboard/artifact regressions
-    # are caught on every PR. The only third-party dependency is the pinned
-    # PyYAML used by the Grafana renderer.
+    # ephemeral GitHub-hosted runner. This job also runs for draft and fork PRs,
+    # so dashboard/artifact regressions are caught on every PR. The only
+    # third-party dependency is the pinned PyYAML used by the Grafana renderer.
     runs-on: ubuntu-latest
 
     steps:

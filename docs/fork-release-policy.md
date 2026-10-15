@@ -48,13 +48,24 @@ with no bypass actors. Allow merge commits so upstream ancestry remains intact.
 The two JSON payloads in `.github/repository-rules/` describe the intended rules;
 committing them does not apply protection settings.
 
-The current development workflow retains its existing `master`/`develop` push
-behavior and test implementations. On PRs, all three self-hosted jobs require a
-same-repository head and a non-draft PR. Hosted lint also runs for draft and fork
-PRs. PR events include `opened`, `synchronize`, `reopened` and `ready_for_review`,
-so marking a draft ready can schedule tests. Returning a PR to draft does not
-cancel an already-running job; cancel any active run before treating a PR as
-safe from host access. Draft PRs created for this release work must remain draft.
+The current development workflow runs `Unit Tests` on ephemeral GitHub-hosted
+Ubuntu 24.04 runners for `master`/`develop` pushes and non-draft PRs, including
+fork PRs. It uses the existing Docker `make test` pipeline with explicit
+`BASE_IMAGE=ubuntu:24.04 PORTABLE=1` and a 90-minute timeout for a fresh RocksDB
+build. The hosted unit job uses no repository secrets and has only
+`contents: read` permissions, with pinned checkout and credential persistence
+disabled. Hosted lint also runs for draft and fork PRs. PR events include
+`opened`, `synchronize`, `reopened` and `ready_for_review`, so marking a draft
+ready can schedule unit tests. Returning a PR to draft does not cancel an
+already-running hosted job.
+
+Live connectivity and RPC/sync integration tests remain on the self-hosted
+runner and run only through `workflow_dispatch` with the boolean
+`run_live_tests` input explicitly enabled (default `false`). A manual run first
+runs the hosted unit job; connectivity then gates integration. PR and push
+events never schedule these live jobs. Required checks and branch protections
+remain unchanged; passing hosted checks alone does not establish live backend
+compatibility or release qualification.
 
 The `release/zelcore-0.5` workflow runs only on PRs targeting that branch. Its
 hosted lint parses JSON configuration, checks package script shell syntax and
