@@ -10,17 +10,17 @@
     <script src="/static/js/bootstrap.bundle.5.2.2.min.js"></script>
     <script src="/static/js/main{{.Minified}}.js"></script>
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="description" content="Trezor {{.CoinLabel}} Explorer">
-    <title>Trezor {{.CoinLabel}} Explorer</title>
+    <meta name="description" content="Zelcore {{.CoinLabel}} Explorer">
+    <title>Zelcore {{.CoinLabel}} Explorer</title>
 </head>
 
 <body>
     <header id="header">
         <nav class="navbar navbar-expand-lg">
             <div class="container">
-                <a class="navbar-brand" href="/" title="Home">
-                    <span class="trezor-logo"></span>
-                    <span style="padding-left: 140px;">{{.CoinLabel}} Explorer</span>
+                <a class="navbar-brand text-wrap" href="/" title="Home">
+                    <span class="fw-bold me-2">Zelcore</span>
+                    <span>{{.CoinLabel}} Explorer</span>
                 </a>
                 {{if .InternalExplorer}}
                 <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent" aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
@@ -67,29 +67,29 @@
             {{- template "specific" . -}}
         </div>
     </main>
-    <footer id="footer">
+    <footer id="footer" class="h-auto overflow-visible">
         <div class="container">
-            <nav class="navbar navbar-dark">
+            <nav class="navbar navbar-dark gap-2">
                 <span class="navbar-nav">
                     <a class="nav-link" href="https://satoshilabs.com/" target="_blank" rel="noopener noreferrer">Created by SatoshiLabs</a>
                 </span>
                 <span class="navbar-nav ml-md-auto">
                     <a class="nav-link" href="{{- .TOSLink -}}" target="_blank" rel="noopener noreferrer">Terms of Use</a>
                 </span>
-                <span class="navbar-nav ml-md-auto d-md-flex d-none">
-                    <a class="nav-link" href="https://trezor.io/" target="_blank" rel="noopener noreferrer">Trezor</a>
+                <span class="navbar-nav">
+                    <a class="nav-link" href="https://zelcore.io" target="_blank" rel="noopener noreferrer">Zelcore</a>
                 </span>
-                <span class="navbar-nav ml-md-auto d-md-flex d-none">
-                    <a class="nav-link" href="https://trezor.io/trezor-suite" target="_blank" rel="noopener noreferrer">Suite</a>
+                <span class="navbar-nav">
+                    <a class="nav-link" href="https://docs.zelcore.io" target="_blank" rel="noopener noreferrer">Documentation</a>
                 </span>
-                <span class="navbar-nav ml-md-auto d-md-flex d-none">
-                    <a class="nav-link" href="https://trezor.io/support" target="_blank" rel="noopener noreferrer">Support</a>
+                <span class="navbar-nav">
+                    <a class="nav-link" href="https://runonflux.com" target="_blank" rel="noopener noreferrer">Powered by Flux</a>
                 </span>
                 <span class="navbar-nav ml-md-auto">
                     <a class="nav-link" href="/sendtx">Send Transaction</a>
                 </span>
-                <span class="navbar-nav ml-md-auto d-lg-flex d-none">
-                    <a class="nav-link" href="https://trezor.io/compare" target="_blank" rel="noopener noreferrer">Don't have a Trezor? Get one!</a>
+                <span class="navbar-nav">
+                    <a class="nav-link" href="{{.SourceURL}}" target="_blank" rel="noopener noreferrer">{{.SourceLabel}}</a>
                 </span>
             </nav>
         </div>
