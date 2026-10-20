@@ -32,6 +32,8 @@ Good examples of coin configuration are
     * `backend_*` – Additional back-end ports can be documented here. Actually the only purpose is to get them to
        port table (prefix is removed and rest of string is used as note).
     * `blockbook_internal` – Blockbook's internal port that is used for metric collecting, debugging etc.
+    * `blockbook_insight` – Optional native Insight HTTP port (1–65535). Must be paired with
+       `blockbook.insight_binding_template`; absent fields leave Insight disabled.
     * `blockbook_public` – Blockbook's public HTTP/API/WebSocket port.
 
 * `ipc` – Defines how Blockbook connects its back-end service.
@@ -94,6 +96,13 @@ Good examples of coin configuration are
     * `system_user` – User used to run Blockbook service. See convention note in the [build guide](/docs/build.md#on-naming-conventions-and-versioning).
     * `internal_binding_template` – Template for *-internal* parameter. See note on templates below.
     * `public_binding_template` – Template for *-public* parameter. See note on templates below.
+    * `insight_binding_template` – Optional template for *-insight*; requires `ports.blockbook_insight`
+       and an explicit host. For example `127.0.0.1:{{.Ports.BlockbookInsight}}` with port `9876`
+       generates `-insight=127.0.0.1:9876`. This operator-selected port is only an example; allocate
+       a free port before enabling. Loopback requires a reverse proxy on the same host. If the
+       proxy runs elsewhere, explicitly bind a reachable private interface and restrict access
+       to that proxy. This listener serves plain HTTP; the proxy provides public TLS. Only
+       Bitcoin-type chains with eight decimals are eligible. See the [compatibility profile](insight-compatibility.md).
     * `explorer_url` – URL of blockchain explorer. Leave empty for internal explorer.
     * `additional_params` – Additional params of exec command (see [Dogecoin definition](/configs/coins/dogecoin.json)).
     * `block_chain` – Configuration of BlockChain type that ensures communication with back-end service. All options

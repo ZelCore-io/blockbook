@@ -1,3 +1,5 @@
+.DEFAULT_GOAL := build
+
 BIN_IMAGE = blockbook-build
 DEB_IMAGE = blockbook-build-deb
 PACKAGER = $(shell id -u):$(shell id -g)
@@ -9,7 +11,7 @@ TCMALLOC =
 JEMALLOC = 1
 PORTABLE = 0
 ARGS ?=
-GITCOMMIT ?= $(shell git describe --always --dirty 2>/dev/null)
+GITCOMMIT ?= $(shell git rev-parse HEAD)$(shell test -z "$$(git status --porcelain --untracked-files=normal)" || printf '%s' -dirty)
 # Forward the build-time override variables into Docker for build/test tooling.
 # The prefix set is the single source of truth in build/bb-build-var-prefixes.txt,
 # shared with .github/actions/export-env-vars and build/tools/templates.go.
@@ -22,7 +24,17 @@ BB_RPC_ENV := $(BB_RPC_ENV)$(if $(BB_STAGING), -e BB_STAGING)
 
 TARGETS=$(subst .json,, $(shell ls configs/coins))
 
-.PHONY: build build-debug test test-connectivity test-integration test-e2e test-all deb
+.PHONY: build build-debug test test-connectivity test-integration test-e2e test-all deb check-release-source release-build
+
+# Release targets always identify the complete, clean source checkout.
+check-release-source:
+	@status=$$(git status --porcelain --untracked-files=normal) || exit 1; test -z "$$status" || { echo "Release requires a clean checkout (including untracked files)." >&2; exit 1; }
+
+release-build: check-release-source
+	$(MAKE) build GITCOMMIT="$$(git rev-parse HEAD)"
+
+release-deb-blockbook-%: check-release-source
+	$(MAKE) deb-blockbook-$* GITCOMMIT="$$(git rev-parse HEAD)"
 
 build: .bin-image
 	docker run -t --rm -e PACKAGER=$(PACKAGER) -e BB_BUILD_ENV=$(BB_BUILD_ENV) -e GITCOMMIT=$(GITCOMMIT) $(BB_RPC_ENV) -v "$(CURDIR):/src" -v "$(CURDIR)/build:/out" $(BIN_IMAGE) make build ARGS="$(ARGS)"
