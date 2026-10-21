@@ -24,7 +24,7 @@
                 </tr>
                 <tr>
                     <td>Version / Commit / Build</td>
-                    <td>{{$bb.Version}} / <a href="https://github.com/trezor/blockbook/commit/{{$bb.GitCommit}}" target="_blank" rel="noopener noreferrer">{{$bb.GitCommit}}</a> / {{$bb.BuildTime}}</td>
+                    <td>{{$bb.Version}} / <a href="{{.SourceURL}}" target="_blank" rel="noopener noreferrer">{{$bb.GitCommit}}{{if eq .SourceLabel "Source (development build)"}} (development build){{end}}</a> / {{$bb.BuildTime}}</td>
                 </tr>
                 <tr>
                     <td>Synchronized</td>

@@ -27,6 +27,13 @@ fi
 
 # blockbook
 if ([ $package = "blockbook" ] || [ $package = "all" ]) && [ -d build/pkg-defs/blockbook ]; then
+    if [ -z "${GITCOMMIT:-}" ]; then
+        GITCOMMIT=$(git -c safe.directory=/src -C /src rev-parse HEAD)
+        if [ -n "$(git -c safe.directory=/src -C /src status --porcelain --untracked-files=normal)" ]; then
+            GITCOMMIT="${GITCOMMIT}-dirty"
+        fi
+    fi
+    export GITCOMMIT
     export VERSION=$(cd build/pkg-defs/blockbook && dpkg-parsechangelog | sed -rne 's/^Version: ([0-9.]+)([-+~].+)?$/\1/p')
 
     cp Makefile ldb sst_dump build/pkg-defs/blockbook

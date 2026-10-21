@@ -451,6 +451,7 @@ func (s *PublicServer) newTemplateData(r *http.Request) *TemplateData {
 		TOSLink:               api.Text.TOSLink,
 		TxIOCollapseThreshold: txIOCollapseThresholdAggregate,
 	}
+	t.SourceURL, t.SourceLabel = sourceLink(common.GetVersionInfo().GitCommit)
 	if t.ChainType == bchain.ChainEthereumType {
 		t.FungibleTokenName = bchain.EthereumTokenStandardMap[bchain.FungibleToken]
 		t.NonFungibleTokenName = bchain.EthereumTokenStandardMap[bchain.NonFungibleToken]
@@ -548,6 +549,8 @@ type TemplateData struct {
 	PagingRange              []int
 	PageParams               template.URL
 	Minified                 string
+	SourceURL                string
+	SourceLabel              string
 	TOSLink                  string
 	SendTxHex                string
 	Status                   string
