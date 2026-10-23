@@ -63,7 +63,53 @@
     </header>
     <main id="wrap">
         <div class="container">
+            {{range .ExplorerContent.Campaigns}}{{if eq .Placement "hero"}}
+            <aside class="card my-3" aria-label="Ecosystem promotion">
+                <div class="card-body">
+                    <small class="text-muted">Ecosystem promotion</small>
+                    <a href="{{.TargetURL}}" target="_blank" rel="sponsored noopener noreferrer" class="d-block">
+                        <img src="{{.ImageURL}}" alt="" width="320" height="100" loading="lazy" referrerpolicy="no-referrer" class="img-fluid rounded">
+                        <strong class="d-block mt-2">{{.Title}}</strong>
+                    </a>
+                    <p class="mb-0">{{.Description}}</p>
+                </div>
+            </aside>
+            {{end}}{{end}}
             {{- template "specific" . -}}
+            {{if .ExplorerContent.Campaigns}}
+            <div class="row">
+                {{range .ExplorerContent.Campaigns}}{{if eq .Placement "sidebar"}}
+                <aside class="col-md-6 col-lg-4 my-3" aria-label="Ecosystem promotion">
+                    <div class="card h-100"><div class="card-body">
+                        <small class="text-muted">Ecosystem promotion</small>
+                        <a href="{{.TargetURL}}" target="_blank" rel="sponsored noopener noreferrer" class="d-block">
+                            <img src="{{.ImageURL}}" alt="" width="320" height="160" loading="lazy" referrerpolicy="no-referrer" class="img-fluid rounded">
+                            <strong class="d-block mt-2">{{.Title}}</strong>
+                        </a>
+                        <p class="mb-0">{{.Description}}</p>
+                    </div></div>
+                </aside>
+                {{end}}{{end}}
+            </div>
+            {{end}}
+            {{if .ExplorerContent.Articles}}
+            <section class="my-4" aria-label="Latest ecosystem articles">
+                <h2 class="h5">Latest from Zelcore and SSP</h2>
+                <div class="row">
+                    {{range .ExplorerContent.Articles}}
+                    <article class="col-md-6 col-lg-4 mb-3">
+                        <div class="card h-100"><div class="card-body">
+                            <a href="{{.URL}}" target="_blank" rel="noopener noreferrer">
+                                {{if .ThumbnailURL}}<img src="{{.ThumbnailURL}}" alt="" width="320" height="180" loading="lazy" referrerpolicy="no-referrer" class="img-fluid rounded mb-2">{{end}}
+                                <h3 class="h6">{{.Title}}</h3>
+                            </a>
+                            <small class="text-muted">{{if eq .Source "zelcore"}}Zelcore{{else}}SSP{{end}} · <time datetime="{{.PublishedAt}}">{{slice .PublishedAt 0 10}}</time></small>
+                        </div></div>
+                    </article>
+                    {{end}}
+                </div>
+            </section>
+            {{end}}
         </div>
     </main>
     <footer id="footer" class="h-auto overflow-visible">
