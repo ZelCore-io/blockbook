@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -180,5 +181,33 @@ func TestCacheBoundToEndpoint(t *testing.T) {
 	c, _ = New(saved.Endpoint, path)
 	if len(c.Snapshot(now).Articles) != 0 {
 		t.Fatal("stale disk cache reused")
+	}
+}
+
+func TestCacheAllowsEndpointWrapperBeyondPayloadLimit(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	s := sample(now)
+	// Build a valid payload close to the public limit; the endpoint wrapper is additional.
+	s.Campaigns[0].Coins = []string{strings.Repeat("x", maxBytes-1000)}
+	raw, _ := json.Marshal(s)
+	s.Campaigns[0].Coins[0] += strings.Repeat("x", maxBytes-len(raw))
+	raw, _ = json.Marshal(s)
+	if len(raw) != maxBytes {
+		t.Fatalf("fixture size %d", len(raw))
+	}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(raw) }))
+	defer srv.Close()
+	cache := filepath.Join(t.TempDir(), "cache.json")
+	c, _ := New(srv.URL, cache)
+	c.http = srv.Client()
+	if err := c.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := New(srv.URL, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.Snapshot(now).Articles) != 1 {
+		t.Fatal("maximum payload did not survive restart")
 	}
 }

@@ -16,6 +16,7 @@ import (
 )
 
 const maxBytes = 64 * 1024
+const maxCacheBytes = maxBytes + 4096
 const maxAge = 24 * time.Hour
 
 // Campaign is a scheduled product promotion, never executable HTML.
@@ -73,8 +74,8 @@ func New(endpoint, cachePath string) (*Client, error) {
 				Endpoint string   `json:"endpoint"`
 				Snapshot Snapshot `json:"snapshot"`
 			}
-			raw, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
-			if err == nil && len(raw) <= maxBytes && json.Unmarshal(raw, &saved) == nil && saved.Endpoint == endpoint && validate(saved.Snapshot, time.Now()) == nil {
+			raw, err := io.ReadAll(io.LimitReader(f, maxCacheBytes+1))
+			if err == nil && len(raw) <= maxCacheBytes && json.Unmarshal(raw, &saved) == nil && saved.Endpoint == endpoint && validate(saved.Snapshot, time.Now()) == nil {
 				c.current = saved.Snapshot
 			}
 		}
@@ -84,7 +85,7 @@ func New(endpoint, cachePath string) (*Client, error) {
 
 func safeURL(raw string) bool {
 	u, err := url.Parse(raw)
-	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && !strings.ContainsAny(raw, "\r\n\t")
+	return len(raw) <= 2048 && err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && !strings.ContainsAny(raw, "\r\n\t")
 }
 func validate(s Snapshot, now time.Time) error {
 	if s.Version != 1 || s.GeneratedAt.IsZero() || s.GeneratedAt.After(now.Add(5*time.Minute)) || now.Sub(s.GeneratedAt) > maxAge {
@@ -167,9 +168,9 @@ func (c *Client) Refresh(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		// Include the wrapper in the same disk bound used by New.
-		if len(encoded) > maxBytes {
-			return fmt.Errorf("disk content cache exceeds 64 KiB")
+		// Reserve space for the endpoint wrapper in addition to the public payload.
+		if len(encoded) > maxCacheBytes {
+			return fmt.Errorf("disk content cache exceeds 68 KiB")
 		}
 		f, err := os.CreateTemp(filepath.Dir(c.cachePath), ".explorer-content-*")
 		if err != nil {
