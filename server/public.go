@@ -25,6 +25,7 @@ import (
 	"github.com/trezor/blockbook/bchain"
 	"github.com/trezor/blockbook/common"
 	"github.com/trezor/blockbook/db"
+	"github.com/trezor/blockbook/explorercontent"
 	"github.com/trezor/blockbook/fiat"
 )
 
@@ -72,6 +73,8 @@ const (
 
 // PublicServer provides public http server functionality
 type PublicServer struct {
+	content       *explorercontent.Client
+	contentCancel context.CancelFunc
 	htmlTemplates[TemplateData]
 	binding             string
 	certFiles           string
@@ -278,6 +281,9 @@ func (s *PublicServer) IsFullInterface() bool {
 // Close closes the server
 func (s *PublicServer) Close() error {
 	glog.Infof("public server: closing")
+	if s.contentCancel != nil {
+		s.contentCancel()
+	}
 	return s.https.Close()
 }
 
@@ -287,12 +293,28 @@ func (s *PublicServer) Close() error {
 // long getAccountInfo can race rocksdb_close in cgo and SIGSEGV the process.
 func (s *PublicServer) Shutdown(ctx context.Context) error {
 	glog.Infof("public server: shutdown")
+	if s.contentCancel != nil {
+		s.contentCancel()
+	}
 	httpErr := s.https.Shutdown(ctx)
 	wsErr := s.websocket.Shutdown(ctx)
 	if httpErr != nil {
 		return httpErr
 	}
 	return wsErr
+}
+
+// ConfigureContent enables optional cached dashboard content before Run is called.
+func (s *PublicServer) ConfigureContent(endpoint, cachePath string) error {
+	client, err := explorercontent.New(endpoint, cachePath)
+	if err != nil {
+		return err
+	}
+	s.content = client
+	ctx, cancel := context.WithCancel(context.Background())
+	s.contentCancel = cancel
+	go client.Run(ctx, func(err error) { glog.Warningf("explorer content refresh: %v", err) })
+	return nil
 }
 
 // OnNewBlock notifies users subscribed to bitcoind/hashblock about new block
@@ -451,6 +473,7 @@ func (s *PublicServer) newTemplateData(r *http.Request) *TemplateData {
 		TOSLink:               api.Text.TOSLink,
 		TxIOCollapseThreshold: txIOCollapseThresholdAggregate,
 	}
+	t.ExplorerContent = s.content.Snapshot(time.Now())
 	t.SourceURL, t.SourceLabel = sourceLink(common.GetVersionInfo().GitCommit)
 	if t.ChainType == bchain.ChainEthereumType {
 		t.FungibleTokenName = bchain.EthereumTokenStandardMap[bchain.FungibleToken]
@@ -527,6 +550,7 @@ const (
 
 // TemplateData is used to transfer data to the templates
 type TemplateData struct {
+	ExplorerContent          explorercontent.Snapshot
 	CoinName                 string
 	CoinShortcut             string
 	CoinLabel                string

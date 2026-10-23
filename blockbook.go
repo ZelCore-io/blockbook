@@ -9,6 +9,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -76,6 +77,9 @@ var (
 	insightBinding = flag.String("insight", "", "optional Insight HTTP binding host:port behind a trusted reverse proxy (default disabled)")
 
 	certFiles = flag.String("certfile", "", "to enable SSL specify path to certificate files without extension, expecting <certfile>.crt and <certfile>.key (default no SSL)")
+
+	explorerContentURL   = flag.String("explorercontenturl", "", "optional HTTPS dashboard public content URL including coin filter (default disabled)")
+	explorerContentCache = flag.String("explorercontentcache", "", "dashboard content cache file (default explorer-content.json beside database directory)")
 
 	explorerURL = flag.String("explorer", "", "address of blockchain explorer")
 
@@ -560,6 +564,15 @@ func startPublicServer() (*server.PublicServer, error) {
 	publicServer, err := server.NewPublicServer(*publicBinding, *certFiles, index, chain, mempool, txCache, *explorerURL, metrics, internalState, fiatRates, *debugMode)
 	if err != nil {
 		return nil, err
+	}
+	if *explorerContentURL != "" {
+		cache := *explorerContentCache
+		if cache == "" {
+			cache = filepath.Join(filepath.Dir(*dbPath), "explorer-content.json")
+		}
+		if err := publicServer.ConfigureContent(*explorerContentURL, cache); err != nil {
+			glog.Warningf("explorer content disabled: %v", err)
+		}
 	}
 	go func() {
 		err = publicServer.Run()
