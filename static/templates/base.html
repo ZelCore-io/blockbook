@@ -10,8 +10,8 @@
     <script src="/static/js/bootstrap.bundle.5.2.2.min.js"></script>
     <script src="/static/js/main{{.Minified}}.js"></script>
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="description" content="Zelcore {{.CoinLabel}} Explorer">
-    <title>Zelcore {{.CoinLabel}} Explorer</title>
+    <meta name="description" content="{{.CoinLabel}} Explorer">
+    <title>{{.CoinLabel}} Explorer</title>
 </head>
 
 <body>
@@ -19,7 +19,6 @@
         <nav class="navbar navbar-expand-lg">
             <div class="container">
                 <a class="navbar-brand text-wrap" href="/" title="Home">
-                    <span class="fw-bold me-2">Zelcore</span>
                     <span>{{.CoinLabel}} Explorer</span>
                 </a>
                 {{if .InternalExplorer}}
