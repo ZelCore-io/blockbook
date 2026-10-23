@@ -16,7 +16,9 @@ import (
 )
 
 const maxBytes = 64 * 1024
-const maxCacheBytes = maxBytes + 4096
+
+// JSON encoding can expand a single input byte to a six-byte escape.
+const maxCacheBytes = 6*maxBytes + 4096
 const maxAge = 24 * time.Hour
 
 // Campaign is a scheduled product promotion, never executable HTML.
@@ -170,7 +172,7 @@ func (c *Client) Refresh(ctx context.Context) error {
 		}
 		// Reserve space for the endpoint wrapper in addition to the public payload.
 		if len(encoded) > maxCacheBytes {
-			return fmt.Errorf("disk content cache exceeds 68 KiB")
+			return fmt.Errorf("encoded disk content cache exceeds limit")
 		}
 		f, err := os.CreateTemp(filepath.Dir(c.cachePath), ".explorer-content-*")
 		if err != nil {
