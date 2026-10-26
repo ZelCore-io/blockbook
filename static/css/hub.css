@@ -8,8 +8,11 @@
  * Public classes: .hub-page, .hub-band, .hub-band-home, .hub-nav, .hub-search, .hub-figures,
  * .hub-products, .hub-product, .hub-layout, .hub-card, .hub-aside, .hub-campaign,
  * .hub-zelcore-prompt, .hub-tabs, .hub-stat-grid, .hub-articles, .hub-footer, .hub-mono,
- * .hub-scroll, .hub-ellipsis. Parts used inside them are named .hub-<block>-<part> (for example .hub-brand,
+ * .hub-scroll, .hub-ellipsis, .hub-summary, .hub-badge, .hub-copy, .hub-section-head, .hub-raw,
+ * .hub-io-label. Parts used inside them are named .hub-<block>-<part> (for example .hub-brand,
  * .hub-mark, .hub-label) and are listed with their block below.
+ *
+ * Copy buttons are <button type="button" class="hub-copy" data-copy="..."> handled in main.js.
  *
  * Tables inside .hub-card must sit in a .hub-scroll wrapper. .hub-card sets
  * overflow-wrap: anywhere for long strings; .hub-scroll resets it so table cells keep their
@@ -94,6 +97,10 @@
     --hub-line: #EAECF0;
     --hub-line-soft: #F2F4F7;
     --hub-control-border: #D0D5DD;
+    --hub-ok: #067647;
+    --hub-ok-bg: #ECFDF3;
+    --hub-warn: #B54708;
+    --hub-warn-bg: #FFFAEB;
     --hub-radius: 18px;
     --hub-radius-sm: 12px;
     --hub-max: 1200px;
@@ -763,6 +770,286 @@
     color: var(--hub-muted);
 }
 
+/* ---------- Inner pages (transaction, address, block, lists) ---------- */
+/* Parts: .hub-summary-main, .hub-summary-title, .hub-summary-id, .hub-summary-height, .hub-summary-qr,
+ * .hub-title-row, .hub-title-end, .hub-id-row, .hub-badge-ok, .hub-badge-warn, .hub-copy-text, .hub-copied,
+ * .hub-balance, .hub-balance-value, .hub-balance-secondary, .hub-filter, .hub-raw-body, .hub-card-links,
+ * .hub-error-text. */
+
+.hub-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px 24px;
+}
+
+.hub-summary-main {
+    flex: 1 1 320px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.hub-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+}
+
+.hub-title-row h1,
+.hub-summary-title,
+.hub-section-head h1,
+.hub-card > h1 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 800;
+    color: var(--hub-ink);
+}
+
+.hub-card > h1 {
+    margin-bottom: 12px;
+}
+
+.hub-title-end {
+    margin-left: auto;
+    flex-wrap: wrap;
+    gap: 8px 0;
+}
+
+.hub-summary-id {
+    font-size: 15px;
+    color: var(--hub-text-2);
+}
+
+.hub-summary-height {
+    font-size: 20px;
+    font-weight: 500;
+}
+
+.hub-id-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.hub-id-row .hub-summary-id {
+    min-width: 0;
+}
+
+.hub-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--hub-line-soft);
+    color: var(--hub-text-2);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.hub-badge-ok {
+    background: var(--hub-ok-bg);
+    color: var(--hub-ok);
+}
+
+.hub-badge-warn {
+    background: var(--hub-warn-bg);
+    color: var(--hub-warn);
+}
+
+.hub-copy {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 10px;
+    border: 1px solid var(--hub-control-border);
+    border-radius: 10px;
+    background: var(--hub-surface);
+    color: var(--hub-text-2);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.hub-copy:hover {
+    background: var(--hub-line-soft);
+}
+
+.hub-copy svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+}
+
+.hub-copy.hub-copied {
+    border-color: var(--hub-ok);
+    color: var(--hub-ok);
+}
+
+.hub-balance {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 16px;
+}
+
+.hub-balance-value {
+    font-family: var(--hub-font-mono);
+    font-size: 28px;
+    font-weight: 500;
+    color: var(--hub-ink);
+}
+
+.hub-balance-secondary {
+    font-size: 15px;
+    color: var(--hub-muted);
+}
+
+.hub-summary-qr {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.hub-section-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 16px;
+    margin-bottom: 12px;
+}
+
+.hub-section-head h2 {
+    margin: 0;
+}
+
+.hub-section-head p {
+    margin: 4px 0 0;
+}
+
+.hub-section-head .paging {
+    margin-left: auto;
+}
+
+.hub-card-flush > .hub-section-head {
+    margin: 0;
+    padding: 16px 20px;
+}
+
+.hub-filter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.hub-filter select {
+    min-width: 0;
+    max-width: 100%;
+    min-height: 44px;
+    padding: 0 10px;
+    border: 1px solid var(--hub-control-border);
+    border-radius: 10px;
+    background: var(--hub-surface);
+    color: var(--hub-ink);
+}
+
+/* Upstream pagers wrap inside a card instead of widening the page at phone width. */
+.hub-card .paging {
+    flex-wrap: wrap;
+    gap: 8px 0;
+    max-width: 100%;
+}
+
+.hub-card .paging-group {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.hub-card .paging .bb-group {
+    flex-wrap: wrap;
+}
+
+/* Upstream tables keep their classes; inside a card they drop their outer margins. */
+.hub-card .data-table {
+    width: 100%;
+    margin: 0;
+}
+
+.hub-card-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+    padding: 12px 20px 16px;
+}
+
+.hub-card > .paging:last-child {
+    margin-top: 12px;
+}
+
+.hub-card-flush > .paging:last-child {
+    margin: 0;
+    padding: 0 20px 16px;
+}
+
+.hub-io-label {
+    margin: 12px 0 6px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--hub-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.hub-card .tx-detail {
+    width: 100%;
+    margin-left: 0;
+    box-shadow: none;
+    border: 1px solid var(--hub-line);
+    background: var(--hub-ground);
+    color: var(--hub-text-3);
+}
+
+.hub-card .tx-detail .ellipsis {
+    font-family: var(--hub-font-mono);
+}
+
+.hub-raw > summary {
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: 800;
+}
+
+.hub-raw-body {
+    margin-top: 12px;
+}
+
+.hub-raw-body .btn-paging {
+    color: var(--hub-ink);
+}
+
+.hub-raw-body pre {
+    margin-top: 12px;
+    max-height: 480px;
+}
+
+.hub-error-text {
+    margin: 8px 0 0;
+    font-size: 18px;
+    color: var(--hub-text-2);
+}
+
 /* ---------- Articles ---------- */
 
 .hub-articles {
@@ -929,5 +1216,13 @@
 
     .hub-footer-legal {
         margin-left: 0;
+    }
+
+    .hub-balance-value {
+        font-size: 22px;
+    }
+
+    .hub-summary-qr {
+        width: 100%;
     }
 }

@@ -216,6 +216,16 @@ window.addEventListener("DOMContentLoaded", () => {
     })
   );
 
+  // hub copy buttons: <button type="button" class="hub-copy" data-copy="...">
+  document.querySelectorAll("button[data-copy]").forEach((b) =>
+    b.addEventListener("click", () => {
+      navigator.clipboard.writeText(b.getAttribute("data-copy")).then(() => {
+        b.classList.add("hub-copied");
+        setTimeout(() => b.classList.remove("hub-copied"), 1000);
+      });
+    })
+  );
+
   // keep the transaction in view when its input/output list is collapsed,
   // instead of leaving the viewport wherever the shrinking content left it
   document.querySelectorAll(".tx-in.collapse, .tx-out.collapse").forEach((e) =>

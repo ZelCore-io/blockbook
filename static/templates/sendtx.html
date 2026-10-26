@@ -1,16 +1,18 @@
 {{define "specific"}}
-<h1>Send Raw Transaction</h1>
-<form method="POST" action="/sendtx">
-    <div class="form-group">
-        <label for="exampleFormControlTextarea1">Raw transaction data</label>
-        <textarea class="form-control" rows="8" name="hex">{{.SendTxHex}}</textarea>
-    </div>
-    <div class="form-group mt-3"><button type="submit" class="btn btn-outline-secondary">Send</button></div>
-</form>
-{{if .Status}}
-<div class="alert alert-success mt-3">{{.Status}}</div>
-{{end}}
-{{if .Error}}
-<div class="alert alert-danger mt-3">{{.Error.Text}}</div>
-{{end}}
+<section class="hub-card">
+    <h1>Send Raw Transaction</h1>
+    <form method="POST" action="/sendtx">
+        <div class="form-group">
+            <label for="sendtx-hex">Raw transaction data</label>
+            <textarea id="sendtx-hex" class="form-control hub-mono" rows="8" name="hex">{{.SendTxHex}}</textarea>
+        </div>
+        <div class="form-group mt-3"><button type="submit" class="btn btn-outline-secondary">Send</button></div>
+    </form>
+    {{if .Status}}
+    <div class="alert alert-success mt-3">{{.Status}}</div>
+    {{end}}
+    {{if .Error}}
+    <div class="alert alert-danger mt-3">{{.Error.Text}}</div>
+    {{end}}
+</section>
 {{end}}
