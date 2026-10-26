@@ -52,7 +52,7 @@ func within(html, cls, closeTag, value string) bool {
 func TestExplorerContentRendering(t *testing.T) {
 	for _, home := range []bool{false, true} {
 		disabled := renderShell(t, Snapshot{}, map[string]interface{}{"HomePage": home})
-		for _, absent := range []string{"Sponsored", "Zelcore products", "hub-campaign", "hub-aside", "hub-zelcore-prompt", "Latest from Zelcore and SSP"} {
+		for _, absent := range []string{"Sponsored", "Flux ecosystem products", "hub-campaign", "hub-aside", "hub-zelcore-prompt", "Latest from Zelcore and SSP"} {
 			if strings.Contains(disabled, absent) {
 				t.Fatalf("home=%v: disabled content renders %q", home, absent)
 			}
@@ -219,7 +219,7 @@ func TestHomeContentRendering(t *testing.T) {
 	html := renderHome(t, s, map[string]interface{}{"HomePrice": "$0.0237"})
 	for _, want := range []string{
 		`<div><dt>Price</dt><dd title="Exchange rates provided by Coingecko">$0.0237</dd></div>`, `<div><dt>Height</dt><dd>6315496</dd></div>`, `<div><dt>Mempool</dt><dd>0 tx</dd></div>`,
-		`<section class="hub-products-grid" aria-labelledby="hub-products-title">`, `<h2 class="hub-products-title" id="hub-products-title">Zelcore products</h2>`,
+		`<section class="hub-products-grid" aria-labelledby="hub-products-title">`, `<h2 class="hub-products-title" id="hub-products-title">Flux ecosystem products</h2>`,
 		"&lt;script&gt;alert(1)", "&lt;script&gt;alert(2)", "&lt;script&gt;alert(3)",
 		`rel="sponsored noopener noreferrer"`, `referrerpolicy="no-referrer"`, `loading="lazy"`,
 		"Get the wallet", "Learn more",
@@ -252,7 +252,7 @@ func TestHomeContentRendering(t *testing.T) {
 
 func TestHomeEmptyContent(t *testing.T) {
 	html := renderHome(t, Snapshot{}, nil)
-	for _, absent := range []string{"Zelcore products", "hub-products", "Sponsored", "hub-campaign", "News from Zelcore and SSP", "hub-articles", "<dt>Price</dt>"} {
+	for _, absent := range []string{"Flux ecosystem products", "hub-products", "Sponsored", "hub-campaign", "News from Zelcore and SSP", "hub-articles", "<dt>Price</dt>"} {
 		if strings.Contains(html, absent) {
 			t.Errorf("empty content renders %q", absent)
 		}
@@ -367,7 +367,7 @@ func TestHomeMoreFromFluxRow(t *testing.T) {
 	if strings.Contains(legacy, "More from Flux") || strings.Contains(legacy, "hub-products-more") {
 		t.Error("4 products must not render the More row")
 	}
-	if strings.Count(legacy, `<a class="hub-product`) != 4 || !strings.Contains(legacy, "Zelcore products") {
+	if strings.Count(legacy, `<a class="hub-product`) != 4 || !strings.Contains(legacy, "Flux ecosystem products") {
 		t.Error("4 products must render in the strip")
 	}
 	// A legacy feed without colors renders every tile in Flux Blue Wave with a filled CTA.
@@ -421,7 +421,7 @@ func TestHomeProductAccentAttribute(t *testing.T) {
 func TestFluxSymbolInBandAndFooter(t *testing.T) {
 	for _, home := range []bool{false, true} {
 		html := renderShell(t, Snapshot{Products: sixProducts()}, map[string]interface{}{"HomePage": home})
-		band := `<a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer"><img src="https://cdn.example.com/flux.svg" alt="Flux" width="22" height="22" referrerpolicy="no-referrer">Powered by Flux</a>`
+		band := `<a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer"><span class="hub-powered-mark"><img src="https://cdn.example.com/flux.svg" alt="Flux" width="22" height="22" referrerpolicy="no-referrer"></span>Powered by Flux</a>`
 		if !within(html, "hub-band", "</header>", band) {
 			t.Errorf("home=%v: band lacks the Flux symbol link", home)
 		}

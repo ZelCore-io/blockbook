@@ -26,7 +26,7 @@
                 <span>{{.CoinLabel}} Explorer</span>
             </a>
             <a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer">
-                {{- with .ExplorerContent.FluxSymbol}}<img src="{{.}}" alt="Flux" width="22" height="22" referrerpolicy="no-referrer">{{end}}Powered by Flux</a>
+                {{- with .ExplorerContent.FluxSymbol}}<span class="hub-powered-mark"><img src="{{.}}" alt="Flux" width="22" height="22" referrerpolicy="no-referrer"></span>{{end}}Powered by Flux</a>
             <nav class="hub-nav-links" aria-label="Main">
                 {{- if .InternalExplorer}}
                 <a href="/blocks">Blocks</a>

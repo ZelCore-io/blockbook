@@ -156,8 +156,8 @@
 /* Headings use Montserrat. main.css sets the body font on every element (*), so descendants are
    listed too. :where() keeps this at zero specificity: it beats * only by coming later, and
    .hub-mono inside a heading still wins. */
-:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-product-name, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary),
-:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-product-name, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary) * {
+:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary),
+:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary) * {
     font-family: var(--hub-font-heading);
 }
 
@@ -243,11 +243,25 @@
     background: #FFFFFF;
 }
 
-.hub-powered img {
-    display: block;
+/* The feed's symbol sits on a white disc, like the coin mark, so a blue-disc logo stays visible on
+   a blue band. The logo itself is never recoloured. */
+.hub-powered-mark {
     flex: none;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: #FFFFFF;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.hub-powered-mark img {
+    display: block;
     width: 22px;
     height: 22px;
+    object-fit: contain;
 }
 
 .hub-nav-links {

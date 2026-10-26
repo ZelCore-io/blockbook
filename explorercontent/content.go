@@ -61,7 +61,7 @@ type Article struct {
 	Pinned       bool   `json:"pinned"`
 }
 
-// Product is a Zelcore product tile shown under "Zelcore products", never as an advertisement.
+// Product is a Zelcore product tile shown under "Flux ecosystem products", never as an advertisement.
 // Color is optional (older feeds omit it); an invalid color is dropped when the feed is loaded.
 type Product struct {
 	ID        string `json:"id"`

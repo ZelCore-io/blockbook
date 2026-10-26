@@ -96,7 +96,7 @@ func TestShellDefaultTheme(t *testing.T) {
 		if strings.Contains(html, "ZgotmplZ") {
 			t.Errorf("home=%v: html/template rejected a value", home)
 		}
-		for _, absent := range []string{"Sponsored", "Zelcore products", "hub-aside", "hub-campaign"} {
+		for _, absent := range []string{"Sponsored", "Flux ecosystem products", "hub-aside", "hub-campaign"} {
 			if strings.Contains(html, absent) {
 				t.Errorf("home=%v: empty content renders %q", home, absent)
 			}
