@@ -7,6 +7,7 @@ import (
 	"html"
 	"html/template"
 	"io"
+	"math"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -175,6 +176,8 @@ func NewPublicServer(binding string, certFiles string, db *db.RocksDB, chain bch
 	serveMux.HandleFunc(publicPath(path, "openapi.yaml"), s.openAPISpecHandler)
 	// default handler
 	serveMux.HandleFunc(path, s.htmlTemplateHandler(s.explorerIndex))
+	// the status page is served from startup, including during initial sync, like the index
+	serveMux.HandleFunc(path+"status", s.htmlTemplateHandler(s.explorerStatus))
 	// default API handler
 	serveMux.HandleFunc(path+"api/", s.jsonHandler(s.apiIndex, apiV2))
 
@@ -481,7 +484,7 @@ func (s *PublicServer) newTemplateData(r *http.Request) *TemplateData {
 		t.MultiTokenName = bchain.EthereumTokenStandardMap[bchain.MultiToken]
 	}
 	if !s.debug {
-		t.Minified = ".min.5"
+		t.Minified = ".min.6"
 	}
 	if s.is.HasFiatRates {
 		// get the secondary coin and if it should be shown either from query parameters "secondary" and "use_secondary"
@@ -544,6 +547,7 @@ const (
 	sendTransactionTpl
 	mempoolTpl
 	nftDetailTpl
+	statusTpl
 
 	publicTplCount
 )
@@ -551,6 +555,9 @@ const (
 // TemplateData is used to transfer data to the templates
 type TemplateData struct {
 	ExplorerContent          explorercontent.Snapshot
+	HomePage                 bool   // index page: base.html renders the home band and skips the hubPage layout
+	HomeTab                  string // index page tab: "blocks" or "txs"
+	HomePrice                string // index page: formatted USD price, empty when the current ticker is missing or stale
 	CoinName                 string
 	CoinShortcut             string
 	CoinLabel                string
@@ -676,6 +683,7 @@ func (s *PublicServer) parseTemplates() []*template.Template {
 		"formatInt64":              formatInt64,
 		"formatInt":                formatInt,
 		"formatUint32":             formatUint32,
+		"initials":                 initials,
 		"formatBigInt":             formatBigInt,
 		"setTxToTemplateData":      setTxToTemplateData,
 		"feePerByte":               feePerByte,
@@ -732,6 +740,7 @@ func (s *PublicServer) parseTemplates() []*template.Template {
 	t[errorTpl] = createTemplate("./static/templates/error.html", "./static/templates/base.html")
 	t[errorInternalTpl] = createTemplate("./static/templates/error.html", "./static/templates/base.html")
 	t[indexTpl] = createTemplate("./static/templates/index.html", "./static/templates/base.html")
+	t[statusTpl] = createTemplate("./static/templates/status.html", "./static/templates/base.html")
 	t[blocksTpl] = createTemplate("./static/templates/blocks.html", "./static/templates/paging.html", "./static/templates/base.html")
 	t[sendTransactionTpl] = createTemplate("./static/templates/sendtx.html", "./static/templates/base.html")
 	if s.chainParser.GetChainType() == bchain.ChainEthereumType {
@@ -1310,7 +1319,98 @@ func (s *PublicServer) explorerIndex(w http.ResponseWriter, r *http.Request) (tp
 	}
 	data := s.newTemplateData(r)
 	data.Info = si
+	data.HomePage = true
+	data.HomeTab = "blocks"
+	if r.URL.Query().Get("tab") == "txs" {
+		data.HomeTab = "txs"
+	}
+	data.HomePrice = homePrice(s.fiatRates.GetCurrentTicker("usd", ""), timeNow())
+	// The lists are best effort: the home page still renders when one of them is unavailable.
+	// Each tab loads only its own list; the mempool figure in the band comes from Info.
+	if data.HomeTab == "blocks" {
+		if data.Blocks, err = s.api.GetBlocks(1, homeItemsOnPage); err != nil {
+			glog.Error("explorerIndex GetBlocks: ", err)
+		}
+	} else {
+		if data.MempoolTxids, err = s.api.GetMempool(1, homeItemsOnPage); err != nil {
+			glog.Error("explorerIndex GetMempool: ", err)
+		}
+		if data.MempoolTxids == nil || len(data.MempoolTxids.Mempool) == 0 {
+			if data.Block, err = s.api.GetBlock(strconv.FormatUint(uint64(si.Blockbook.BestHeight), 10), 1, homeItemsOnPage); err != nil {
+				glog.V(1).Info("explorerIndex GetBlock: ", err)
+			}
+		}
+	}
 	return indexTpl, data, nil
+}
+
+// initials returns the first letter of name, upper-cased, for an icon placeholder.
+// It works on runes, so a multibyte first letter is never split.
+func initials(name string) string {
+	for _, r := range strings.TrimSpace(name) {
+		return strings.ToUpper(string(r))
+	}
+	return ""
+}
+
+// homeItemsOnPage is the number of blocks or transactions listed on the home page.
+const homeItemsOnPage = 8
+
+// homePriceMaxAge is how old the current fiat ticker may be for the home page to show a price.
+const homePriceMaxAge = 2 * time.Hour
+
+// homePrice returns the USD price for the home page, or "" when the ticker is missing,
+// has no USD rate, or is older than homePriceMaxAge.
+func homePrice(ticker *common.CurrencyRatesTicker, now time.Time) string {
+	if ticker == nil || now.Sub(ticker.Timestamp) > homePriceMaxAge {
+		return ""
+	}
+	return formatUSDPrice(float64(ticker.Rates["usd"]))
+}
+
+// formatUSDPrice formats a USD price with two decimals, or with three significant digits
+// for prices below one cent ($0.0237), and with thousands separators ($64,123.45).
+func formatUSDPrice(rate float64) string {
+	if !(rate > 0) || math.IsInf(rate, 0) {
+		return ""
+	}
+	decimals := 2
+	if d := 2 - int(math.Floor(math.Log10(rate))); d > decimals {
+		decimals = d
+	}
+	if decimals > 12 {
+		decimals = 12
+	}
+	s := strconv.FormatFloat(rate, 'f', decimals, 64)
+	intPart, frac, _ := strings.Cut(s, ".")
+	if len(frac) > 2 {
+		frac = strings.TrimRight(frac, "0")
+		for len(frac) < 2 {
+			frac += "0"
+		}
+	}
+	var b strings.Builder
+	b.WriteByte('$')
+	for i, c := range intPart {
+		if i > 0 && (len(intPart)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(c)
+	}
+	b.WriteByte('.')
+	b.WriteString(frac)
+	return b.String()
+}
+
+func (s *PublicServer) explorerStatus(w http.ResponseWriter, r *http.Request) (tpl, *TemplateData, error) {
+	s.metrics.ExplorerViews.With(common.Labels{"action": "status"}).Inc()
+	si, err := s.api.GetSystemInfo(false)
+	if err != nil {
+		return errorTpl, nil, err
+	}
+	data := s.newTemplateData(r)
+	data.Info = si
+	return statusTpl, data, nil
 }
 
 func (s *PublicServer) explorerSearch(w http.ResponseWriter, r *http.Request) (tpl, *TemplateData, error) {

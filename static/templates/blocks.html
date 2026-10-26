@@ -1,16 +1,16 @@
 {{define "specific"}}{{$blocks := .Blocks}}{{$data := .}}
-<div class="row">
-    <div class="col-md-6"><h1>Blocks</h1></div>
-    <div class="col-md-6">{{if $blocks.Blocks}}{{template "paging" $data }}{{end}}</div>
-</row>
-{{if $blocks.Blocks}}
-<div>
-    <table class="table table-hover data-table">
+<section class="hub-card hub-card-flush">
+    <div class="hub-section-head">
+        <h1>Blocks</h1>
+        {{if $blocks.Blocks}}{{template "paging" $data }}{{end}}
+    </div>
+    {{if $blocks.Blocks}}
+    <div class="hub-scroll"><table class="table table-hover data-table">
         <thead>
             <tr>
                 <th>Height</th>
                 <th class="col-md-6">Hash</th>
-                <th class="col-md-2">Timestamp</span></th>
+                <th class="col-md-2">Timestamp</th>
                 <th class="text-end">Transactions</th>
                 <th class="text-end">Size</th>
             </tr>
@@ -19,14 +19,15 @@
             {{range $b := $blocks.Blocks}}
             <tr>
                 <td><a href="/block/{{$b.Height}}">{{formatUint32 $b.Height}}</a></td>
-                <td class="ellipsis">{{$b.Hash}}</td>
+                <td class="ellipsis hub-mono">{{$b.Hash}}</td>
                 <td>{{unixTimeSpan $b.Time}}</td>
                 <td class="text-end">{{formatUint32 $b.Txs}}</td>
                 <td class="text-end">{{formatUint32 $b.Size}}</td>
             </tr>
             {{end}}
         </tbody>
-    </table>
-</div>
-{{template "paging" $data }}
-{{end}}{{end}}
+    </table></div>
+    {{template "paging" $data }}
+    {{end}}
+</section>
+{{end}}

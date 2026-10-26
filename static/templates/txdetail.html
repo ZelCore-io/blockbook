@@ -14,6 +14,7 @@
     <div class="row body">
         <div class="col-md-5">
             {{$vinCount := len $tx.Vin}}
+            <div class="hub-io-label">From ({{$vinCount}})</div>
             {{if gt $vinCount $collapseThreshold}}
             <button type="button" class="tx-io-toggle" data-bs-toggle="collapse" data-bs-target="#txvin-{{$tx.Txid}}" aria-expanded="false" aria-controls="txvin-{{$tx.Txid}}">{{$vinCount}} inputs</button>
             {{end}}
@@ -43,6 +44,7 @@
         <div class="col-md-1 col-xs-12 text-center">&nbsp;<span class="octicon"></span></div>
         <div class="col-md-6">
             {{$voutCount := len $tx.Vout}}
+            <div class="hub-io-label">To ({{$voutCount}})</div>
             {{if gt $voutCount $collapseThreshold}}
             <button type="button" class="tx-io-toggle" data-bs-toggle="collapse" data-bs-target="#txvout-{{$tx.Txid}}" aria-expanded="false" aria-controls="txvout-{{$tx.Txid}}">{{$voutCount}} outputs</button>
             {{end}}

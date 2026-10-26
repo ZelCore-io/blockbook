@@ -48,23 +48,24 @@ func TestExplorerSourceRendering(t *testing.T) {
 				data.SourceURL, data.SourceLabel = sourceLink(revision)
 				data.Error = &api.APIError{Text: "Test error"}
 				data.Info = &api.SystemInfo{Blockbook: &api.BlockbookInfo{GitCommit: revision}, Backend: &common.BackendInfo{}}
-				for _, page := range []tpl{indexTpl, errorTpl, sendTransactionTpl} {
+				for _, page := range []tpl{indexTpl, statusTpl, errorTpl, sendTransactionTpl} {
+					data.HomePage = page == indexTpl
 					var out bytes.Buffer
 					if err := templates[page].ExecuteTemplate(&out, "base.html", data); err != nil {
 						t.Fatal(err)
 					}
 					html := out.String()
-					expected := `href="` + data.SourceURL + `" target="_blank" rel="noopener noreferrer">` + data.SourceLabel + `</a>`
+					expected := `href="` + data.SourceURL + `" title="` + data.SourceLabel + `" target="_blank" rel="noopener noreferrer">Source code</a>`
 					if !strings.Contains(html, expected) {
 						t.Fatalf("page %d lacks source link %s", page, expected)
 					}
-					if page == indexTpl && strings.Count(html, `href="`+data.SourceURL+`"`) != 2 {
+					if page == statusTpl && strings.Count(html, `href="`+data.SourceURL+`"`) != 2 {
 						t.Fatal("status commit must use the same source target as footer")
 					}
 					if (data.SourceLabel != "Source" && strings.Contains(html, "/tree/")) || strings.Contains(html, "github.com/trezor/blockbook/commit/") {
 						t.Fatal("broken or upstream revision link")
 					}
-					if revision == "unknown" && page == indexTpl && !strings.Contains(html, "unknown (development build)</a>") {
+					if revision == "unknown" && page == statusTpl && !strings.Contains(html, "unknown (development build)</a>") {
 						t.Fatal("development revision must be labelled")
 					}
 				}

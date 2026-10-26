@@ -31,6 +31,7 @@ func httpTestsTron(t *testing.T, ts *httptest.Server) {
 				`href="/address/TDGSR64oU4QDpViKfdwawSiqwyqpUB6JUD"`,
 				`Unclaimed Reward</td>`,
 				`Last Reward Claim</td>`,
+				licenseFooter,
 			},
 		},
 		{
