@@ -551,6 +551,7 @@ const (
 // TemplateData is used to transfer data to the templates
 type TemplateData struct {
 	ExplorerContent          explorercontent.Snapshot
+	HomePage                 bool // index page: base.html renders the home band and skips the hubPage layout
 	CoinName                 string
 	CoinShortcut             string
 	CoinLabel                string
@@ -1310,6 +1311,7 @@ func (s *PublicServer) explorerIndex(w http.ResponseWriter, r *http.Request) (tp
 	}
 	data := s.newTemplateData(r)
 	data.Info = si
+	data.HomePage = true
 	return indexTpl, data, nil
 }
 

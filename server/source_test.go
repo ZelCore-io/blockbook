@@ -49,12 +49,13 @@ func TestExplorerSourceRendering(t *testing.T) {
 				data.Error = &api.APIError{Text: "Test error"}
 				data.Info = &api.SystemInfo{Blockbook: &api.BlockbookInfo{GitCommit: revision}, Backend: &common.BackendInfo{}}
 				for _, page := range []tpl{indexTpl, errorTpl, sendTransactionTpl} {
+					data.HomePage = page == indexTpl
 					var out bytes.Buffer
 					if err := templates[page].ExecuteTemplate(&out, "base.html", data); err != nil {
 						t.Fatal(err)
 					}
 					html := out.String()
-					expected := `href="` + data.SourceURL + `" target="_blank" rel="noopener noreferrer">` + data.SourceLabel + `</a>`
+					expected := `href="` + data.SourceURL + `" target="_blank" rel="noopener noreferrer">Source code</a>`
 					if !strings.Contains(html, expected) {
 						t.Fatalf("page %d lacks source link %s", page, expected)
 					}
