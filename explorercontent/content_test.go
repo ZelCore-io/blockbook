@@ -211,3 +211,122 @@ func TestCacheAllowsEndpointWrapperBeyondPayloadLimit(t *testing.T) {
 		t.Fatal("maximum payload did not survive restart")
 	}
 }
+
+func product(id string) Product {
+	return Product{ID: id, Name: "Name " + id, Tagline: "Tagline", TargetURL: "https://example.com/" + id, IconURL: "https://example.com/" + id + ".png", CTALabel: "Learn more"}
+}
+func TestLegacyFeedWithoutProductsOrTheme(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	raw := `{"version":1,"generatedAt":"` + now.Format(time.RFC3339) + `","campaigns":[],"articles":[]}`
+	var s Snapshot
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		t.Fatal(err)
+	}
+	if err := validate(s, now); err != nil {
+		t.Fatal(err)
+	}
+	if s.ThemeColor() != "#0A5A8C" || s.ThemeIcon() != "" || len(s.Products) != 0 || s.ZelcoreProduct() != nil {
+		t.Fatal("legacy feed did not fall back to defaults")
+	}
+}
+func TestNullIconAndThemeDecode(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	raw := `{"version":1,"generatedAt":"` + now.Format(time.RFC3339) + `","campaigns":[],"articles":[],"products":[{"id":"zelcore","name":"Zelcore","tagline":"Wallet","targetUrl":"https://zelcore.io","iconUrl":null,"ctaLabel":"Get it"}],"theme":null}`
+	var s Snapshot
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		t.Fatal(err)
+	}
+	if err := validate(s, now); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Products) != 1 || s.Products[0].IconURL != "" || s.Theme != nil || s.ThemeColor() != "#0A5A8C" {
+		t.Fatalf("null handling: %+v", s)
+	}
+	if p := s.ZelcoreProduct(); p == nil || p.ID != "zelcore" {
+		t.Fatal("zelcore product missing")
+	}
+	raw = `{"version":1,"generatedAt":"` + now.Format(time.RFC3339) + `","theme":{"color":"#112233","iconUrl":null}}`
+	s = Snapshot{}
+	if err := json.Unmarshal([]byte(raw), &s); err != nil || validate(s, now) != nil || s.ThemeColor() != "#112233" || s.ThemeIcon() != "" {
+		t.Fatalf("theme with null icon: %+v %v", s, err)
+	}
+}
+func TestProductAndThemeValidation(t *testing.T) {
+	now := time.Now().UTC()
+	cases := []struct {
+		name   string
+		mutate func(*Snapshot)
+	}{
+		{"five products", func(s *Snapshot) {
+			s.Products = []Product{product("a"), product("b"), product("c"), product("d"), product("e")}
+		}},
+		{"icon javascript", func(s *Snapshot) { s.Products[0].IconURL = "javascript:alert(1)" }},
+		{"target http", func(s *Snapshot) { s.Products[0].TargetURL = "http://x.io" }},
+		{"empty id", func(s *Snapshot) { s.Products[0].ID = "" }},
+		{"long name", func(s *Snapshot) { s.Products[0].Name = strings.Repeat("n", 161) }},
+		{"long tagline", func(s *Snapshot) { s.Products[0].Tagline = strings.Repeat("t", 481) }},
+		{"long cta", func(s *Snapshot) { s.Products[0].CTALabel = strings.Repeat("c", 97) }},
+		{"theme injection", func(s *Snapshot) { s.Theme.Color = "red;background:url(//x)" }},
+		{"theme short", func(s *Snapshot) { s.Theme.Color = "#0A5A8" }},
+		{"theme icon http", func(s *Snapshot) { s.Theme.IconURL = "http://x.io/i.png" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := sample(now)
+			s.Products = []Product{product("a")}
+			s.Theme = &Theme{Color: "#0A5A8C", IconURL: "https://example.com/t.png"}
+			tc.mutate(&s)
+			if validate(s, now) == nil {
+				t.Fatal("expected rejection")
+			}
+		})
+	}
+	s := sample(now)
+	s.Products = []Product{product("a"), product("b"), product("c"), product("d")}
+	s.Theme = &Theme{Color: "#0a5A8c", IconURL: "https://example.com/t.png"}
+	if err := validate(s, now); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestSlotFallback(t *testing.T) {
+	hero := Campaign{ID: "h", Placement: "hero"}
+	side := Campaign{ID: "s", Placement: "sidebar"}
+	cases := []struct {
+		name        string
+		campaigns   []Campaign
+		home, inner string
+	}{
+		{"only sidebar", []Campaign{side}, "s", "s"},
+		{"only hero", []Campaign{hero}, "h", "h"},
+		{"none", nil, "", ""},
+		{"both", []Campaign{side, hero}, "h", "s"},
+	}
+	id := func(c *Campaign) string {
+		if c == nil {
+			return ""
+		}
+		return c.ID
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := Snapshot{Campaigns: tc.campaigns}
+			if id(s.HomeCampaign()) != tc.home || id(s.InnerCampaign()) != tc.inner {
+				t.Fatalf("home=%q inner=%q", id(s.HomeCampaign()), id(s.InnerCampaign()))
+			}
+		})
+	}
+}
+func TestSnapshotCopiesProductsAndTheme(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	s := sample(now)
+	s.Products = []Product{product("a")}
+	s.Theme = &Theme{Color: "#0A5A8C"}
+	c := &Client{current: s}
+	got := c.Snapshot(now)
+	got.Products[0].Name = "changed"
+	got.Theme.Color = "#000000"
+	again := c.Snapshot(now)
+	if again.Products[0].Name != "Name a" || again.Theme.Color != "#0A5A8C" {
+		t.Fatal("snapshot shares products or theme with the client")
+	}
+}

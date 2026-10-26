@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,10 @@ const maxBytes = 64 * 1024
 // JSON encoding can expand a single input byte to a six-byte escape.
 const maxCacheBytes = 6*maxBytes + 4096
 const maxAge = 24 * time.Hour
+
+const defaultThemeColor = "#0A5A8C"
+
+var themeColorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 // Campaign is a scheduled product promotion, never executable HTML.
 type Campaign struct {
@@ -45,12 +50,74 @@ type Article struct {
 	Pinned       bool   `json:"pinned"`
 }
 
+// Product is a Zelcore product tile shown under "Zelcore products", never as an advertisement.
+type Product struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Tagline   string `json:"tagline"`
+	TargetURL string `json:"targetUrl"`
+	IconURL   string `json:"iconUrl"`
+	CTALabel  string `json:"ctaLabel"`
+}
+
+// Theme is the per-coin accent color and optional mark chosen in the dashboard.
+type Theme struct {
+	Color   string `json:"color"`
+	IconURL string `json:"iconUrl"`
+}
+
 // Snapshot is the versioned public contract shared with the dashboard.
 type Snapshot struct {
 	Version     int        `json:"version"`
 	GeneratedAt time.Time  `json:"generatedAt"`
 	Campaigns   []Campaign `json:"campaigns"`
 	Articles    []Article  `json:"articles"`
+	Products    []Product  `json:"products"`
+	Theme       *Theme     `json:"theme"`
+}
+
+// campaignFor returns the first campaign with the preferred placement, else the first with the other one.
+func (s Snapshot) campaignFor(first, second string) *Campaign {
+	for _, placement := range []string{first, second} {
+		for i := range s.Campaigns {
+			if s.Campaigns[i].Placement == placement {
+				return &s.Campaigns[i]
+			}
+		}
+	}
+	return nil
+}
+
+// HomeCampaign is the first hero campaign, falling back to the first sidebar campaign.
+func (s Snapshot) HomeCampaign() *Campaign { return s.campaignFor("hero", "sidebar") }
+
+// InnerCampaign is the first sidebar campaign, falling back to the first hero campaign.
+func (s Snapshot) InnerCampaign() *Campaign { return s.campaignFor("sidebar", "hero") }
+
+// ThemeColor is the coin accent color, or the default band color when the feed carries no theme.
+func (s Snapshot) ThemeColor() string {
+	if s.Theme == nil {
+		return defaultThemeColor
+	}
+	return s.Theme.Color
+}
+
+// ThemeIcon is the coin mark URL, or "" when there is none.
+func (s Snapshot) ThemeIcon() string {
+	if s.Theme == nil {
+		return ""
+	}
+	return s.Theme.IconURL
+}
+
+// ZelcoreProduct is the tile that feeds the "Watch in Zelcore" prompt, or nil.
+func (s Snapshot) ZelcoreProduct() *Product {
+	for i := range s.Products {
+		if s.Products[i].ID == "zelcore" {
+			return &s.Products[i]
+		}
+	}
+	return nil
 }
 
 // Client owns a bounded in-memory snapshot and an optional restart cache.
@@ -117,6 +184,17 @@ func validate(s Snapshot, now time.Time) error {
 		if !start.IsZero() && !end.IsZero() && !end.After(start) {
 			return fmt.Errorf("invalid campaign interval")
 		}
+	}
+	if len(s.Products) > 4 {
+		return fmt.Errorf("content item limit exceeded")
+	}
+	for _, p := range s.Products {
+		if p.ID == "" || len(p.Name) > 160 || len(p.Tagline) > 480 || len(p.CTALabel) > 96 || !safeURL(p.TargetURL) || (p.IconURL != "" && !safeURL(p.IconURL)) {
+			return fmt.Errorf("invalid product")
+		}
+	}
+	if s.Theme != nil && (!themeColorRe.MatchString(s.Theme.Color) || (s.Theme.IconURL != "" && !safeURL(s.Theme.IconURL))) {
+		return fmt.Errorf("invalid theme")
 	}
 	for _, a := range s.Articles {
 		date, err := time.Parse(time.RFC3339, a.PublishedAt)
@@ -206,7 +284,11 @@ func (c *Client) Snapshot(now time.Time) Snapshot {
 	if s.GeneratedAt.IsZero() || now.Sub(s.GeneratedAt) > maxAge {
 		return Snapshot{}
 	}
-	out := Snapshot{Version: s.Version, GeneratedAt: s.GeneratedAt, Articles: append([]Article(nil), s.Articles...)}
+	out := Snapshot{Version: s.Version, GeneratedAt: s.GeneratedAt, Articles: append([]Article(nil), s.Articles...), Products: append([]Product(nil), s.Products...)}
+	if s.Theme != nil {
+		theme := *s.Theme
+		out.Theme = &theme
+	}
 	for _, item := range s.Campaigns {
 		if item.StartsAt != "" {
 			start, _ := time.Parse(time.RFC3339, item.StartsAt)
