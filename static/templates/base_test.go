@@ -88,7 +88,7 @@ func TestShellSourceLinkTitle(t *testing.T) {
 func TestShellDefaultTheme(t *testing.T) {
 	for _, home := range []bool{false, true} {
 		html := renderShell(t, map[string]any{"HomePage": home})
-		for _, want := range []string{`--hub-band: #0A5A8C`, `<span class="hub-mark" aria-hidden="true">GRS</span>`, `<body class="hub-page">`} {
+		for _, want := range []string{`--hub-band: #2B61D1`, `<span class="hub-mark" aria-hidden="true">GRS</span>`, `<body class="hub-page">`} {
 			if !strings.Contains(html, want) {
 				t.Errorf("home=%v: missing %q", home, want)
 			}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,7 +23,17 @@ const maxBytes = 64 * 1024
 const maxCacheBytes = 6*maxBytes + 4096
 const maxAge = 24 * time.Hour
 
-const defaultThemeColor = "#0A5A8C"
+// defaultThemeColor is Flux Blue Wave, the band color when the feed carries no theme and the
+// accent of a product tile without a color.
+const defaultThemeColor = "#2B61D1"
+
+// maxProducts is the number of product tiles the feed may serve; the strip shows the first
+// mainProducts and the rest go to the "More from Flux" row.
+const maxProducts = 6
+const mainProducts = 4
+
+// minCTAContrast is the WCAG AA ratio white CTA text needs on a product color to be filled.
+const minCTAContrast = 4.5
 
 var themeColorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
@@ -51,6 +62,7 @@ type Article struct {
 }
 
 // Product is a Zelcore product tile shown under "Zelcore products", never as an advertisement.
+// Color is optional (older feeds omit it); an invalid color is dropped when the feed is loaded.
 type Product struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
@@ -58,6 +70,40 @@ type Product struct {
 	TargetURL string `json:"targetUrl"`
 	IconURL   string `json:"iconUrl"`
 	CTALabel  string `json:"ctaLabel"`
+	Color     string `json:"color,omitempty"`
+}
+
+// Accent is the tile's accent color: the product color when it is a valid #RRGGBB value,
+// else Flux Blue Wave. Templates may put it in a style attribute because nothing else is returned.
+func (p Product) Accent() string {
+	if themeColorRe.MatchString(p.Color) {
+		return p.Color
+	}
+	return defaultThemeColor
+}
+
+// CTAFilled reports whether the call to action is a filled button with white text, which needs
+// a WCAG contrast of at least 4.5:1 between white and the accent. Otherwise it is outlined in the
+// accent with dark text.
+func (p Product) CTAFilled() bool {
+	return contrastWithWhite(p.Accent()) >= minCTAContrast
+}
+
+// contrastWithWhite returns the WCAG 2 contrast ratio between #FFFFFF and a #RRGGBB color.
+func contrastWithWhite(hex string) float64 {
+	var rgb [3]float64
+	for i := range rgb {
+		var v int
+		fmt.Sscanf(hex[1+2*i:3+2*i], "%02x", &v)
+		c := float64(v) / 255
+		if c <= 0.04045 {
+			rgb[i] = c / 12.92
+		} else {
+			rgb[i] = math.Pow((c+0.055)/1.055, 2.4)
+		}
+	}
+	l := 0.2126*rgb[0] + 0.7152*rgb[1] + 0.0722*rgb[2]
+	return 1.05 / (l + 0.05)
 }
 
 // Theme is the per-coin accent color and optional mark chosen in the dashboard.
@@ -110,6 +156,46 @@ func (s Snapshot) ThemeIcon() string {
 	return s.Theme.IconURL
 }
 
+// namedProducts are the products a page can show: a tile without a name is skipped.
+func (s Snapshot) namedProducts() []Product {
+	var out []Product
+	for _, p := range s.Products {
+		if p.Name != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// ProductsMain are the first four named products, shown in the product strip.
+func (s Snapshot) ProductsMain() []Product {
+	named := s.namedProducts()
+	if len(named) > mainProducts {
+		return named[:mainProducts]
+	}
+	return named
+}
+
+// ProductsMore are the named products after the first four, shown under "More from Flux".
+func (s Snapshot) ProductsMore() []Product {
+	named := s.namedProducts()
+	if len(named) > mainProducts {
+		return named[mainProducts:]
+	}
+	return nil
+}
+
+// FluxSymbol is the icon URL of the product with id "flux", used as the Flux symbol next to
+// "Powered by Flux", or "" when the feed has no such product or it has no icon.
+func (s Snapshot) FluxSymbol() string {
+	for _, p := range s.Products {
+		if p.ID == "flux" {
+			return p.IconURL
+		}
+	}
+	return ""
+}
+
 // ZelcoreProduct is the tile that feeds the "Watch in Zelcore" prompt, or nil.
 func (s Snapshot) ZelcoreProduct() *Product {
 	for i := range s.Products {
@@ -144,8 +230,11 @@ func New(endpoint, cachePath string) (*Client, error) {
 				Snapshot Snapshot `json:"snapshot"`
 			}
 			raw, err := io.ReadAll(io.LimitReader(f, maxCacheBytes+1))
-			if err == nil && len(raw) <= maxCacheBytes && json.Unmarshal(raw, &saved) == nil && saved.Endpoint == endpoint && validate(saved.Snapshot, time.Now()) == nil {
-				c.current = saved.Snapshot
+			if err == nil && len(raw) <= maxCacheBytes && json.Unmarshal(raw, &saved) == nil && saved.Endpoint == endpoint {
+				dropInvalidProductColors(&saved.Snapshot)
+				if validate(saved.Snapshot, time.Now()) == nil {
+					c.current = saved.Snapshot
+				}
 			}
 		}
 	}
@@ -156,6 +245,17 @@ func safeURL(raw string) bool {
 	u, err := url.Parse(raw)
 	return len(raw) <= 2048 && err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && !strings.ContainsAny(raw, "\r\n\t")
 }
+
+// dropInvalidProductColors clears a product color that is not #RRGGBB. The product stays: the
+// color is optional and only styles the tile.
+func dropInvalidProductColors(s *Snapshot) {
+	for i := range s.Products {
+		if s.Products[i].Color != "" && !themeColorRe.MatchString(s.Products[i].Color) {
+			s.Products[i].Color = ""
+		}
+	}
+}
+
 func validate(s Snapshot, now time.Time) error {
 	if s.Version != 1 || s.GeneratedAt.IsZero() || s.GeneratedAt.After(now.Add(5*time.Minute)) || now.Sub(s.GeneratedAt) > maxAge {
 		return fmt.Errorf("invalid content version or generation time")
@@ -185,7 +285,7 @@ func validate(s Snapshot, now time.Time) error {
 			return fmt.Errorf("invalid campaign interval")
 		}
 	}
-	if len(s.Products) > 4 {
+	if len(s.Products) > maxProducts {
 		return fmt.Errorf("content item limit exceeded")
 	}
 	for _, p := range s.Products {
@@ -233,6 +333,7 @@ func (c *Client) Refresh(ctx context.Context) error {
 	if err = json.Unmarshal(raw, &next); err != nil {
 		return err
 	}
+	dropInvalidProductColors(&next)
 	if err = validate(next, time.Now()); err != nil {
 		return err
 	}
