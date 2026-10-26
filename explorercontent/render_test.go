@@ -342,30 +342,35 @@ func sixProducts() []Product {
 	}
 }
 
-func TestHomeMoreFromFluxRow(t *testing.T) {
+func TestHomeProductStrip(t *testing.T) {
+	scroller := `<div class="hub-products-strip hub-products-scroll" role="region" aria-label="Flux ecosystem products" tabindex="0">`
 	html := renderHome(t, Snapshot{Products: sixProducts()}, nil)
-	more := strings.Index(html, `<h3 class="hub-products-more-title">More from Flux</h3>`)
-	if more < 0 || !within(html, "hub-products-grid", "</section>", "More from Flux") {
-		t.Fatal("More from Flux row missing inside the product strip")
+	if strings.Count(html, `class="hub-products-strip`) != 1 || !strings.Contains(html, scroller) {
+		t.Fatal("6 products must render one focusable, scrolling strip")
 	}
-	for _, url := range []string{"https://zelcore.io", "https://sspwallet.io", "https://runonflux.com", "https://example.com/vpn"} {
-		tile := strings.Index(html, `<a class="hub-product`)
-		if i := strings.Index(html[tile:], `href="`+url+`"`); i < 0 || tile+i > more {
-			t.Errorf("%s must render in the strip, before the More row", url)
+	start := strings.Index(html, scroller)
+	end := start + strings.Index(html[start:], "</section>")
+	if n := strings.Count(html[start:end], `<a class="hub-product`); n != 6 || strings.Count(html, `<a class="hub-product`) != 6 {
+		t.Errorf("want all 6 tiles inside the strip, got %d", n)
+	}
+	prev := start
+	for _, url := range []string{"https://zelcore.io", "https://sspwallet.io", "https://runonflux.com", "https://example.com/vpn", "https://example.com/os", "https://example.com/nodes"} {
+		i := strings.Index(html, `class="hub-product" href="`+url+`"`)
+		if i < 0 {
+			i = strings.Index(html, `hub-product-outline" href="`+url+`"`)
 		}
-	}
-	for _, url := range []string{"https://example.com/os", "https://example.com/nodes"} {
-		if i := strings.Index(html, `href="`+url+`"`); i < more {
-			t.Errorf("%s must render in the More row", url)
+		if i < prev || i > end {
+			t.Errorf("%s must render in feed order inside the strip", url)
 		}
+		prev = i
 	}
-	if strings.Count(html, `<a class="hub-product`) != 6 {
-		t.Errorf("want 6 tiles, got %d", strings.Count(html, `<a class="hub-product`))
+	if strings.Contains(html, "More from Flux") || strings.Contains(html, "hub-products-more") || strings.Contains(html, "<h3") {
+		t.Error("the separate More from Flux row must be gone")
 	}
 
 	legacy := renderHome(t, Snapshot{Products: sixProducts()[:4]}, nil)
-	if strings.Contains(legacy, "More from Flux") || strings.Contains(legacy, "hub-products-more") {
-		t.Error("4 products must not render the More row")
+	if !strings.Contains(legacy, `<div class="hub-products-strip" role="region" aria-label="Flux ecosystem products" tabindex="0">`) || strings.Contains(legacy, "hub-products-scroll") {
+		t.Error("4 products must render a strip that does not scroll on desktop")
 	}
 	if strings.Count(legacy, `<a class="hub-product`) != 4 || !strings.Contains(legacy, "Flux ecosystem products") {
 		t.Error("4 products must render in the strip")

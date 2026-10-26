@@ -226,7 +226,7 @@ func TestLegacyFeedWithoutProductsOrTheme(t *testing.T) {
 	if err := validate(s, now); err != nil {
 		t.Fatal(err)
 	}
-	if s.ThemeColor() != "#2B61D1" || s.ThemeIcon() != "" || len(s.Products) != 0 || s.ZelcoreProduct() != nil || s.ProductsMain() != nil || s.ProductsMore() != nil || s.FluxSymbol() != "" {
+	if s.ThemeColor() != "#2B61D1" || s.ThemeIcon() != "" || len(s.Products) != 0 || s.ZelcoreProduct() != nil || s.ProductTiles() != nil || s.ProductsScroll() || s.FluxSymbol() != "" {
 		t.Fatal("legacy feed did not fall back to defaults")
 	}
 }
@@ -369,8 +369,8 @@ func TestProductColorFromFeed(t *testing.T) {
 		if strings.Join(got, " ") != want {
 			t.Errorf("%s: colors %q, want %q", name, strings.Join(got, " "), want)
 		}
-		if len(s.ProductsMain()) != 4 || len(s.ProductsMore()) != 2 || s.ProductsMore()[0].ID != "os" {
-			t.Errorf("%s: split %d+%d", name, len(s.ProductsMain()), len(s.ProductsMore()))
+		if tiles := s.ProductTiles(); len(tiles) != 6 || tiles[4].ID != "os" || !s.ProductsScroll() {
+			t.Errorf("%s: %d tiles, scroll %v", name, len(tiles), s.ProductsScroll())
 		}
 		if s.FluxSymbol() != "https://cdn.example.com/flux.svg" {
 			t.Errorf("%s: flux symbol %q", name, s.FluxSymbol())
@@ -418,22 +418,22 @@ func TestProductAccentAndCTA(t *testing.T) {
 	}
 }
 
-func TestProductsMainAndMore(t *testing.T) {
+func TestProductTilesAndScroll(t *testing.T) {
 	four := Snapshot{Products: []Product{product("a"), product("b"), product("c"), product("d")}}
-	if len(four.ProductsMain()) != 4 || four.ProductsMore() != nil {
-		t.Error("a legacy 4-product feed has no More row")
+	if len(four.ProductTiles()) != 4 || four.ProductsScroll() {
+		t.Error("a 4-product feed fits without scrolling")
 	}
 	six := Snapshot{Products: []Product{product("a"), product("b"), product("c"), product("d"), product("e"), product("f")}}
-	if m, more := six.ProductsMain(), six.ProductsMore(); len(m) != 4 || m[3].ID != "d" || len(more) != 2 || more[0].ID != "e" || more[1].ID != "f" {
-		t.Errorf("6 products split into %d + %d", len(m), len(more))
+	if tiles := six.ProductTiles(); len(tiles) != 6 || tiles[5].ID != "f" || !six.ProductsScroll() {
+		t.Errorf("6 products: %d tiles, scroll %v", len(tiles), six.ProductsScroll())
 	}
 	unnamed := product("b")
 	unnamed.Name = ""
 	gap := Snapshot{Products: []Product{product("a"), unnamed, product("c"), product("d"), product("e")}}
-	if m := gap.ProductsMain(); len(m) != 4 || m[1].ID != "c" || gap.ProductsMore() != nil {
+	if tiles := gap.ProductTiles(); len(tiles) != 4 || tiles[1].ID != "c" || gap.ProductsScroll() {
 		t.Error("an unnamed product must not take a slot")
 	}
-	if (Snapshot{}).ProductsMain() != nil {
+	if (Snapshot{}).ProductTiles() != nil || (Snapshot{}).ProductsScroll() {
 		t.Error("empty snapshot has products")
 	}
 }

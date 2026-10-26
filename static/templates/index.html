@@ -10,15 +10,16 @@ fills the band figures and lays out everything below it. The status tables live 
 </dl>
 {{- end}}
 {{define "specific"}}{{$bb := .Info.Blockbook}}{{$be := .Info.Backend}}{{$link := .InternalExplorer}}
-{{- with .ExplorerContent.ProductsMain}}
+{{- /* All products sit in one strip that scrolls sideways. hub-products-scroll (more than four
+tiles) sizes desktop tiles so the fifth peeks in; narrower screens always scroll. The strip is a
+focusable region so keyboard users can scroll it with the arrow keys; no script is needed. */ -}}
+{{- with .ExplorerContent.ProductTiles}}
 <div class="hub-products">
     <section class="hub-products-grid" aria-labelledby="hub-products-title">
         <h2 class="hub-products-title" id="hub-products-title">Flux ecosystem products</h2>
-        {{- range .}}{{template "hubProduct" .}}{{end}}
-        {{- with $.ExplorerContent.ProductsMore}}
-        <h3 class="hub-products-more-title">More from Flux</h3>
-        {{- range .}}{{template "hubProduct" .}}{{end}}
-        {{- end}}
+        <div class="hub-products-strip{{if $.ExplorerContent.ProductsScroll}} hub-products-scroll{{end}}" role="region" aria-label="Flux ecosystem products" tabindex="0">
+            {{- range .}}{{template "hubProduct" .}}{{end}}
+        </div>
     </section>
 </div>
 {{- end}}

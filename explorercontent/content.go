@@ -29,10 +29,10 @@ const maxAge = 24 * time.Hour
 // accent of a product tile without a color.
 const defaultThemeColor = "#2B61D1"
 
-// maxProducts is the number of product tiles the feed may serve; the strip shows the first
-// mainProducts and the rest go to the "More from Flux" row.
+// maxProducts is the number of product tiles the feed may serve. All of them sit in one strip;
+// on desktop the first visibleProducts fit and more make the strip scroll sideways.
 const maxProducts = 6
-const mainProducts = 4
+const visibleProducts = 4
 
 // minCTAContrast is the WCAG AA ratio white CTA text needs on a product color to be filled.
 const minCTAContrast = 4.5
@@ -224,8 +224,8 @@ func (s Snapshot) ThemeIcon() string {
 	return s.Theme.IconURL
 }
 
-// namedProducts are the products a page can show: a tile without a name is skipped.
-func (s Snapshot) namedProducts() []Product {
+// ProductTiles are the products the strip shows, in feed order: a tile without a name is skipped.
+func (s Snapshot) ProductTiles() []Product {
 	var out []Product
 	for _, p := range s.Products {
 		if p.Name != "" {
@@ -235,22 +235,10 @@ func (s Snapshot) namedProducts() []Product {
 	return out
 }
 
-// ProductsMain are the first four named products, shown in the product strip.
-func (s Snapshot) ProductsMain() []Product {
-	named := s.namedProducts()
-	if len(named) > mainProducts {
-		return named[:mainProducts]
-	}
-	return named
-}
-
-// ProductsMore are the named products after the first four, shown under "More from Flux".
-func (s Snapshot) ProductsMore() []Product {
-	named := s.namedProducts()
-	if len(named) > mainProducts {
-		return named[mainProducts:]
-	}
-	return nil
+// ProductsScroll reports whether the strip holds more tiles than fit on desktop, so it scrolls
+// sideways there with the next tile peeking in.
+func (s Snapshot) ProductsScroll() bool {
+	return len(s.ProductTiles()) > visibleProducts
 }
 
 // FluxSymbol is the icon URL of the product with id "flux", used as the Flux symbol next to

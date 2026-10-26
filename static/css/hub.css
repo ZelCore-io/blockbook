@@ -450,27 +450,78 @@
     border-radius: var(--hub-radius);
     padding: 20px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
 }
 
 .hub-products-title {
-    grid-column: 1 / -1;
-    margin: 0;
+    margin: 0 0 12px;
     font-size: 16px;
     font-weight: 800;
 }
 
-/* The "More from Flux" row: products 5 and 6 under a rule, in the same 4-column grid. */
-.hub-products-more-title {
-    grid-column: 1 / -1;
-    margin: 6px 0 0;
-    padding-top: 14px;
-    border-top: 1px solid var(--hub-line);
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--hub-text-2);
+/* One row of every product that scrolls sideways, with no script. --strip-tile is the tile width:
+   about 1.2 tiles visible on phones, 2.2 on tablets, and on desktop exactly 4 when there are
+   4 or fewer, or 4 plus an 18% peek of the fifth when hub-products-scroll is set (5 or more).
+   The 4px side padding (cancelled by the negative margin) keeps tile focus rings inside the
+   scroll box. The strip is a focusable region, so arrow keys scroll it. */
+.hub-products-strip {
+    --strip-gap: 12px;
+    --strip-tile: calc((100% - var(--strip-gap)) / 1.2);
+    display: flex;
+    gap: var(--strip-gap);
+    margin: 0 -4px;
+    padding: 4px 4px 12px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 4px;
+    scrollbar-width: thin;
+    scrollbar-color: #86A1DA var(--hub-line-soft);
+}
+
+.hub-products-strip > .hub-product {
+    flex: 0 0 var(--strip-tile);
+    scroll-snap-align: start;
+}
+
+.hub-products-strip::-webkit-scrollbar {
+    height: 8px;
+}
+
+.hub-products-strip::-webkit-scrollbar-track {
+    background: var(--hub-line-soft);
+    border-radius: 999px;
+}
+
+.hub-products-strip::-webkit-scrollbar-thumb {
+    background: #86A1DA;
+    border-radius: 999px;
+}
+
+.hub-page .hub-products-strip:focus-visible {
+    outline: 2px solid var(--hub-link);
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .hub-products-strip {
+        scroll-behavior: smooth;
+    }
+}
+
+@media (min-width: 576px) {
+    .hub-products-strip {
+        --strip-tile: calc((100% - 2 * var(--strip-gap)) / 2.2);
+    }
+}
+
+@media (min-width: 992px) {
+    .hub-products-strip {
+        --strip-tile: calc((100% - 3 * var(--strip-gap)) / 4);
+    }
+
+    .hub-products-strip.hub-products-scroll {
+        --strip-tile: calc((100% - 4 * var(--strip-gap)) / 4.18);
+    }
 }
 
 .hub-product {
@@ -563,15 +614,8 @@
     color: #000000;
 }
 
-@media (max-width: 991.98px) {
-    .hub-products-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-}
-
 @media (max-width: 575.98px) {
     .hub-products-grid {
-        grid-template-columns: minmax(0, 1fr);
         padding: 12px;
     }
 
