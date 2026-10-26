@@ -15,6 +15,9 @@
  * overflow-wrap: anywhere for long strings; .hub-scroll resets it so table cells keep their
  * width and the table scrolls inside its own box instead of breaking per character.
  *
+ * The cascade order matters: build hub.min.N.css with csso --no-restructure, which
+ * minifies without merging or reordering rules.
+ *
  * Links: .hub-page colors plain anchors only. Bootstrap .btn and .nav-link anchors on
  * upstream pages keep their own colors.
  */
@@ -865,10 +868,7 @@
     outline-offset: 2px;
 }
 
-/* On the colored band and the dark footer the ring is white. This sets the full outline
-   shorthand. Keep the declarations of the rules in this section distinct: csso merges
-   rules with identical declarations and can move one past a more specific rule, which
-   breaks the cascade in hub.min.6.css. */
+/* On the colored band and the dark footer the ring is white. */
 .hub-page .hub-band a:focus-visible,
 .hub-page .hub-band button:focus-visible,
 .hub-page .hub-band select:focus-visible,
