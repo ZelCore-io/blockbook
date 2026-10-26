@@ -10,6 +10,13 @@
  * .hub-zelcore-prompt, .hub-tabs, .hub-stat-grid, .hub-articles, .hub-footer, .hub-mono,
  * .hub-scroll. Parts used inside them are named .hub-<block>-<part> (for example .hub-brand,
  * .hub-mark, .hub-label) and are listed with their block below.
+ *
+ * Tables inside .hub-card must sit in a .hub-scroll wrapper. .hub-card sets
+ * overflow-wrap: anywhere for long strings; .hub-scroll resets it so table cells keep their
+ * width and the table scrolls inside its own box instead of breaking per character.
+ *
+ * Links: .hub-page colors plain anchors only. Bootstrap .btn and .nav-link anchors on
+ * upstream pages keep their own colors.
  */
 
 /* ---------- Fonts ---------- */
@@ -105,11 +112,12 @@
     color: var(--hub-ink);
 }
 
-.hub-page a {
+/* :where() keeps the specificity at (0,1,1) / (0,2,1) so the block rules below still win. */
+.hub-page a:where(:not(.btn, .nav-link)) {
     color: var(--hub-link);
 }
 
-.hub-page a:hover {
+.hub-page a:where(:not(.btn, .nav-link)):hover {
     color: var(--hub-link-hover);
 }
 
@@ -253,12 +261,6 @@
 .hub-search input::placeholder {
     color: var(--hub-muted);
     opacity: 1;
-}
-
-.hub-search input:focus-visible,
-.hub-search button:focus-visible {
-    outline: 2px solid var(--hub-link);
-    outline-offset: 2px;
 }
 
 .hub-search button {
@@ -704,6 +706,14 @@
     color: #FFFFFF;
 }
 
+/* Beats .hub-page a:hover (0,2,1) so an active page link stays white on ink. */
+.hub-page .hub-pager .active,
+.hub-page .hub-pager .active:hover,
+.hub-page .hub-pager [aria-current="page"],
+.hub-page .hub-pager [aria-current="page"]:hover {
+    color: #FFFFFF;
+}
+
 /* ---------- Stat grid ---------- */
 
 .hub-stat-grid {
@@ -842,6 +852,41 @@
 .hub-footer-legal a {
     color: #FFFFFF;
     text-decoration: underline;
+}
+
+/* ---------- Focus ---------- */
+
+/* main.css sets outline: none on every element; restore a visible focus ring. */
+.hub-page a:focus-visible,
+.hub-page button:focus-visible,
+.hub-page select:focus-visible,
+.hub-page summary:focus-visible {
+    outline: 2px solid var(--hub-link);
+    outline-offset: 2px;
+}
+
+/* On the colored band and the dark footer the ring is white. */
+.hub-page .hub-band a:focus-visible,
+.hub-page .hub-band button:focus-visible,
+.hub-page .hub-band select:focus-visible,
+.hub-page .hub-band summary:focus-visible,
+.hub-page .hub-footer a:focus-visible,
+.hub-page .hub-footer button:focus-visible,
+.hub-page .hub-footer select:focus-visible,
+.hub-page .hub-footer summary:focus-visible {
+    outline-color: #FFFFFF;
+}
+
+/* The search box is white, so its controls keep the link-colored ring. The input ring is
+   drawn inside its edge so it stays on white in the compact (unpadded) nav search too. */
+.hub-page .hub-search input:focus-visible {
+    outline: 2px solid var(--hub-link);
+    outline-offset: -2px;
+}
+
+.hub-page .hub-search button:focus-visible {
+    outline: 2px solid var(--hub-link);
+    outline-offset: 2px;
 }
 
 /* ---------- Narrow screens ---------- */
