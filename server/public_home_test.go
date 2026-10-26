@@ -56,8 +56,8 @@ func Test_PublicServer_HomeAndStatus(t *testing.T) {
 	defer ts.Close()
 
 	blocksTab := `<nav class="hub-tabs" aria-label="Latest activity"><a href="/?tab=blocks" class="active" aria-current="page">Blocks</a><a href="/?tab=txs">Transactions</a><a class="hub-tabs-end" href="/blocks">View all</a></nav>`
-	newestBlockRow := `<tr><td><a class="hub-mono" href="/block/225494">225<span class="ns">494</span></a><div class="hub-muted">`
-	newestBlockHash := `<td class="hub-mono hub-ellipsis">00000000eb0443fd7dc4a1ed5c686a8e995057805f9a161d9a5a77a95e72b7b6</td><td class="text-nowrap">4 tx · 2<span class="ns">345</span><span class="ns">678</span> B</td></tr>`
+	newestBlockRow := `<tr><td class="text-nowrap"><a class="hub-mono" href="/block/225494">225<span class="ns">494</span></a><div class="hub-muted">`
+	newestBlockHash := `<td class="hub-mono hub-ellipsis d-none d-sm-table-cell">00000000eb0443fd7dc4a1ed5c686a8e995057805f9a161d9a5a77a95e72b7b6</td><td class="text-nowrap">4 tx · 2<span class="ns">345</span><span class="ns">678</span> B</td></tr>`
 
 	home := getHTML(t, ts.URL+"/")
 	checkHTML(t, "home", home, []string{

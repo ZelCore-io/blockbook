@@ -430,7 +430,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 11px;
+    font-size: 16px;
     font-weight: 800;
     overflow: hidden;
 }
@@ -554,9 +554,11 @@
     text-decoration: none;
 }
 
+/* height: auto lets aspect-ratio win over the img height attribute (kept to reserve space). */
 .hub-campaign img {
     display: block;
     width: 100%;
+    height: auto;
     aspect-ratio: 16 / 10;
     object-fit: cover;
     background: #D9E6F7;
@@ -700,6 +702,13 @@
     overflow-wrap: normal;
 }
 
+/* Upstream info tables size their label column to its min-content (tbody is an inline-table) and
+   inherit overflow-wrap: anywhere from .data-table, so at phone width "Mined Time" broke per
+   character. Labels break between words only; values keep breaking anywhere. */
+.hub-card .info-table tr > td:first-child {
+    overflow-wrap: normal;
+}
+
 .hub-pager {
     display: flex;
     flex-wrap: wrap;
@@ -765,8 +774,11 @@
     color: var(--hub-ink);
 }
 
-.hub-stat-note {
+.hub-stat-note,
+.hub-stat-grid .hub-stat-note {
+    font-family: var(--hub-font);
     font-size: 13px;
+    font-weight: 400;
     color: var(--hub-muted);
 }
 
@@ -1025,6 +1037,19 @@
     font-family: var(--hub-font-mono);
 }
 
+/* Bootstrap badges never wrap; the unconfirmed tx's "confirmation estimated in ..." badge is
+   wider than a 360 px card, so that badge may wrap. */
+.hub-card .tx-detail .badge.bg-info {
+    max-width: 100%;
+    white-space: normal;
+    text-align: left;
+}
+
+/* The "Unconfirmed Transaction!" pill is an inline span; keep it in one piece when the footer wraps. */
+.hub-card .tx-detail .txvalue.unconfirmed {
+    display: inline-block;
+}
+
 .hub-raw > summary {
     cursor: pointer;
     font-size: 16px;
@@ -1089,6 +1114,7 @@
 .hub-article img {
     display: block;
     width: 100%;
+    height: auto;
     aspect-ratio: 16 / 9;
     object-fit: cover;
     background: #D9E6F7;
@@ -1207,6 +1233,17 @@
 
     .hub-card-flush {
         padding: 0;
+    }
+
+    .hub-tabs {
+        gap: 4px;
+        padding: 10px 12px;
+    }
+
+    .hub-tabs a,
+    .hub-tabs button,
+    .hub-tab {
+        padding: 0 12px;
     }
 
     .hub-nav .hub-search {

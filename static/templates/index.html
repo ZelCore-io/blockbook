@@ -81,8 +81,8 @@ fills the band figures and lays out everything below it. The status tables live 
                     <tbody>
                         {{- range .Blocks.Blocks}}
                         <tr>
-                            <td>{{if $link}}<a class="hub-mono" href="/block/{{.Height}}">{{formatUint32 .Height}}</a>{{else}}<span class="hub-mono">{{formatUint32 .Height}}</span>{{end}}<div class="hub-muted">{{unixTimeSpan .Time}}</div></td>
-                            <td class="hub-mono hub-ellipsis">{{.Hash}}</td>
+                            <td class="text-nowrap">{{if $link}}<a class="hub-mono" href="/block/{{.Height}}">{{formatUint32 .Height}}</a>{{else}}<span class="hub-mono">{{formatUint32 .Height}}</span>{{end}}<div class="hub-muted">{{unixTimeSpan .Time}}</div></td>
+                            <td class="hub-mono hub-ellipsis d-none d-sm-table-cell">{{.Hash}}</td>
                             <td class="text-nowrap">{{.Txs}} tx · {{formatUint32 .Size}} B</td>
                         </tr>
                         {{- end}}
