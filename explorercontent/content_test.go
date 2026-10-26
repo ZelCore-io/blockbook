@@ -3,6 +3,7 @@ package explorercontent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -225,7 +226,7 @@ func TestLegacyFeedWithoutProductsOrTheme(t *testing.T) {
 	if err := validate(s, now); err != nil {
 		t.Fatal(err)
 	}
-	if s.ThemeColor() != "#2B61D1" || s.ThemeIcon() != "" || len(s.Products) != 0 || s.ZelcoreProduct() != nil || s.ProductsMain() != nil || s.ProductsMore() != nil || s.FluxSymbol() != "" {
+	if s.ThemeColor() != "#2B61D1" || s.ThemeIcon() != "" || len(s.Products) != 0 || s.ZelcoreProduct() != nil || s.ProductTiles() != nil || s.ProductsScroll() || s.FluxSymbol() != "" {
 		t.Fatal("legacy feed did not fall back to defaults")
 	}
 }
@@ -368,8 +369,8 @@ func TestProductColorFromFeed(t *testing.T) {
 		if strings.Join(got, " ") != want {
 			t.Errorf("%s: colors %q, want %q", name, strings.Join(got, " "), want)
 		}
-		if len(s.ProductsMain()) != 4 || len(s.ProductsMore()) != 2 || s.ProductsMore()[0].ID != "os" {
-			t.Errorf("%s: split %d+%d", name, len(s.ProductsMain()), len(s.ProductsMore()))
+		if tiles := s.ProductTiles(); len(tiles) != 6 || tiles[4].ID != "os" || !s.ProductsScroll() {
+			t.Errorf("%s: %d tiles, scroll %v", name, len(tiles), s.ProductsScroll())
 		}
 		if s.FluxSymbol() != "https://cdn.example.com/flux.svg" {
 			t.Errorf("%s: flux symbol %q", name, s.FluxSymbol())
@@ -417,22 +418,22 @@ func TestProductAccentAndCTA(t *testing.T) {
 	}
 }
 
-func TestProductsMainAndMore(t *testing.T) {
+func TestProductTilesAndScroll(t *testing.T) {
 	four := Snapshot{Products: []Product{product("a"), product("b"), product("c"), product("d")}}
-	if len(four.ProductsMain()) != 4 || four.ProductsMore() != nil {
-		t.Error("a legacy 4-product feed has no More row")
+	if len(four.ProductTiles()) != 4 || four.ProductsScroll() {
+		t.Error("a 4-product feed fits without scrolling")
 	}
 	six := Snapshot{Products: []Product{product("a"), product("b"), product("c"), product("d"), product("e"), product("f")}}
-	if m, more := six.ProductsMain(), six.ProductsMore(); len(m) != 4 || m[3].ID != "d" || len(more) != 2 || more[0].ID != "e" || more[1].ID != "f" {
-		t.Errorf("6 products split into %d + %d", len(m), len(more))
+	if tiles := six.ProductTiles(); len(tiles) != 6 || tiles[5].ID != "f" || !six.ProductsScroll() {
+		t.Errorf("6 products: %d tiles, scroll %v", len(tiles), six.ProductsScroll())
 	}
 	unnamed := product("b")
 	unnamed.Name = ""
 	gap := Snapshot{Products: []Product{product("a"), unnamed, product("c"), product("d"), product("e")}}
-	if m := gap.ProductsMain(); len(m) != 4 || m[1].ID != "c" || gap.ProductsMore() != nil {
+	if tiles := gap.ProductTiles(); len(tiles) != 4 || tiles[1].ID != "c" || gap.ProductsScroll() {
 		t.Error("an unnamed product must not take a slot")
 	}
-	if (Snapshot{}).ProductsMain() != nil {
+	if (Snapshot{}).ProductTiles() != nil || (Snapshot{}).ProductsScroll() {
 		t.Error("empty snapshot has products")
 	}
 }
@@ -448,5 +449,174 @@ func TestFluxSymbol(t *testing.T) {
 	}
 	if got := (Snapshot{Products: []Product{product("zelcore")}}).FluxSymbol(); got != "" {
 		t.Errorf("no flux product: %q", got)
+	}
+}
+
+// The "explorers" field never fails the feed: a legacy feed has none, a malformed field is an
+// empty list, and bad entries are dropped one by one.
+func TestExplorersFromFeed(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	head := `{"version":1,"generatedAt":"` + now.Format(time.RFC3339) + `"`
+	decode := func(t *testing.T, raw string) Snapshot {
+		t.Helper()
+		var s Snapshot
+		if err := json.Unmarshal([]byte(raw), &s); err != nil {
+			t.Fatalf("feed rejected: %v", err)
+		}
+		if err := validate(s, now); err != nil {
+			t.Fatalf("feed invalid: %v", err)
+		}
+		return s
+	}
+	for name, raw := range map[string]string{
+		"legacy": head + `}`, "null": head + `,"explorers":null}`, "object": head + `,"explorers":{"coin":"bitcoin"}}`,
+		"string": head + `,"explorers":"https://example.com"}`, "number": head + `,"explorers":7}`,
+	} {
+		if s := decode(t, raw); len(s.Explorers) != 0 || s.MoreExplorers() != nil {
+			t.Errorf("%s: want no explorers, got %+v", name, s.Explorers)
+		}
+	}
+
+	raw := head + `,"explorers":[` +
+		`{"coin":"bitcoin","name":"Bitcoin","url":"https://blockbook.btc.zelcore.io/","iconUrl":null},` +
+		`{"coin":"evil","name":"Evil","url":"javascript:alert(1)","iconUrl":null},` +
+		`{"coin":"plain","name":"Plain","url":"http://example.com/"},` +
+		`{"coin":"long","name":"` + strings.Repeat("L", 41) + `","url":"https://example.com/long"},` +
+		`{"coin":"blank","name":"   ","url":"https://example.com/blank"},` +
+		`{"coin":"Upper","name":"Upper","url":"https://example.com/upper"},` +
+		`{"coin":"badicon","name":"Bad icon","url":"https://example.com/bi","iconUrl":"javascript:alert(2)"},` +
+		`{"coin":"creds","name":"Creds","url":"https://user:pw@example.com/"},` +
+		`{"coin":"typed","name":5,"url":"https://example.com/typed"},` +
+		`"not an object",null,` +
+		`{"coin":"bitcoin","name":"Bitcoin again","url":"https://example.com/dupe"},` +
+		`{"coin":"kaspa","name":"` + strings.Repeat("é", 40) + `","url":"https://example.com/k?a=1\"onmouseover=alert(3)","iconUrl":"https://cdn.example.com/kas.svg","order":3,"enabled":true}` +
+		`],"products":[{"id":"zelcore","name":"Zelcore","targetUrl":"https://zelcore.io"}]}`
+	s := decode(t, raw)
+	if len(s.Explorers) != 2 || s.Explorers[0].Name != "Bitcoin" || s.Explorers[0].IconURL != "" || s.Explorers[1].Coin != "kaspa" || s.Explorers[1].IconURL != "https://cdn.example.com/kas.svg" {
+		t.Fatalf("want bitcoin and kaspa only, got %+v", s.Explorers)
+	}
+	if len(s.Products) != 1 {
+		t.Fatal("a bad explorer must not affect the rest of the feed")
+	}
+
+	var many []string
+	for i := 0; i < 30; i++ {
+		many = append(many, fmt.Sprintf(`{"coin":"c%d","name":"Coin %d","url":"https://example.com/%d"}`, i, i, i))
+	}
+	s = decode(t, head+`,"explorers":[`+strings.Join(many, ",")+`]}`)
+	if len(s.Explorers) != maxExplorers || s.Explorers[23].Coin != "c23" || len(s.MoreExplorers()) != maxExplorers {
+		t.Fatalf("want the first %d explorers, got %d", maxExplorers, len(s.Explorers))
+	}
+}
+
+// MoreExplorers re-checks entries but does not guess the page's coin: only the client drops it,
+// from the endpoint's ?coin= value.
+func TestMoreExplorersSkipsInvalidOnly(t *testing.T) {
+	s := Snapshot{Explorers: ExplorerList{
+		{Coin: "groestlcoin", Name: "Groestlcoin", URL: "https://example.com/grs"},
+		{Coin: "bitcoin-cash", Name: "Bitcoin Cash", URL: "https://example.com/bch"},
+		{Coin: "bad", Name: "Bad", URL: "javascript:alert(1)"},
+		{Coin: "Upper", Name: "Upper", URL: "https://example.com/upper"},
+		{Coin: "bitcoin", Name: "Bitcoin", URL: "https://example.com/btc", IconURL: "http://example.com/i.png"},
+	}}
+	got := s.MoreExplorers()
+	if len(got) != 2 || got[0].Coin != "groestlcoin" || got[1].Coin != "bitcoin-cash" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestClientSnapshotExplorers(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	s := sample(now)
+	s.Explorers = ExplorerList{{Coin: "groestlcoin", Name: "Groestlcoin", URL: "https://example.com/grs"}, {Coin: "bitcoin", Name: "Bitcoin", URL: "https://example.com/btc"}}
+	payload, _ := json.Marshal(s)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(payload) }))
+	defer srv.Close()
+	path := filepath.Join(t.TempDir(), "content.json")
+	c, err := New(srv.URL+"/api/public/explorer/v1/config?coin=groestlcoin", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.http = srv.Client()
+	if err = c.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := c.Snapshot(now)
+	if len(got.Explorers) != 1 || got.Explorers[0].Coin != "bitcoin" {
+		t.Fatalf("the endpoint's own coin must be dropped: %+v", got.Explorers)
+	}
+	got.Explorers[0].Name = "changed"
+	if c.Snapshot(now).Explorers[0].Name != "Bitcoin" {
+		t.Fatal("snapshot shares explorers with the client")
+	}
+	restored, err := New(srv.URL+"/api/public/explorer/v1/config?coin=groestlcoin", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := restored.Snapshot(now).Explorers; len(e) != 1 || e[0].URL != "https://example.com/btc" {
+		t.Fatalf("restart cache lost explorers: %+v", e)
+	}
+}
+
+// Own-coin exclusion uses only the endpoint's ?coin= value, compared in lower case. Without it,
+// nothing is excluded: the dashboard's own filter is then the only one.
+func TestClientOwnCoinFromEndpoint(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	s := sample(now)
+	s.Explorers = ExplorerList{{Coin: "groestlcoin", Name: "Groestlcoin", URL: "https://example.com/grs"}, {Coin: "bitcoin", Name: "Bitcoin", URL: "https://example.com/btc"}}
+	payload, _ := json.Marshal(s)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(payload) }))
+	defer srv.Close()
+	for query, want := range map[string][]string{
+		"":                   {"groestlcoin", "bitcoin"},
+		"?coin=GROESTLCOIN":  {"bitcoin"},
+		"?coin=Groestlcoin":  {"bitcoin"},
+		"?other=groestlcoin": {"groestlcoin", "bitcoin"},
+	} {
+		c, err := New(srv.URL+"/api/public/explorer/v1/config"+query, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.http = srv.Client()
+		if err = c.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, e := range c.Snapshot(now).Explorers {
+			got = append(got, e.Coin)
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%q: got %v, want %v", query, got, want)
+		}
+	}
+}
+
+// Invisible and bidi format characters (category Cf) are stripped from names before the checks,
+// so a name made only of them is dropped and a 40-letter name padded with them still fits.
+func TestExplorerNameFormatCharacters(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	entry := func(coin, name string) string {
+		b, _ := json.Marshal(map[string]string{"coin": coin, "name": name, "url": "https://example.com/" + coin})
+		return string(b)
+	}
+	raw := `{"version":1,"generatedAt":"` + now.Format(time.RFC3339) + `","explorers":[` + strings.Join([]string{
+		entry("zwsp", "\u200b\u200b\u200b"),
+		entry("bidi", "\u202e\u2066 \u2069"),
+		entry("bom", "\ufeff"),
+		entry("rlo", "Bit\u202ecoin"),
+		entry("padded", strings.Repeat("P", 40)+"\u200b\u200d"),
+		entry("toolong", strings.Repeat("Q", 41)+"\u200b"),
+	}, ",") + `]}`
+	var s Snapshot
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Explorers) != 2 || s.Explorers[0].Name != "Bitcoin" || s.Explorers[1].Name != strings.Repeat("P", 40) {
+		t.Fatalf("got %+v", s.Explorers)
+	}
+	// A hand-built Snapshot goes through the same cleaning at render time.
+	hand := Snapshot{Explorers: ExplorerList{{Coin: "a", Name: "\u200b", URL: "https://example.com/a"}, {Coin: "b", Name: "B\u202e", URL: "https://example.com/b"}}}
+	if got := hand.MoreExplorers(); len(got) != 1 || got[0].Name != "B" || hand.Explorers[1].Name != "B\u202e" {
+		t.Fatalf("render-time cleaning: %+v", got)
 	}
 }

@@ -4,8 +4,8 @@
  * Flux ecosystem branding. Every color is from an official palette:
  *   Flux Brand Book: Blue Wave #2B61D1, shades #4F7AD4 #86A1DA #2D2D2D #717171, black, white.
  *   Product accents arrive per tile from the dashboard feed (--tile-accent, validated #RRGGBB).
- * Hairlines and shadows are palette black or #2D2D2D at low alpha. There is no success or error
- * color: statuses use text, and amounts use their sign.
+ * Hairlines and shadows are palette black, #2D2D2D or white at low alpha. There is no success
+ * or error color: statuses use text, and amounts use their sign.
  *
  * Fonts are self-hosted from static/fonts/ (no third-party font hosts):
  *   Montserrat, headings (SIL OFL 1.1, see fonts/montserrat/OFL.txt) from @fontsource/montserrat 5.3.0
@@ -14,7 +14,8 @@
  *
  * Public classes: .hub-page, .hub-band, .hub-band-home, .hub-nav, .hub-search, .hub-figures,
  * .hub-products, .hub-product, .hub-powered, .hub-layout, .hub-card, .hub-aside, .hub-campaign,
- * .hub-zelcore-prompt, .hub-tabs, .hub-stat-grid, .hub-articles, .hub-footer, .hub-mono,
+ * .hub-zelcore-prompt, .hub-tabs, .hub-stat-grid, .hub-explorers, .hub-explorer, .hub-articles,
+ * .hub-footer, .hub-footer-explorers, .hub-mono,
  * .hub-scroll, .hub-ellipsis, .hub-summary, .hub-badge, .hub-copy, .hub-section-head, .hub-raw,
  * .hub-io-label. Parts used inside them are named .hub-<block>-<part> (for example .hub-brand,
  * .hub-mark, .hub-label) and are listed with their block below.
@@ -29,10 +30,10 @@
  * minifies without merging or reordering rules. Build commands (run from the repo root;
  * the perl step restores the \XXXX escapes that csso decodes to UTF-8):
  *   npx csso-cli@4.0.2 static/css/hub.css --no-restructure -o /tmp/hub.css
- *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/hub.css > static/css/hub.min.6.css
+ *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/hub.css > static/css/hub.min.7.css
  *   npx csso-cli@4.0.2 static/css/main.css -o /tmp/main.css
- *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/main.css > static/css/main.min.6.css
- *   npx terser@5.51.2 static/js/main.js -c -m -o static/js/main.min.6.js
+ *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/main.css > static/css/main.min.7.css
+ *   npx terser@5.51.2 static/js/main.js -c -m -o static/js/main.min.7.js
  *
  * Links: .hub-page colors plain anchors only. Bootstrap .btn and .nav-link anchors on
  * upstream pages keep their own colors.
@@ -162,8 +163,8 @@
 /* Headings use Montserrat. main.css sets the body font on every element (*), so descendants are
    listed too. :where() keeps this at zero specificity: it beats * only by coming later, and
    .hub-mono inside a heading still wins. */
-:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary),
-:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary) * {
+:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-explorer-icon, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary),
+:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-explorer-icon, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary) * {
     font-family: var(--hub-font-heading);
 }
 
@@ -449,27 +450,78 @@
     border-radius: var(--hub-radius);
     padding: 20px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
 }
 
 .hub-products-title {
-    grid-column: 1 / -1;
-    margin: 0;
+    margin: 0 0 12px;
     font-size: 16px;
     font-weight: 800;
 }
 
-/* The "More from Flux" row: products 5 and 6 under a rule, in the same 4-column grid. */
-.hub-products-more-title {
-    grid-column: 1 / -1;
-    margin: 6px 0 0;
-    padding-top: 14px;
-    border-top: 1px solid var(--hub-line);
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--hub-text-2);
+/* One row of every product that scrolls sideways, with no script. --strip-tile is the tile width:
+   about 1.2 tiles visible on phones, 2.2 on tablets, and on desktop exactly 4 when there are
+   4 or fewer, or 4 plus an 18% peek of the fifth when hub-products-scroll is set (5 or more).
+   The 4px side padding (cancelled by the negative margin) keeps tile focus rings inside the
+   scroll box. The strip is a focusable region, so arrow keys scroll it. */
+.hub-products-strip {
+    --strip-gap: 12px;
+    --strip-tile: calc((100% - var(--strip-gap)) / 1.2);
+    display: flex;
+    gap: var(--strip-gap);
+    margin: 0 -4px;
+    padding: 4px 4px 12px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 4px;
+    scrollbar-width: thin;
+    scrollbar-color: #86A1DA var(--hub-line-soft);
+}
+
+.hub-products-strip > .hub-product {
+    flex: 0 0 var(--strip-tile);
+    scroll-snap-align: start;
+}
+
+.hub-products-strip::-webkit-scrollbar {
+    height: 8px;
+}
+
+.hub-products-strip::-webkit-scrollbar-track {
+    background: var(--hub-line-soft);
+    border-radius: 999px;
+}
+
+.hub-products-strip::-webkit-scrollbar-thumb {
+    background: #86A1DA;
+    border-radius: 999px;
+}
+
+.hub-page .hub-products-strip:focus-visible {
+    outline: 2px solid var(--hub-link);
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .hub-products-strip {
+        scroll-behavior: smooth;
+    }
+}
+
+@media (min-width: 576px) {
+    .hub-products-strip {
+        --strip-tile: calc((100% - 2 * var(--strip-gap)) / 2.2);
+    }
+}
+
+@media (min-width: 992px) {
+    .hub-products-strip {
+        --strip-tile: calc((100% - 3 * var(--strip-gap)) / 4);
+    }
+
+    .hub-products-strip.hub-products-scroll {
+        --strip-tile: calc((100% - 4 * var(--strip-gap)) / 4.18);
+    }
 }
 
 .hub-product {
@@ -562,15 +614,8 @@
     color: #000000;
 }
 
-@media (max-width: 991.98px) {
-    .hub-products-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-}
-
 @media (max-width: 575.98px) {
     .hub-products-grid {
-        grid-template-columns: minmax(0, 1fr);
         padding: 12px;
     }
 
@@ -1190,6 +1235,95 @@
     color: var(--hub-text-2);
 }
 
+/* ---------- More explorers ---------- */
+
+/* Links to the other Zelcore explorers, from the feed's "explorers" list. Pill buttons at least
+   44 px tall that wrap onto new rows; black text on white (21:1), white initials on Blue Wave
+   (5.63:1). Not promotions, so no "Sponsored" label. */
+.hub-explorers {
+    max-width: var(--hub-max);
+    margin: 0 auto;
+    padding: 4px var(--hub-gutter) 32px;
+}
+
+.hub-explorers h2 {
+    margin: 0 0 16px;
+    font-size: 20px;
+    font-weight: 800;
+}
+
+.hub-explorers-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.hub-explorers-list li {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.hub-explorer {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 44px;
+    padding: 5px 18px 5px 5px;
+    border: 1px solid var(--hub-line-strong);
+    border-radius: 999px;
+    background: var(--hub-surface);
+    color: var(--hub-ink);
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.hub-page a.hub-explorer,
+.hub-page a.hub-explorer:hover {
+    color: var(--hub-ink);
+    text-decoration: none;
+}
+
+.hub-page a.hub-explorer:hover {
+    border-color: var(--hub-blue);
+}
+
+.hub-page a.hub-explorer:hover .hub-explorer-name {
+    text-decoration: underline;
+}
+
+.hub-explorer-icon {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--hub-blue);
+    color: #FFFFFF;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 800;
+    overflow: hidden;
+}
+
+.hub-explorer-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: var(--hub-surface);
+}
+
+.hub-explorer-name {
+    min-width: 0;
+}
+
 /* ---------- Articles ---------- */
 
 .hub-articles {
@@ -1295,6 +1429,27 @@
 .hub-footer .hub-footer-brand {
     color: #FFFFFF;
     font-weight: 700;
+}
+
+/* The compact "More explorers" row above the footer links: #86A1DA label (5.33:1), white links. */
+.hub-footer-explorers {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.hub-footer-explorers-inner {
+    max-width: var(--hub-max);
+    margin: 0 auto;
+    padding: 12px var(--hub-gutter);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 20px;
+    font-size: 14px;
+}
+
+.hub-footer-explorers-title {
+    font-weight: 700;
+    color: var(--hub-footer-text);
 }
 
 .hub-footer-legal {
