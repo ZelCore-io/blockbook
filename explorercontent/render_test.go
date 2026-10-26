@@ -445,3 +445,97 @@ func TestFluxSymbolInBandAndFooter(t *testing.T) {
 		}
 	}
 }
+
+func fixtureExplorers() ExplorerList {
+	return ExplorerList{
+		{Coin: "bitcoin", Name: "Bitcoin", URL: "https://blockbook.btc.zelcore.io/", IconURL: "https://cdn.example.com/btc.svg"},
+		{Coin: "litecoin", Name: "Litecoin", URL: "https://blockbook.ltc.zelcore.io/"},
+		{Coin: "groestlcoin", Name: "Groestlcoin", URL: "https://blockbook.grs.zelcore.io/"},
+		{Coin: "hostile", Name: `<script>alert(4)</script>`, URL: `https://example.com/x?a=1"onmouseover=alert(5)`, IconURL: `https://cdn.example.com/i.svg"onerror=alert(6)`},
+	}
+}
+
+func TestHomeMoreExplorers(t *testing.T) {
+	html := renderHome(t, Snapshot{Explorers: fixtureExplorers()}, nil)
+	for _, want := range []string{
+		`<section class="hub-explorers" aria-labelledby="hub-explorers-title">`, `<h2 id="hub-explorers-title">More explorers</h2>`,
+		`<a class="hub-explorer" href="https://blockbook.btc.zelcore.io/" target="_blank" rel="noopener noreferrer">`,
+		`<span class="hub-explorer-icon" aria-hidden="true"><img src="https://cdn.example.com/btc.svg" alt="" width="32" height="32" loading="lazy" referrerpolicy="no-referrer"></span>`,
+		`<span class="hub-explorer-icon" aria-hidden="true">L</span>`, `<span class="hub-explorer-name">Litecoin</span>`,
+		"&lt;script&gt;alert(4)", `href="https://example.com/x?a=1%22onmouseover=alert%285%29"`, `src="https://cdn.example.com/i.svg%22onerror=alert%286%29"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	for _, leak := range []string{"<script>alert", `"onmouseover`, `"onerror`, "Sponsored", "blockbook.grs.zelcore.io"} {
+		if strings.Contains(html, leak) {
+			t.Errorf("rendered %q", leak)
+		}
+	}
+	if !within(html, "hub-explorers\"", "</section>", "Bitcoin") || !within(html, "hub-footer-explorers\"", "</div>", ">Litecoin</a>") {
+		t.Error("explorers missing from the home section or the footer row")
+	}
+	section, news, blocks := strings.Index(html, `class="hub-explorers"`), strings.Index(html, "News from Zelcore and SSP"), strings.Index(html, `class="hub-tabs"`)
+	if section < blocks {
+		t.Error("More explorers must come after the Blocks/Transactions panel")
+	}
+	withNews := renderHome(t, Snapshot{Explorers: fixtureExplorers(), Articles: sample(time.Now()).Articles}, nil)
+	if section, news = strings.Index(withNews, `class="hub-explorers"`), strings.Index(withNews, "News from Zelcore and SSP"); news < 0 || section > news {
+		t.Error("More explorers must come before the news")
+	}
+
+	empty := renderHome(t, Snapshot{}, nil)
+	ownOnly := renderHome(t, Snapshot{Explorers: ExplorerList{{Coin: "groestlcoin", Name: "Groestlcoin", URL: "https://example.com/grs"}}}, nil)
+	for name, html := range map[string]string{"empty": empty, "own coin only": ownOnly} {
+		if strings.Contains(html, "More explorers") || strings.Contains(html, "hub-explorer") {
+			t.Errorf("%s: renders the More explorers section or footer row", name)
+		}
+	}
+}
+
+func TestFooterMoreExplorers(t *testing.T) {
+	for _, home := range []bool{false, true} {
+		html := renderShell(t, Snapshot{Explorers: fixtureExplorers()}, map[string]interface{}{"HomePage": home})
+		row := `<nav class="hub-footer-explorers-inner" aria-label="More explorers">`
+		if !within(html, "hub-footer\"", "</footer>", row) || !within(html, "hub-footer-explorers\"", "</div>", `<a href="https://blockbook.btc.zelcore.io/" target="_blank" rel="noopener noreferrer">Bitcoin</a>`) {
+			t.Errorf("home=%v: footer explorer row missing", home)
+		}
+		if strings.Index(html, row) > strings.Index(html, `class="hub-footer-inner"`) {
+			t.Errorf("home=%v: explorer row must sit above the footer links", home)
+		}
+		if strings.Contains(html, "blockbook.grs.zelcore.io") || strings.Contains(html, "<script>alert") || strings.Contains(html, `"onmouseover`) {
+			t.Errorf("home=%v: own coin or unescaped value in the footer", home)
+		}
+		if html = renderShell(t, Snapshot{}, map[string]interface{}{"HomePage": home}); strings.Contains(html, "More explorers") || strings.Contains(html, "hub-footer-explorers") {
+			t.Errorf("home=%v: empty list renders the footer row", home)
+		}
+	}
+	// Hostile values built without the feed's validation never reach the page.
+	bad := Snapshot{Explorers: ExplorerList{{Coin: "x", Name: "X", URL: "javascript:alert(1)"}, {Coin: "y", Name: strings.Repeat("Y", 41), URL: "https://example.com/y"}}}
+	if html := renderShell(t, bad, nil); strings.Contains(html, "More explorers") || strings.Contains(html, "javascript:") {
+		t.Error("invalid explorers rendered")
+	}
+}
+
+func TestLongExplorerNameWraps(t *testing.T) {
+	name := strings.Repeat("W", 40)
+	html := renderHome(t, Snapshot{Explorers: ExplorerList{{Coin: "w", Name: name, URL: "https://example.com/w"}}}, nil)
+	if !within(html, "hub-explorer\"", "</a>", name) || !within(html, "hub-footer-explorers\"", "</div>", name) {
+		t.Fatal("long name missing")
+	}
+	css, err := os.ReadFile("../static/css/hub.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sel := range []string{".hub-explorer", ".hub-footer a"} {
+		rule := regexp.MustCompile(`(?s)\n` + regexp.QuoteMeta(sel) + ` \{([^}]*)\}`).FindStringSubmatch(string(css))
+		if rule == nil || !strings.Contains(rule[1], "overflow-wrap: anywhere") || !strings.Contains(rule[1], "min-height: 44px") {
+			t.Errorf("%s must wrap long words and be at least 44px tall", sel)
+		}
+	}
+	min, err := os.ReadFile("../static/css/hub.min.6.css")
+	if err != nil || !strings.Contains(string(min), ".hub-explorer{") || !strings.Contains(string(min), ".hub-footer-explorers-inner{") {
+		t.Error("hub.min.6.css is not rebuilt")
+	}
+}

@@ -168,3 +168,26 @@ func TestShellNoGoogleFonts(t *testing.T) {
 		t.Error("hub.css must use self-hosted fonts")
 	}
 }
+
+func TestShellFooterMoreExplorers(t *testing.T) {
+	content := explorercontent.Snapshot{Explorers: explorercontent.ExplorerList{
+		{Coin: "bitcoin", Name: "Bitcoin", URL: "https://blockbook.btc.zelcore.io/"},
+		{Coin: "groestlcoin", Name: "Groestlcoin", URL: "https://blockbook.grs.zelcore.io/"},
+		{Coin: "evil", Name: "Coin <b>", URL: "https://example.com/e?q=\"x"},
+	}}
+	for _, home := range []bool{false, true} {
+		html := renderShell(t, map[string]any{"HomePage": home, "ExplorerContent": content})
+		footer := strings.Split(html, "<footer")[1]
+		for _, want := range []string{`<nav class="hub-footer-explorers-inner" aria-label="More explorers">`, `<span class="hub-footer-explorers-title">More explorers</span>`, `<a href="https://blockbook.btc.zelcore.io/" target="_blank" rel="noopener noreferrer">Bitcoin</a>`, `href="https://example.com/e?q=%22x"`, `>Coin &lt;b&gt;</a>`} {
+			if !strings.Contains(footer, want) {
+				t.Errorf("home=%v: footer missing %q", home, want)
+			}
+		}
+		if strings.Contains(html, "blockbook.grs.zelcore.io") || strings.Contains(html, "Sponsored") {
+			t.Errorf("home=%v: footer lists this explorer's coin or labels explorers Sponsored", home)
+		}
+		if html = renderShell(t, map[string]any{"HomePage": home}); strings.Contains(html, "More explorers") {
+			t.Errorf("home=%v: empty list renders the footer row", home)
+		}
+	}
+}

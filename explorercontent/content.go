@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const maxBytes = 64 * 1024
@@ -36,6 +37,13 @@ const mainProducts = 4
 const minCTAContrast = 4.5
 
 var themeColorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+// maxExplorers is the number of "More explorers" links kept from the feed; maxExplorerName is
+// the longest explorer name in runes.
+const maxExplorers = 24
+const maxExplorerName = 40
+
+var coinSlugRe = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 
 // Campaign is a scheduled product promotion, never executable HTML.
 type Campaign struct {
@@ -106,6 +114,47 @@ func contrastWithWhite(hex string) float64 {
 	return 1.05 / (l + 0.05)
 }
 
+// Explorer is another Zelcore explorer listed under "More explorers". It is a plain link, never
+// an advertisement.
+type Explorer struct {
+	Coin    string `json:"coin"`
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	IconURL string `json:"iconUrl"`
+}
+
+func (e Explorer) valid() bool {
+	return coinSlugRe.MatchString(e.Coin) && strings.TrimSpace(e.Name) != "" && utf8.ValidString(e.Name) && utf8.RuneCountInString(e.Name) <= maxExplorerName &&
+		safeURL(e.URL) && (e.IconURL == "" || safeURL(e.IconURL))
+}
+
+// ExplorerList is the feed's optional "explorers" field. It never fails the feed: a missing,
+// null or malformed field decodes to an empty list, an invalid or duplicate entry is dropped,
+// and at most maxExplorers entries are kept.
+type ExplorerList []Explorer
+
+// UnmarshalJSON decodes the list leniently, entry by entry.
+func (l *ExplorerList) UnmarshalJSON(raw []byte) error {
+	*l = nil
+	var items []json.RawMessage
+	if json.Unmarshal(raw, &items) != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, item := range items {
+		var e Explorer
+		if json.Unmarshal(item, &e) != nil || !e.valid() || seen[e.Coin] {
+			continue
+		}
+		seen[e.Coin] = true
+		*l = append(*l, e)
+		if len(*l) == maxExplorers {
+			break
+		}
+	}
+	return nil
+}
+
 // Theme is the per-coin accent color and optional mark chosen in the dashboard.
 type Theme struct {
 	Color   string `json:"color"`
@@ -120,6 +169,8 @@ type Snapshot struct {
 	Articles    []Article  `json:"articles"`
 	Products    []Product  `json:"products"`
 	Theme       *Theme     `json:"theme"`
+	// Explorers is optional; older dashboards omit it.
+	Explorers ExplorerList `json:"explorers,omitempty"`
 }
 
 // campaignFor returns the first campaign with the preferred placement, else the first with the other one.
@@ -206,11 +257,33 @@ func (s Snapshot) ZelcoreProduct() *Product {
 	return nil
 }
 
+// MoreExplorers are the valid explorers to link under "More explorers", at most 24, without the
+// explorer for this page's coin. The dashboard already leaves that coin out; this also drops an
+// entry whose coin matches the coin label as a slug ("Bitcoin Cash" -> "bitcoin-cash") or the
+// shortcut, or whose name equals the label, so a misconfigured feed never links to itself.
+func (s Snapshot) MoreExplorers(coinLabel, coinShortcut string) []Explorer {
+	label := strings.TrimSpace(coinLabel)
+	slug := strings.ToLower(strings.Join(strings.Fields(label), "-"))
+	shortcut := strings.ToLower(strings.TrimSpace(coinShortcut))
+	var out []Explorer
+	for _, e := range s.Explorers {
+		if !e.valid() || (slug != "" && e.Coin == slug) || (shortcut != "" && e.Coin == shortcut) || (label != "" && strings.EqualFold(strings.TrimSpace(e.Name), label)) {
+			continue
+		}
+		out = append(out, e)
+		if len(out) == maxExplorers {
+			break
+		}
+	}
+	return out
+}
+
 // Client owns a bounded in-memory snapshot and an optional restart cache.
 type Client struct {
 	mu        sync.RWMutex
 	current   Snapshot
 	endpoint  string
+	coin      string // the endpoint's ?coin= value: this explorer's own coin
 	cachePath string
 	http      *http.Client
 }
@@ -221,7 +294,7 @@ func New(endpoint, cachePath string) (*Client, error) {
 	if !safeURL(endpoint) {
 		return nil, fmt.Errorf("explorer content endpoint must be HTTPS without credentials")
 	}
-	c := &Client{endpoint: endpoint, cachePath: cachePath, http: &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return fmt.Errorf("content redirects are disabled") }}}
+	c := &Client{endpoint: endpoint, coin: endpointCoin(endpoint), cachePath: cachePath, http: &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return fmt.Errorf("content redirects are disabled") }}}
 	if cachePath != "" {
 		if f, err := os.Open(cachePath); err == nil {
 			defer f.Close()
@@ -239,6 +312,14 @@ func New(endpoint, cachePath string) (*Client, error) {
 		}
 	}
 	return c, nil
+}
+
+// endpointCoin is the coin slug in the operator-configured endpoint's query, or "".
+func endpointCoin(endpoint string) string {
+	if u, err := url.Parse(endpoint); err == nil {
+		return strings.ToLower(u.Query().Get("coin"))
+	}
+	return ""
 }
 
 func safeURL(raw string) bool {
@@ -389,6 +470,11 @@ func (c *Client) Snapshot(now time.Time) Snapshot {
 	if s.Theme != nil {
 		theme := *s.Theme
 		out.Theme = &theme
+	}
+	for _, e := range s.Explorers {
+		if c.coin == "" || e.Coin != c.coin {
+			out.Explorers = append(out.Explorers, e)
+		}
 	}
 	for _, item := range s.Campaigns {
 		if item.StartsAt != "" {

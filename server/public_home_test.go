@@ -69,7 +69,7 @@ func Test_PublicServer_HomeAndStatus(t *testing.T) {
 		newestBlockHash,
 		`<a class="hub-mono" href="/block/225493">225<span class="ns">493</span></a>`,
 		`<h2 id="hub-network-title">Network</h2><dl class="hub-stat-grid"><div><dt>Node</dt><dd class="hub-mono">/Fakecoin:0.0.1/</dd></div><div><dt>Status</dt><dd><span class="hub-badge hub-badge-ok">Synced</span></dd></div></dl></section></div></div></main><footer class="hub-footer">`,
-	}, []string{"Application status", "<dt>Price</dt>", "Flux ecosystem products", "Sponsored", "News from Zelcore and SSP", "<dt>Difficulty</dt>"})
+	}, []string{"Application status", "<dt>Price</dt>", "Flux ecosystem products", "Sponsored", "News from Zelcore and SSP", "<dt>Difficulty</dt>", "More explorers", "hub-explorer"})
 	if n := strings.Count(home, `action="/search"`); n != 1 {
 		t.Errorf("home: %d search forms, want 1", n)
 	}

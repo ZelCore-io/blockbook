@@ -14,7 +14,8 @@
  *
  * Public classes: .hub-page, .hub-band, .hub-band-home, .hub-nav, .hub-search, .hub-figures,
  * .hub-products, .hub-product, .hub-powered, .hub-layout, .hub-card, .hub-aside, .hub-campaign,
- * .hub-zelcore-prompt, .hub-tabs, .hub-stat-grid, .hub-articles, .hub-footer, .hub-mono,
+ * .hub-zelcore-prompt, .hub-tabs, .hub-stat-grid, .hub-explorers, .hub-explorer, .hub-articles,
+ * .hub-footer, .hub-footer-explorers, .hub-mono,
  * .hub-scroll, .hub-ellipsis, .hub-summary, .hub-badge, .hub-copy, .hub-section-head, .hub-raw,
  * .hub-io-label. Parts used inside them are named .hub-<block>-<part> (for example .hub-brand,
  * .hub-mark, .hub-label) and are listed with their block below.
@@ -162,8 +163,8 @@
 /* Headings use Montserrat. main.css sets the body font on every element (*), so descendants are
    listed too. :where() keeps this at zero specificity: it beats * only by coming later, and
    .hub-mono inside a heading still wins. */
-:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary),
-:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary) * {
+:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-explorer-icon, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary),
+:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-explorer-icon, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary) * {
     font-family: var(--hub-font-heading);
 }
 
@@ -1190,6 +1191,95 @@
     color: var(--hub-text-2);
 }
 
+/* ---------- More explorers ---------- */
+
+/* Links to the other Zelcore explorers, from the feed's "explorers" list. Pill buttons at least
+   44 px tall that wrap onto new rows; black text on white (21:1), white initials on Blue Wave
+   (5.63:1). Not promotions, so no "Sponsored" label. */
+.hub-explorers {
+    max-width: var(--hub-max);
+    margin: 0 auto;
+    padding: 4px var(--hub-gutter) 32px;
+}
+
+.hub-explorers h2 {
+    margin: 0 0 16px;
+    font-size: 20px;
+    font-weight: 800;
+}
+
+.hub-explorers-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.hub-explorers-list li {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.hub-explorer {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 44px;
+    padding: 5px 18px 5px 5px;
+    border: 1px solid var(--hub-line-strong);
+    border-radius: 999px;
+    background: var(--hub-surface);
+    color: var(--hub-ink);
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.hub-page a.hub-explorer,
+.hub-page a.hub-explorer:hover {
+    color: var(--hub-ink);
+    text-decoration: none;
+}
+
+.hub-page a.hub-explorer:hover {
+    border-color: var(--hub-blue);
+}
+
+.hub-page a.hub-explorer:hover .hub-explorer-name {
+    text-decoration: underline;
+}
+
+.hub-explorer-icon {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--hub-blue);
+    color: #FFFFFF;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 800;
+    overflow: hidden;
+}
+
+.hub-explorer-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: var(--hub-surface);
+}
+
+.hub-explorer-name {
+    min-width: 0;
+}
+
 /* ---------- Articles ---------- */
 
 .hub-articles {
@@ -1295,6 +1385,27 @@
 .hub-footer .hub-footer-brand {
     color: #FFFFFF;
     font-weight: 700;
+}
+
+/* The compact "More explorers" row above the footer links: #86A1DA label (5.33:1), white links. */
+.hub-footer-explorers {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.hub-footer-explorers-inner {
+    max-width: var(--hub-max);
+    margin: 0 auto;
+    padding: 12px var(--hub-gutter);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 20px;
+    font-size: 14px;
+}
+
+.hub-footer-explorers-title {
+    font-weight: 700;
+    color: var(--hub-footer-text);
 }
 
 .hub-footer-legal {

@@ -28,7 +28,7 @@ Use the same lowercase coin identifier in dashboard campaign targets and the URL
 
 If the cache flag is omitted, the file defaults to `explorer-content.json` in the parent of `-datadir`. Its parent directory must already exist and be writable by the service account. It is separate from RocksDB. Cache files are written through a 0600 temporary file and atomic rename. The saved endpoint must match the configured endpoint before a restart cache is used. Cache persistence errors are logged; valid newly fetched content remains available in memory.
 
-The initial refresh is asynchronous, followed by refreshes every five minutes. No dashboard request occurs while serving an explorer page. Requests time out after five seconds, redirects are rejected, and responses are capped at 64 KiB. There are at most eight campaigns, six articles and six products. Invalid responses preserve the last good snapshot. A cache more than 24 hours old is hidden; expired promotions disappear based on the local clock even during an outage. Disable/delete changes propagate on the next successful refresh; during outages previously cached content can remain until its scheduled end or the 24-hour limit. This is not an instant global kill switch.
+The initial refresh is asynchronous, followed by refreshes every five minutes. No dashboard request occurs while serving an explorer page. Requests time out after five seconds, redirects are rejected, and responses are capped at 64 KiB. There are at most eight campaigns, six articles and six products; up to 24 explorer links are kept and the rest are dropped without failing the feed. Invalid responses preserve the last good snapshot. A cache more than 24 hours old is hidden; expired promotions disappear based on the local clock even during an outage. Disable/delete changes propagate on the next successful refresh; during outages previously cached content can remain until its scheduled end or the 24-hour limit. This is not an instant global kill switch.
 
 A malformed endpoint disables content with a warning rather than stopping blockchain indexing. Removing the URL flag disables the feature immediately on restart without deleting the cache. No Ansible or deployment changes are included.
 
@@ -54,13 +54,16 @@ A malformed endpoint disables content with a warning rather than stopping blockc
     "targetUrl": "https://zelcore.io", "iconUrl": "https://example.com/zelcore.svg", "ctaLabel": "Get the app",
     "color": "#1B63EF"
   }],
-  "theme": { "color": "#2B61D1", "iconUrl": "https://example.com/grs.svg" }
+  "theme": { "color": "#2B61D1", "iconUrl": "https://example.com/grs.svg" },
+  "explorers": [
+    {"coin": "bitcoin", "name": "Bitcoin", "url": "https://blockbook.btc.zelcore.io/", "iconUrl": null}
+  ]
 }
 ```
 
 Dates must be RFC3339. `startsAt`/`endsAt` may be null or empty. Article thumbnails may be absent or empty. Supported article sources are `zelcore` and `ssp`. Links/assets must be absolute HTTPS URLs without embedded credentials. The operator configures a trusted endpoint; this is not an arbitrary public URL fetch API. The dashboard establishes article ordering, including pins. Article text is escaped by Go's `html/template`.
 
-`products` and `theme` are optional. A feed from an older dashboard that has neither still validates; the explorer then renders the default band color, the coin's text mark and no product markup or empty headings.
+`products`, `theme` and `explorers` are optional. A feed from an older dashboard that has none of them still validates; the explorer then renders the default band color, the coin's text mark and no product markup, explorer links or empty headings.
 
 ## Products
 
@@ -71,6 +74,16 @@ Products appear on the home page under the heading "Flux ecosystem products", ne
 `color` is optional and may be absent or null. When present it must match `^#[0-9a-fA-F]{6}$`; an invalid color is dropped when the feed or the restart cache is loaded, and the product stays. The tile shows a 4 px top bar in the product color, or Flux Blue Wave `#2B61D1` when there is none, passed to the stylesheet as the `--tile-accent` custom property in a `style` attribute. Only a validated hex reaches that attribute. The call to action is a filled button with white text when white on the color reaches a WCAG contrast of at least 4.5:1 (Zelcore `#1B63EF` 5.15:1, Flux `#2B61D1` 5.63:1); otherwise it is outlined in the color with black text (SSP `#F59E0B` 2.15:1, CumulusVPN `#0FB9AE` 2.45:1, FluxOS `#36C9A5` 2.09:1). There is no contrast rule on the dashboard for product colors, because the explorer picks the readable treatment.
 
 The product whose `id` is `flux` supplies the Flux symbol: its `iconUrl` is shown next to "Powered by Flux" in the band and the footer. In the band the symbol sits on a white circular chip, like the coin mark, so a blue-disc symbol stays visible on Blue Wave; the logo itself is not recoloured. Without that product or icon the link is text only. Logo files are not committed to this AGPL repository; they are hosted by the dashboard and arrive as HTTPS URLs. The product whose `id` is `zelcore` also feeds the "Watch in Zelcore" prompt in the aside of every inner page, and it is skipped in the footer's product links because the footer already has a fixed Zelcore link. Every other product with a name gets a footer link.
+
+## More explorers
+
+`explorers` lists the other Zelcore explorers. The dashboard stores at most 40 in the explorer settings (`coin` slug, `name`, `url`, optional `iconUrl`, `enabled`, `order`, unique `coin`) and serves the enabled ones without the coin given in `?coin=`, sorted by `order` then `name`, at most 24, with only `coin`, `name`, `url` and `iconUrl`. An older dashboard omits the field.
+
+The explorer never rejects a feed because of this field. A missing, null or malformed `explorers` value (an object, string or number) is an empty list. Each entry is checked on its own when the feed or the restart cache is loaded, and dropped unless `coin` matches `^[a-z0-9-]{1,64}$`, `name` is non-blank and at most 40 characters (runes), `url` is an absolute HTTPS URL without credentials and `iconUrl` is absent, null, empty or such a URL. A second entry with the same `coin` is dropped, and only the first 24 valid entries are kept. A `javascript:` or plain `http:` URL therefore never reaches a page. Other characters in a URL, such as a quote, are percent-encoded by `html/template` in the attribute.
+
+The explorer also leaves out its own coin, in two places. The client drops the entry whose `coin` equals the `coin` query value of the configured `-explorercontenturl`. The template helper `MoreExplorers` then drops an entry whose `coin` is the coin label as a slug (lowercase, spaces to hyphens: "Bitcoin Cash" becomes `bitcoin-cash`) or the lowercase coin shortcut, or whose `name` equals the coin label. The helper re-checks every entry, so a snapshot built without the feed's validation still renders only valid links.
+
+The home page shows a "More explorers" section after the Blocks/Transactions panel (and its campaign and Network aside) and before the news. Each explorer is a pill button at least 44 px tall with the icon, or the first letter of the name in white on Flux Blue Wave, and the name in black on white; the buttons wrap onto new rows on narrow screens. Every page's footer has a compact "More explorers" row of white links above the usual footer links. Both are omitted when the list is empty. Links open in a new tab with `rel="noopener noreferrer"`; icons load lazily with no referrer and an empty `alt`, because the name is next to them. Explorer links are not promotions and are never labelled "Sponsored".
 
 ## Theme
 

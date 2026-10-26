@@ -83,6 +83,16 @@
         {{- if .HomePage}}{{template "specific" .}}{{else}}{{template "hubPage" .}}{{end -}}
     </main>
     <footer class="hub-footer">
+        {{- with .ExplorerContent.MoreExplorers .CoinLabel .CoinShortcut}}
+        <div class="hub-footer-explorers">
+            <nav class="hub-footer-explorers-inner" aria-label="More explorers">
+                <span class="hub-footer-explorers-title">More explorers</span>
+                {{- range .}}
+                <a href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{.Name}}</a>
+                {{- end}}
+            </nav>
+        </div>
+        {{- end}}
         <div class="hub-footer-inner">
             <a class="hub-footer-brand" href="https://zelcore.io" target="_blank" rel="noopener noreferrer">Zelcore</a>
             {{- range .ExplorerContent.Products}}{{if and .Name (ne .ID "zelcore")}}
