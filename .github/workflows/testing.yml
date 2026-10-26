@@ -15,10 +15,10 @@ concurrency:
 jobs:
   unit-tests:
     name: Unit Tests
-    runs-on: [self-hosted, bb-dev-selfhosted]
-    timeout-minutes: 60
-    # Drafts and fork PRs must never schedule code on the shared runner.
-    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    # Secret-free unit tests run on disposable hosted runners, including fork PRs.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -26,7 +26,7 @@ jobs:
           persist-credentials: false
 
       - name: Run unit tests
-        run: make test ARGS="-count=1"
+        run: make test BASE_IMAGE=ubuntu:24.04 PORTABLE=1 ARGS="-count=1 -p=1 -timeout=45m"
 
   lint:
     name: Lint
