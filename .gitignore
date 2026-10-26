@@ -16,3 +16,7 @@ build/*.deb
 .deb-image
 \.idea/
 __debug*
+
+# Local Superpowers planning and agent scratch files
+superpowers/
+.superpowers/
