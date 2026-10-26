@@ -66,7 +66,7 @@ func TestShellLicenseFooter(t *testing.T) {
 	for _, home := range []bool{false, true} {
 		for _, explorer := range []bool{false, true} {
 			html := renderShell(t, map[string]any{"HomePage": home, "InternalExplorer": explorer})
-			for _, want := range []string{"Based on Blockbook by SatoshiLabs · AGPL-3.0 · ", `href="` + testSourceURL + `"`, ">Source code</a>", `href="/terms"`, ">Terms of use</a>", `href="/status"`, ">Documentation</a>"} {
+			for _, want := range []string{"Based on Blockbook by SatoshiLabs · AGPL-3.0 · ", `href="` + testSourceURL + `"`, ">Source code</a>", `href="/terms"`, ">Terms of use</a>", `href="/status"`, ">Documentation</a>", `<a class="hub-footer-brand" href="https://zelcore.io" target="_blank" rel="noopener noreferrer">Zelcore</a>`, `href="https://runonflux.com" target="_blank" rel="noopener noreferrer">Powered by Flux</a>`} {
 				if !strings.Contains(html, want) {
 					t.Errorf("home=%v explorer=%v: missing %q", home, explorer, want)
 				}
@@ -75,6 +75,13 @@ func TestShellLicenseFooter(t *testing.T) {
 				t.Errorf("home=%v explorer=%v: old SatoshiLabs nav item remains", home, explorer)
 			}
 		}
+	}
+}
+
+func TestShellSourceLinkTitle(t *testing.T) {
+	html := renderShell(t, map[string]any{"SourceLabel": "Source (development build)"})
+	if !strings.Contains(html, `<a href="`+testSourceURL+`" title="Source (development build)" target="_blank" rel="noopener noreferrer">Source code</a>`) {
+		t.Error("source link must read Source code and carry the build label as its title")
 	}
 }
 

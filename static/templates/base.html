@@ -82,13 +82,15 @@
     </main>
     <footer class="hub-footer">
         <div class="hub-footer-inner">
-            {{- range .ExplorerContent.Products}}{{if .Name}}
-            <a{{if eq .ID "zelcore"}} class="hub-footer-brand"{{end}} href="{{.TargetURL}}" target="_blank" rel="noopener noreferrer">{{.Name}}</a>
+            <a class="hub-footer-brand" href="https://zelcore.io" target="_blank" rel="noopener noreferrer">Zelcore</a>
+            {{- range .ExplorerContent.Products}}{{if and .Name (ne .ID "zelcore")}}
+            <a href="{{.TargetURL}}" target="_blank" rel="noopener noreferrer">{{.Name}}</a>
             {{- end}}{{end}}
+            <a href="https://runonflux.com" target="_blank" rel="noopener noreferrer">Powered by Flux</a>
             <a href="https://docs.zelcore.io" target="_blank" rel="noopener noreferrer">Documentation</a>
             <a href="{{.TOSLink}}" target="_blank" rel="noopener noreferrer">Terms of use</a>
             <a href="/status">Status</a>
-            <span class="hub-footer-legal">Based on Blockbook by SatoshiLabs · AGPL-3.0 · <a href="{{.SourceURL}}" target="_blank" rel="noopener noreferrer">Source code</a></span>
+            <span class="hub-footer-legal">Based on Blockbook by SatoshiLabs · AGPL-3.0 · <a href="{{.SourceURL}}" title="{{.SourceLabel}}" target="_blank" rel="noopener noreferrer">Source code</a></span>
         </div>
     </footer>
 </body>

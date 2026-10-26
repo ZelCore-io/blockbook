@@ -59,7 +59,7 @@ func TestExplorerContentRendering(t *testing.T) {
 	s := sample(time.Now())
 	s.Campaigns[0].Title = `<script>alert(1)</script>`
 	s.Articles[0].Title = `<script>alert(2)</script>`
-	s.Products = []Product{{ID: "zelcore", Name: `<script>alert(3)</script>`, Tagline: "Wallet", TargetURL: "https://zelcore.io"}}
+	s.Products = []Product{{ID: "zelcore", Name: "Zelcore", Tagline: "Wallet", TargetURL: "https://zelcore.io"}, {ID: "ssp", Name: `<script>alert(3)</script>`, TargetURL: "https://sspwallet.io"}}
 	rendered := renderShell(t, s, nil)
 	for _, want := range []string{"Blockchain data", "Sponsored", "&lt;script&gt;alert(1)", "&lt;script&gt;alert(3)", `rel="sponsored noopener noreferrer"`, `referrerpolicy="no-referrer"`, `loading="lazy"`} {
 		if !strings.Contains(rendered, want) {
@@ -101,8 +101,14 @@ func TestHubAsideFallbackAndPrompt(t *testing.T) {
 	if strings.Contains(html, "Sponsored") {
 		t.Error("products must never be labelled Sponsored")
 	}
-	if !within(html, "hub-footer", "</footer>", ">SSP Wallet</a>") || !within(html, "hub-footer", "</footer>", ">Zelcore</a>") {
+	if !within(html, "hub-footer", "</footer>", ">SSP Wallet</a>") || !within(html, "hub-footer", "</footer>", `href="https://zelcore.io" target="_blank" rel="noopener noreferrer">Zelcore</a>`) {
 		t.Error("footer product links missing")
+	}
+	if strings.Contains(html, `href="https://zelcore.io/download" target="_blank" rel="noopener noreferrer">Zelcore</a>`) || strings.Count(html, ">Zelcore</a>") != 1 {
+		t.Error("footer must show the fixed Zelcore link once and skip the zelcore product")
+	}
+	if strings.Index(html, ">Zelcore</a>") > strings.Index(html, ">SSP Wallet</a>") {
+		t.Error("fixed Zelcore link must come first in the footer")
 	}
 
 	home := renderShell(t, withSidebar, map[string]interface{}{"HomePage": true})
@@ -118,6 +124,10 @@ func TestHubAsideFallbackAndPrompt(t *testing.T) {
 	if html = renderShell(t, Snapshot{}, nil); strings.Contains(html, "<aside") {
 		t.Error("aside renders without promotions")
 	}
+	// An older dashboard feed has no products: the footer still shows Zelcore and Flux.
+	if !within(html, "hub-footer", "</footer>", ">Zelcore</a>") || !within(html, "hub-footer", "</footer>", ">Powered by Flux</a>") {
+		t.Error("footer lacks the fixed Zelcore and Flux links")
+	}
 }
 
 func TestLongValuesRender(t *testing.T) {
@@ -126,7 +136,7 @@ func TestLongValuesRender(t *testing.T) {
 	slug := strings.Repeat("c", 64)
 	s := Snapshot{
 		Campaigns: []Campaign{{ID: "side", Placement: "sidebar", Title: strings.Repeat("C", 80), ImageURL: "https://example.com/s.png", TargetURL: "https://example.com"}},
-		Products:  []Product{{ID: "zelcore", Name: name, Tagline: tagline, TargetURL: "https://zelcore.io"}},
+		Products:  []Product{{ID: "zelcore", Name: "Zelcore", Tagline: tagline, TargetURL: "https://zelcore.io"}, {ID: "long", Name: name, TargetURL: "https://example.com/long"}},
 	}
 	html := renderShell(t, s, map[string]interface{}{"CoinLabel": slug})
 	checks := []struct{ cls, closeTag, value string }{
@@ -145,14 +155,14 @@ func TestLongValuesRender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, sel := range []string{".hub-zelcore-prompt", ".hub-campaign", ".hub-brand", ".hub-footer-inner"} {
+	for _, sel := range []string{".hub-zelcore-prompt", ".hub-campaign", ".hub-brand", ".hub-footer a"} {
 		rule := regexp.MustCompile(`(?s)\n` + regexp.QuoteMeta(sel) + ` \{([^}]*)\}`).FindStringSubmatch(string(css))
 		if rule == nil {
 			t.Errorf("%s rule missing", sel)
 			continue
 		}
-		if !strings.Contains(rule[1], "overflow-wrap: anywhere") && !strings.Contains(rule[1], "flex-wrap: wrap") {
-			t.Errorf("%s neither wraps long words nor wraps its items", sel)
+		if !strings.Contains(rule[1], "overflow-wrap: anywhere") {
+			t.Errorf("%s does not wrap long words", sel)
 		}
 	}
 }

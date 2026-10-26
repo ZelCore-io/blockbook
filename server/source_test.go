@@ -55,7 +55,7 @@ func TestExplorerSourceRendering(t *testing.T) {
 						t.Fatal(err)
 					}
 					html := out.String()
-					expected := `href="` + data.SourceURL + `" target="_blank" rel="noopener noreferrer">Source code</a>`
+					expected := `href="` + data.SourceURL + `" title="` + data.SourceLabel + `" target="_blank" rel="noopener noreferrer">Source code</a>`
 					if !strings.Contains(html, expected) {
 						t.Fatalf("page %d lacks source link %s", page, expected)
 					}

@@ -836,6 +836,7 @@
     align-items: center;
     min-height: 44px;
     color: #D0D5DD;
+    overflow-wrap: anywhere;
 }
 
 .hub-footer a:hover {
