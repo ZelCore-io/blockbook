@@ -217,14 +217,71 @@ window.addEventListener("DOMContentLoaded", () => {
   );
 
   // hub copy buttons: <button type="button" class="hub-copy" data-copy="...">
-  document.querySelectorAll("button[data-copy]").forEach((b) =>
-    b.addEventListener("click", () => {
-      navigator.clipboard.writeText(b.getAttribute("data-copy")).then(() => {
-        b.classList.add("hub-copied");
-        setTimeout(() => b.classList.remove("hub-copied"), 1000);
-      });
-    })
-  );
+  // The result is announced in a polite live region. Without the async clipboard API (non-secure
+  // origin, old browser) or when it refuses, a hidden textarea and execCommand are tried; if that
+  // also fails, the summary's ID text is selected so it can be copied by hand.
+  const copyButtons = document.querySelectorAll("button[data-copy]");
+  if (copyButtons.length) {
+    const live = document.createElement("div");
+    live.className = "visually-hidden";
+    live.setAttribute("aria-live", "polite");
+    document.body.appendChild(live);
+    const announce = (msg) => {
+      live.textContent = "";
+      setTimeout(() => (live.textContent = msg), 50);
+    };
+    const legacyCopy = (text) => {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "0";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch (e) {}
+      ta.remove();
+      return ok;
+    };
+    copyButtons.forEach((b) =>
+      b.addEventListener("click", () => {
+        const text = b.getAttribute("data-copy");
+        const done = (ok) => {
+          if (!ok) {
+            const id = b.closest(".hub-summary")?.querySelector(".hub-summary-id");
+            if (id) {
+              const range = document.createRange();
+              range.selectNodeContents(id);
+              const sel = window.getSelection();
+              sel.removeAllRanges();
+              sel.addRange(range);
+            }
+            announce("Copy failed. The text is selected, copy it manually.");
+            return;
+          }
+          announce("Copied to clipboard");
+          b.classList.add("hub-copied");
+          if (b.classList.contains("hub-copy-text")) {
+            b.dataset.label = b.dataset.label || b.textContent;
+            b.textContent = "Copied";
+          }
+          clearTimeout(b.hubCopyTimer);
+          b.hubCopyTimer = setTimeout(() => {
+            b.classList.remove("hub-copied");
+            if (b.dataset.label) b.textContent = b.dataset.label;
+          }, 1000);
+        };
+        const p = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(text) : Promise.reject();
+        p.then(
+          () => done(true),
+          () => done(legacyCopy(text))
+        );
+      })
+    );
+  }
 
   // keep the transaction in view when its input/output list is collapsed,
   // instead of leaving the viewport wherever the shrinking content left it

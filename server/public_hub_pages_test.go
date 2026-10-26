@@ -26,7 +26,7 @@ func Test_PublicServer_HubInnerPages(t *testing.T) {
 	tx := getHTML(t, ts.URL+"/tx/"+txid)
 	checkHTML(t, "tx", tx, []string{
 		`<h1>Transaction</h1>`,
-		`<span class="hub-badge hub-badge-ok">Confirmed · 1 confirmations</span>`,
+		`<span class="hub-badge hub-badge-ok">Confirmed · 1 confirmation</span>`,
 		`<span class="hub-mono hub-summary-id">` + txid + `</span><button type="button" class="hub-copy" data-copy="` + txid + `" aria-label="Copy transaction ID">`,
 		`<dt>Amount</dt>`, `<dt>Fee</dt>`, `<dt>Block</dt>`, `<dt>Size</dt>`,
 		`<h2>Inputs and outputs</h2>`,
@@ -103,5 +103,49 @@ func Test_PublicServer_HubInnerPages(t *testing.T) {
 				t.Errorf("%s/%s: aside rendered = %v, want %v\n%s", p.name, c.name, got, c.aside, html)
 			}
 		}
+	}
+
+	// Confirmation states of the tx summary: plural count, and an unconfirmed RBF tx with an ETA.
+	txStates := []struct {
+		name    string
+		mutate  func(*TemplateData)
+		want    []string
+		notWant []string
+	}{
+		{
+			name:    "2 confirmations",
+			mutate:  func(d *TemplateData) { d.Tx.Confirmations = 2 },
+			want:    []string{`<span class="hub-badge hub-badge-ok">Confirmed · 2 confirmations</span>`},
+			notWant: []string{">Unconfirmed<", ">RBF<"},
+		},
+		{
+			name: "unconfirmed",
+			mutate: func(d *TemplateData) {
+				d.Tx.Confirmations = 0
+				d.Tx.ConfirmationETABlocks = 2
+				d.Tx.ConfirmationETASeconds = 1200
+				d.Tx.Rbf = true
+			},
+			want: []string{
+				`<span class="hub-badge hub-badge-warn">Unconfirmed</span>`,
+				`<dd>Unconfirmed</dd>`,
+				`in approx. `, `(2 blocks)`,
+				`<span tt="Replace by fee">RBF</span>`,
+				`<span tt="Replace-by-Fee transaction, could be overridden by a new transaction">ON</span>`,
+			},
+			notWant: []string{"Confirmed ·", `href="/block/`},
+		},
+	}
+	for _, c := range txStates {
+		page, data, err := s.explorerTx(httptest.NewRecorder(), httptest.NewRequest("GET", "/tx/"+txid, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.mutate(data)
+		var out bytes.Buffer
+		if err := s.templates[page].ExecuteTemplate(&out, "base.html", data); err != nil {
+			t.Fatal(err)
+		}
+		checkHTML(t, "tx "+c.name, out.String(), c.want, c.notWant)
 	}
 }

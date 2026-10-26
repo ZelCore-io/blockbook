@@ -3,7 +3,7 @@
     <div class="hub-summary-main">
         <div class="hub-title-row">
             <h1>Transaction</h1>
-            {{if $tx.Confirmations}}<span class="hub-badge hub-badge-ok">Confirmed · {{formatUint32 $tx.Confirmations}} confirmations</span>{{else}}<span class="hub-badge hub-badge-warn">Unconfirmed</span>{{end}}
+            {{if $tx.Confirmations}}<span class="hub-badge hub-badge-ok">Confirmed · {{formatUint32 $tx.Confirmations}} confirmation{{if ne $tx.Confirmations 1}}s{{end}}</span>{{else}}<span class="hub-badge hub-badge-warn">Unconfirmed</span>{{end}}
             {{if $coinbase}}<span class="hub-badge">Coinbase</span>{{end}}
         </div>
         <div class="hub-id-row">
