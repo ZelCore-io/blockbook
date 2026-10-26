@@ -177,7 +177,7 @@ func TestShellFooterMoreExplorers(t *testing.T) {
 	for _, home := range []bool{false, true} {
 		html := renderShell(t, map[string]any{"HomePage": home, "ExplorerContent": content})
 		footer := strings.Split(html, "<footer")[1]
-		for _, want := range []string{`<nav class="hub-footer-explorers-inner" aria-label="More explorers">`, `<span class="hub-footer-explorers-title">More explorers</span>`, `<a href="https://blockbook.btc.zelcore.io/" target="_blank" rel="noopener noreferrer">Bitcoin</a>`, `href="https://example.com/e?q=%22x"`, `>Coin &lt;b&gt;</a>`} {
+		for _, want := range []string{`<nav class="hub-footer-explorers-inner" aria-labelledby="hub-footer-explorers-title">`, `<span class="hub-footer-explorers-title" id="hub-footer-explorers-title">More explorers</span>`, `<a href="https://blockbook.btc.zelcore.io/" target="_blank" rel="noopener noreferrer">Bitcoin</a>`, `href="https://example.com/e?q=%22x"`, `>Coin &lt;b&gt;</a>`} {
 			if !strings.Contains(footer, want) {
 				t.Errorf("home=%v: footer missing %q", home, want)
 			}

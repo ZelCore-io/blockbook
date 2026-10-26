@@ -85,8 +85,8 @@
     <footer class="hub-footer">
         {{- with .ExplorerContent.MoreExplorers}}
         <div class="hub-footer-explorers">
-            <nav class="hub-footer-explorers-inner" aria-label="More explorers">
-                <span class="hub-footer-explorers-title">More explorers</span>
+            <nav class="hub-footer-explorers-inner" aria-labelledby="hub-footer-explorers-title">
+                <span class="hub-footer-explorers-title" id="hub-footer-explorers-title">More explorers</span>
                 {{- range .}}
                 <a href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{.Name}}</a>
                 {{- end}}

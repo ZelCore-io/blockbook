@@ -4,8 +4,8 @@
  * Flux ecosystem branding. Every color is from an official palette:
  *   Flux Brand Book: Blue Wave #2B61D1, shades #4F7AD4 #86A1DA #2D2D2D #717171, black, white.
  *   Product accents arrive per tile from the dashboard feed (--tile-accent, validated #RRGGBB).
- * Hairlines and shadows are palette black or #2D2D2D at low alpha. There is no success or error
- * color: statuses use text, and amounts use their sign.
+ * Hairlines and shadows are palette black, #2D2D2D or white at low alpha. There is no success
+ * or error color: statuses use text, and amounts use their sign.
  *
  * Fonts are self-hosted from static/fonts/ (no third-party font hosts):
  *   Montserrat, headings (SIL OFL 1.1, see fonts/montserrat/OFL.txt) from @fontsource/montserrat 5.3.0

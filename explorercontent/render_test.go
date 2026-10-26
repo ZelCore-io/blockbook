@@ -476,11 +476,11 @@ func TestHomeMoreExplorers(t *testing.T) {
 		t.Error("explorers missing from the home section or the footer row")
 	}
 	section, news, blocks := strings.Index(html, `class="hub-explorers"`), strings.Index(html, "News from Zelcore and SSP"), strings.Index(html, `class="hub-tabs"`)
-	if section < blocks {
-		t.Error("More explorers must come after the Blocks/Transactions panel")
+	if section < 0 || blocks < 0 || section < blocks {
+		t.Errorf("More explorers (at %d) must come after the Blocks/Transactions panel (at %d)", section, blocks)
 	}
 	withNews := renderHome(t, Snapshot{Explorers: fixtureExplorers(), Articles: sample(time.Now()).Articles}, nil)
-	if section, news = strings.Index(withNews, `class="hub-explorers"`), strings.Index(withNews, "News from Zelcore and SSP"); news < 0 || section > news {
+	if section, news = strings.Index(withNews, `class="hub-explorers"`), strings.Index(withNews, "News from Zelcore and SSP"); section < 0 || news < 0 || section > news {
 		t.Error("More explorers must come before the news")
 	}
 
@@ -496,7 +496,7 @@ func TestHomeMoreExplorers(t *testing.T) {
 func TestFooterMoreExplorers(t *testing.T) {
 	for _, home := range []bool{false, true} {
 		html := renderShell(t, Snapshot{Explorers: fixtureExplorers()}, map[string]interface{}{"HomePage": home})
-		row := `<nav class="hub-footer-explorers-inner" aria-label="More explorers">`
+		row := `<nav class="hub-footer-explorers-inner" aria-labelledby="hub-footer-explorers-title">`
 		if !within(html, "hub-footer\"", "</footer>", row) || !within(html, "hub-footer-explorers\"", "</div>", `<a href="https://blockbook.btc.zelcore.io/" target="_blank" rel="noopener noreferrer">Bitcoin</a>`) {
 			t.Errorf("home=%v: footer explorer row missing", home)
 		}

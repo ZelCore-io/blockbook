@@ -557,3 +557,66 @@ func TestClientSnapshotExplorers(t *testing.T) {
 		t.Fatalf("restart cache lost explorers: %+v", e)
 	}
 }
+
+// Own-coin exclusion uses only the endpoint's ?coin= value, compared in lower case. Without it,
+// nothing is excluded: the dashboard's own filter is then the only one.
+func TestClientOwnCoinFromEndpoint(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	s := sample(now)
+	s.Explorers = ExplorerList{{Coin: "groestlcoin", Name: "Groestlcoin", URL: "https://example.com/grs"}, {Coin: "bitcoin", Name: "Bitcoin", URL: "https://example.com/btc"}}
+	payload, _ := json.Marshal(s)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(payload) }))
+	defer srv.Close()
+	for query, want := range map[string][]string{
+		"":                   {"groestlcoin", "bitcoin"},
+		"?coin=GROESTLCOIN":  {"bitcoin"},
+		"?coin=Groestlcoin":  {"bitcoin"},
+		"?other=groestlcoin": {"groestlcoin", "bitcoin"},
+	} {
+		c, err := New(srv.URL+"/api/public/explorer/v1/config"+query, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.http = srv.Client()
+		if err = c.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, e := range c.Snapshot(now).Explorers {
+			got = append(got, e.Coin)
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%q: got %v, want %v", query, got, want)
+		}
+	}
+}
+
+// Invisible and bidi format characters (category Cf) are stripped from names before the checks,
+// so a name made only of them is dropped and a 40-letter name padded with them still fits.
+func TestExplorerNameFormatCharacters(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	entry := func(coin, name string) string {
+		b, _ := json.Marshal(map[string]string{"coin": coin, "name": name, "url": "https://example.com/" + coin})
+		return string(b)
+	}
+	raw := `{"version":1,"generatedAt":"` + now.Format(time.RFC3339) + `","explorers":[` + strings.Join([]string{
+		entry("zwsp", "\u200b\u200b\u200b"),
+		entry("bidi", "\u202e\u2066 \u2069"),
+		entry("bom", "\ufeff"),
+		entry("rlo", "Bit\u202ecoin"),
+		entry("padded", strings.Repeat("P", 40)+"\u200b\u200d"),
+		entry("toolong", strings.Repeat("Q", 41)+"\u200b"),
+	}, ",") + `]}`
+	var s Snapshot
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Explorers) != 2 || s.Explorers[0].Name != "Bitcoin" || s.Explorers[1].Name != strings.Repeat("P", 40) {
+		t.Fatalf("got %+v", s.Explorers)
+	}
+	// A hand-built Snapshot goes through the same cleaning at render time.
+	hand := Snapshot{Explorers: ExplorerList{{Coin: "a", Name: "\u200b", URL: "https://example.com/a"}, {Coin: "b", Name: "B\u202e", URL: "https://example.com/b"}}}
+	if got := hand.MoreExplorers(); len(got) != 1 || got[0].Name != "B" || hand.Explorers[1].Name != "B\u202e" {
+		t.Fatalf("render-time cleaning: %+v", got)
+	}
+}

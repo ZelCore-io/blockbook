@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -123,6 +124,18 @@ type Explorer struct {
 	IconURL string `json:"iconUrl"`
 }
 
+// cleanName removes invisible and bidi format characters (Unicode category Cf, such as U+200B
+// or U+202E), so a name cannot look empty or reverse the text around it.
+func cleanName(name string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, name)
+}
+
+// valid expects a name already passed through cleanName.
 func (e Explorer) valid() bool {
 	return coinSlugRe.MatchString(e.Coin) && strings.TrimSpace(e.Name) != "" && utf8.ValidString(e.Name) && utf8.RuneCountInString(e.Name) <= maxExplorerName &&
 		safeURL(e.URL) && (e.IconURL == "" || safeURL(e.IconURL))
@@ -143,7 +156,11 @@ func (l *ExplorerList) UnmarshalJSON(raw []byte) error {
 	seen := map[string]bool{}
 	for _, item := range items {
 		var e Explorer
-		if json.Unmarshal(item, &e) != nil || !e.valid() || seen[e.Coin] {
+		if json.Unmarshal(item, &e) != nil {
+			continue
+		}
+		e.Name = cleanName(e.Name)
+		if !e.valid() || seen[e.Coin] {
 			continue
 		}
 		seen[e.Coin] = true
@@ -264,6 +281,7 @@ func (s Snapshot) ZelcoreProduct() *Product {
 func (s Snapshot) MoreExplorers() []Explorer {
 	var out []Explorer
 	for _, e := range s.Explorers {
+		e.Name = cleanName(e.Name)
 		if !e.valid() {
 			continue
 		}
