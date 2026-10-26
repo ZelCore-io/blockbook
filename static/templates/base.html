@@ -83,7 +83,7 @@
         {{- if .HomePage}}{{template "specific" .}}{{else}}{{template "hubPage" .}}{{end -}}
     </main>
     <footer class="hub-footer">
-        {{- with .ExplorerContent.MoreExplorers .CoinLabel .CoinShortcut}}
+        {{- with .ExplorerContent.MoreExplorers}}
         <div class="hub-footer-explorers">
             <nav class="hub-footer-explorers-inner" aria-label="More explorers">
                 <span class="hub-footer-explorers-title">More explorers</span>

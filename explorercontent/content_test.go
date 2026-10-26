@@ -472,7 +472,7 @@ func TestExplorersFromFeed(t *testing.T) {
 		"legacy": head + `}`, "null": head + `,"explorers":null}`, "object": head + `,"explorers":{"coin":"bitcoin"}}`,
 		"string": head + `,"explorers":"https://example.com"}`, "number": head + `,"explorers":7}`,
 	} {
-		if s := decode(t, raw); len(s.Explorers) != 0 || s.MoreExplorers("Groestlcoin", "GRS") != nil {
+		if s := decode(t, raw); len(s.Explorers) != 0 || s.MoreExplorers() != nil {
 			t.Errorf("%s: want no explorers, got %+v", name, s.Explorers)
 		}
 	}
@@ -504,26 +504,24 @@ func TestExplorersFromFeed(t *testing.T) {
 		many = append(many, fmt.Sprintf(`{"coin":"c%d","name":"Coin %d","url":"https://example.com/%d"}`, i, i, i))
 	}
 	s = decode(t, head+`,"explorers":[`+strings.Join(many, ",")+`]}`)
-	if len(s.Explorers) != maxExplorers || s.Explorers[23].Coin != "c23" || len(s.MoreExplorers("", "")) != maxExplorers {
+	if len(s.Explorers) != maxExplorers || s.Explorers[23].Coin != "c23" || len(s.MoreExplorers()) != maxExplorers {
 		t.Fatalf("want the first %d explorers, got %d", maxExplorers, len(s.Explorers))
 	}
 }
 
-func TestMoreExplorersSkipsOwnCoinAndInvalid(t *testing.T) {
+// MoreExplorers re-checks entries but does not guess the page's coin: only the client drops it,
+// from the endpoint's ?coin= value.
+func TestMoreExplorersSkipsInvalidOnly(t *testing.T) {
 	s := Snapshot{Explorers: ExplorerList{
-		{Coin: "groestlcoin", Name: "Groestl", URL: "https://example.com/grs"},
-		{Coin: "grs", Name: "GRS by shortcut", URL: "https://example.com/grs2"},
-		{Coin: "other", Name: "groestlcoin", URL: "https://example.com/grs3"},
+		{Coin: "groestlcoin", Name: "Groestlcoin", URL: "https://example.com/grs"},
 		{Coin: "bitcoin-cash", Name: "Bitcoin Cash", URL: "https://example.com/bch"},
 		{Coin: "bad", Name: "Bad", URL: "javascript:alert(1)"},
-		{Coin: "bitcoin", Name: "Bitcoin", URL: "https://example.com/btc"},
+		{Coin: "Upper", Name: "Upper", URL: "https://example.com/upper"},
+		{Coin: "bitcoin", Name: "Bitcoin", URL: "https://example.com/btc", IconURL: "http://example.com/i.png"},
 	}}
-	got := s.MoreExplorers("Groestlcoin", "GRS")
-	if len(got) != 2 || got[0].Coin != "bitcoin-cash" || got[1].Coin != "bitcoin" {
+	got := s.MoreExplorers()
+	if len(got) != 2 || got[0].Coin != "groestlcoin" || got[1].Coin != "bitcoin-cash" {
 		t.Fatalf("got %+v", got)
-	}
-	if got = s.MoreExplorers(" Bitcoin  Cash ", "BCH"); len(got) != 4 || got[2].Coin != "other" {
-		t.Fatalf("label slug filter: %+v", got)
 	}
 }
 

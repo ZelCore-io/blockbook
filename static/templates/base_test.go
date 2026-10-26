@@ -154,12 +154,12 @@ func TestShellSecondaryCurrencySwitch(t *testing.T) {
 }
 
 func TestShellNoGoogleFonts(t *testing.T) {
-	html := renderShell(t, map[string]any{"Minified": ".min.6"})
+	html := renderShell(t, map[string]any{"Minified": ".min.7"})
 	if strings.Contains(html, "fonts.googleapis") || strings.Contains(html, "fonts.gstatic") {
 		t.Error("shell loads Google Fonts")
 	}
-	main := strings.Index(html, `href="/static/css/main.min.6.css"`)
-	hub := strings.Index(html, `href="/static/css/hub.min.6.css"`)
+	main := strings.Index(html, `href="/static/css/main.min.7.css"`)
+	hub := strings.Index(html, `href="/static/css/hub.min.7.css"`)
 	if main < 0 || hub < 0 || hub < main {
 		t.Error("hub stylesheet must load after main.css")
 	}
@@ -172,7 +172,6 @@ func TestShellNoGoogleFonts(t *testing.T) {
 func TestShellFooterMoreExplorers(t *testing.T) {
 	content := explorercontent.Snapshot{Explorers: explorercontent.ExplorerList{
 		{Coin: "bitcoin", Name: "Bitcoin", URL: "https://blockbook.btc.zelcore.io/"},
-		{Coin: "groestlcoin", Name: "Groestlcoin", URL: "https://blockbook.grs.zelcore.io/"},
 		{Coin: "evil", Name: "Coin <b>", URL: "https://example.com/e?q=\"x"},
 	}}
 	for _, home := range []bool{false, true} {
@@ -183,8 +182,8 @@ func TestShellFooterMoreExplorers(t *testing.T) {
 				t.Errorf("home=%v: footer missing %q", home, want)
 			}
 		}
-		if strings.Contains(html, "blockbook.grs.zelcore.io") || strings.Contains(html, "Sponsored") {
-			t.Errorf("home=%v: footer lists this explorer's coin or labels explorers Sponsored", home)
+		if strings.Contains(html, "Sponsored") {
+			t.Errorf("home=%v: footer labels explorers Sponsored", home)
 		}
 		if html = renderShell(t, map[string]any{"HomePage": home}); strings.Contains(html, "More explorers") {
 			t.Errorf("home=%v: empty list renders the footer row", home)

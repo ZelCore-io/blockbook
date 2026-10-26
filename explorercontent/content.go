@@ -257,17 +257,14 @@ func (s Snapshot) ZelcoreProduct() *Product {
 	return nil
 }
 
-// MoreExplorers are the valid explorers to link under "More explorers", at most 24, without the
-// explorer for this page's coin. The dashboard already leaves that coin out; this also drops an
-// entry whose coin matches the coin label as a slug ("Bitcoin Cash" -> "bitcoin-cash") or the
-// shortcut, or whose name equals the label, so a misconfigured feed never links to itself.
-func (s Snapshot) MoreExplorers(coinLabel, coinShortcut string) []Explorer {
-	label := strings.TrimSpace(coinLabel)
-	slug := strings.ToLower(strings.Join(strings.Fields(label), "-"))
-	shortcut := strings.ToLower(strings.TrimSpace(coinShortcut))
+// MoreExplorers are the valid explorers to link under "More explorers", at most 24. Every entry
+// is checked again, so a Snapshot built without the feed's validation still renders only safe
+// links. This explorer's own coin is left out by the dashboard and by Client.Snapshot (the
+// endpoint's ?coin= value), not here.
+func (s Snapshot) MoreExplorers() []Explorer {
 	var out []Explorer
 	for _, e := range s.Explorers {
-		if !e.valid() || (slug != "" && e.Coin == slug) || (shortcut != "" && e.Coin == shortcut) || (label != "" && strings.EqualFold(strings.TrimSpace(e.Name), label)) {
+		if !e.valid() {
 			continue
 		}
 		out = append(out, e)

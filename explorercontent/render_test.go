@@ -450,7 +450,6 @@ func fixtureExplorers() ExplorerList {
 	return ExplorerList{
 		{Coin: "bitcoin", Name: "Bitcoin", URL: "https://blockbook.btc.zelcore.io/", IconURL: "https://cdn.example.com/btc.svg"},
 		{Coin: "litecoin", Name: "Litecoin", URL: "https://blockbook.ltc.zelcore.io/"},
-		{Coin: "groestlcoin", Name: "Groestlcoin", URL: "https://blockbook.grs.zelcore.io/"},
 		{Coin: "hostile", Name: `<script>alert(4)</script>`, URL: `https://example.com/x?a=1"onmouseover=alert(5)`, IconURL: `https://cdn.example.com/i.svg"onerror=alert(6)`},
 	}
 }
@@ -468,7 +467,7 @@ func TestHomeMoreExplorers(t *testing.T) {
 			t.Errorf("missing %s", want)
 		}
 	}
-	for _, leak := range []string{"<script>alert", `"onmouseover`, `"onerror`, "Sponsored", "blockbook.grs.zelcore.io"} {
+	for _, leak := range []string{"<script>alert", `"onmouseover`, `"onerror`, "Sponsored"} {
 		if strings.Contains(html, leak) {
 			t.Errorf("rendered %q", leak)
 		}
@@ -486,8 +485,8 @@ func TestHomeMoreExplorers(t *testing.T) {
 	}
 
 	empty := renderHome(t, Snapshot{}, nil)
-	ownOnly := renderHome(t, Snapshot{Explorers: ExplorerList{{Coin: "groestlcoin", Name: "Groestlcoin", URL: "https://example.com/grs"}}}, nil)
-	for name, html := range map[string]string{"empty": empty, "own coin only": ownOnly} {
+	invalidOnly := renderHome(t, Snapshot{Explorers: ExplorerList{{Coin: "x", Name: "X", URL: "javascript:alert(1)"}}}, nil)
+	for name, html := range map[string]string{"empty": empty, "invalid only": invalidOnly} {
 		if strings.Contains(html, "More explorers") || strings.Contains(html, "hub-explorer") {
 			t.Errorf("%s: renders the More explorers section or footer row", name)
 		}
@@ -504,8 +503,8 @@ func TestFooterMoreExplorers(t *testing.T) {
 		if strings.Index(html, row) > strings.Index(html, `class="hub-footer-inner"`) {
 			t.Errorf("home=%v: explorer row must sit above the footer links", home)
 		}
-		if strings.Contains(html, "blockbook.grs.zelcore.io") || strings.Contains(html, "<script>alert") || strings.Contains(html, `"onmouseover`) {
-			t.Errorf("home=%v: own coin or unescaped value in the footer", home)
+		if strings.Contains(html, "<script>alert") || strings.Contains(html, `"onmouseover`) {
+			t.Errorf("home=%v: unescaped value in the footer", home)
 		}
 		if html = renderShell(t, Snapshot{}, map[string]interface{}{"HomePage": home}); strings.Contains(html, "More explorers") || strings.Contains(html, "hub-footer-explorers") {
 			t.Errorf("home=%v: empty list renders the footer row", home)
@@ -534,8 +533,8 @@ func TestLongExplorerNameWraps(t *testing.T) {
 			t.Errorf("%s must wrap long words and be at least 44px tall", sel)
 		}
 	}
-	min, err := os.ReadFile("../static/css/hub.min.6.css")
+	min, err := os.ReadFile("../static/css/hub.min.7.css")
 	if err != nil || !strings.Contains(string(min), ".hub-explorer{") || !strings.Contains(string(min), ".hub-footer-explorers-inner{") {
-		t.Error("hub.min.6.css is not rebuilt")
+		t.Error("hub.min.7.css is not rebuilt")
 	}
 }
