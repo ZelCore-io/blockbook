@@ -183,3 +183,84 @@ func Test_initials(t *testing.T) {
 		}
 	}
 }
+
+// getStatus returns the status code and body of GET u.
+func getStatus(t *testing.T, u string) (int, string) {
+	t.Helper()
+	resp, err := http.DefaultClient.Do(newGetRequest(u))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, string(b)
+}
+
+// During initial sync only the limited interface is connected; / and /status must both work then.
+func Test_PublicServer_StatusDuringInitialSync(t *testing.T) {
+	parser, chain := setupChain(t)
+	s, dbpath := setupPublicHTTPServer(parser, chain, t, false)
+	defer closeAndDestroyPublicServer(t, s, dbpath)
+	s.is.SetInitialSync(true)
+	defer s.is.SetInitialSync(false)
+	ts := httptest.NewServer(s.https.Handler)
+	defer ts.Close()
+
+	banner := "Application is now in initial synchronization and does not provide any data."
+	status := getHTML(t, ts.URL+"/status")
+	checkHTML(t, "status in initial sync", status, []string{"<h1>Application status</h1>", banner}, nil)
+	home := getHTML(t, ts.URL+"/")
+	checkHTML(t, "home in initial sync", home, []string{`<div class="hub-card hub-muted" role="status">` + banner + `</div>`}, nil)
+	if code, _ := getStatus(t, ts.URL+"/blocks"); code != http.StatusServiceUnavailable {
+		t.Errorf("/blocks in initial sync: status %d, want 503", code)
+	}
+}
+
+func Test_PublicServer_HomeSyncDisabledWarning(t *testing.T) {
+	parser, chain := setupChain(t)
+	s, dbpath := setupPublicHTTPServer(parser, chain, t, false)
+	defer closeAndDestroyPublicServer(t, s, dbpath)
+	s.ConnectFullPublicInterface()
+	ts := httptest.NewServer(s.https.Handler)
+	defer ts.Close()
+
+	warning := `<div class="hub-card hub-muted" role="status">Synchronization with backend is disabled, the state of index is not up to date.</div>`
+	s.is.SyncMode = false
+	checkHTML(t, "home sync disabled", getHTML(t, ts.URL+"/"), []string{warning}, nil)
+	s.is.SyncMode = true
+	defer func() { s.is.SyncMode = false }()
+	checkHTML(t, "home sync enabled", getHTML(t, ts.URL+"/"), nil, []string{"Synchronization with backend is disabled"})
+}
+
+// With an external explorer configured, / and /status still render and link to no internal explorer pages.
+func Test_PublicServer_HomeAndStatusExternalExplorer(t *testing.T) {
+	parser, chain := setupChain(t)
+	s, dbpath := setupPublicHTTPServerWithOptions(parser, chain, t, false, nil, "https://explorer.example.com/")
+	defer closeAndDestroyPublicServer(t, s, dbpath)
+	if s.internalExplorer {
+		t.Fatal("internal explorer must be off with a non-empty explorerURL")
+	}
+	internalLinks := []string{`href="/block/`, `href="/mempool"`, `action="/search"`, `href="/blocks"`, `href="/tx/`}
+	check := func(t *testing.T, ts *httptest.Server) {
+		home := getHTML(t, ts.URL+"/")
+		checkHTML(t, "home external explorer", home, []string{`<h1>Explore Fake Coin</h1>`, `<a href="/?tab=txs">Transactions</a>`}, internalLinks)
+		txs := getHTML(t, ts.URL+"/?tab=txs")
+		checkHTML(t, "txs tab external explorer", txs, []string{`<a href="/?tab=txs" class="active" aria-current="page">Transactions</a>`}, internalLinks)
+		status := getHTML(t, ts.URL+"/status")
+		checkHTML(t, "status external explorer", status, []string{"<h1>Application status</h1>", "<td>Transactions in Mempool</td>"}, internalLinks)
+	}
+	t.Run("limited", func(t *testing.T) {
+		ts := httptest.NewServer(s.https.Handler)
+		defer ts.Close()
+		check(t, ts)
+	})
+	t.Run("full", func(t *testing.T) {
+		s.ConnectFullPublicInterface()
+		ts := httptest.NewServer(s.https.Handler)
+		defer ts.Close()
+		check(t, ts)
+	})
+}

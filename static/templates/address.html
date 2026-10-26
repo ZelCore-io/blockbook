@@ -318,6 +318,8 @@
 {{template "paging" $data }}
 {{end}}{{end}}
 
+{{- /* UTXO chains (ChainType 1 is bchain.ChainEthereumType, so everything else lands here). The bitcoin-type
+fields mirror the {{else}} branches of addressAccount, which no longer run: port upstream changes to them here by hand. */ -}}
 {{define "addressHub"}}{{$addr := .Address}}{{$data := .}}
 <section class="hub-card hub-summary">
     <div class="hub-summary-main">

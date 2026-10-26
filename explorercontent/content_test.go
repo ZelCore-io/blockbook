@@ -274,7 +274,7 @@ func TestProductAndThemeValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := sample(now)
 			s.Products = []Product{product("a")}
-			s.Theme = &Theme{Color: "#0A5A8C", IconURL: "https://example.com/t.png"}
+			s.Theme = &Theme{Color: "#1B63EF", IconURL: "https://example.com/t.png"}
 			tc.mutate(&s)
 			if validate(s, now) == nil {
 				t.Fatal("expected rejection")
@@ -324,13 +324,13 @@ func TestSnapshotCopiesProductsAndTheme(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	s := sample(now)
 	s.Products = []Product{product("a")}
-	s.Theme = &Theme{Color: "#0A5A8C"}
+	s.Theme = &Theme{Color: "#1B63EF"}
 	c := &Client{current: s}
 	got := c.Snapshot(now)
 	got.Products[0].Name = "changed"
 	got.Theme.Color = "#000000"
 	again := c.Snapshot(now)
-	if again.Products[0].Name != "Name a" || again.Theme.Color != "#0A5A8C" {
+	if again.Products[0].Name != "Name a" || again.Theme.Color != "#1B63EF" {
 		t.Fatal("snapshot shares products or theme with the client")
 	}
 }

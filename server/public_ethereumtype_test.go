@@ -395,6 +395,34 @@ func Test_PublicServer_EthereumType(t *testing.T) {
 	runWebsocketTests(t, ts, websocketTestsEthereumType)
 }
 
+// block.html is shared with UTXO chains; EVM blocks render in the hub cards too. This runs on its own
+// server because loading the block stores contract info that changes the aliases in later API answers.
+func Test_PublicServer_EthereumType_Block(t *testing.T) {
+	timeNow = fixedTimeNow
+	parser := eth.NewEthereumParser(1, true)
+	chain, err := dbtestdata.NewFakeBlockChainEthereumType(parser)
+	if err != nil {
+		glog.Fatal("fakechain: ", err)
+	}
+	s, dbpath := setupPublicHTTPServer(parser, chain, t, false)
+	defer closeAndDestroyPublicServer(t, s, dbpath)
+	s.ConnectFullPublicInterface()
+	ts := httptest.NewServer(s.https.Handler)
+	defer ts.Close()
+
+	performHttpTests([]httpTests{{
+		name:        "explorerBlock 4321001",
+		r:           newGetRequest(ts.URL + "/block/4321001"),
+		status:      http.StatusOK,
+		contentType: "text/html; charset=utf-8",
+		body: []string{
+			`class="hub-card hub-summary"`,
+			`<div class="tx-detail">`,
+			`<span class="hub-footer-legal">Based on Blockbook by SatoshiLabs · AGPL-3.0 · <a href="https://github.com/ZelCore-io/blockbook" title="Source (development build)" target="_blank" rel="noopener noreferrer">Source code</a></span>`,
+		},
+	}}, t, ts)
+}
+
 // allowance(owner, spender) calldata with the 0xdd62ed3e selector
 const rpcCallAllowanceData = "0xdd62ed3e0000000000000000000000009ea3721b5bf3b64b4418c38b603154d2d597fae3000000000000000000000000e4db1c5a1b709ce4d2ada6985d9d506e58f73829"
 

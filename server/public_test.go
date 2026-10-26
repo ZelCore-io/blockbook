@@ -101,6 +101,11 @@ func setupPublicHTTPServer(parser bchain.BlockChainParser, chain bchain.BlockCha
 }
 
 func setupPublicHTTPServerWithFiatFixture(parser bchain.BlockChainParser, chain bchain.BlockChain, t *testing.T, extendedIndex bool, fiatFixture func(*db.RocksDB) error) (*PublicServer, string) {
+	return setupPublicHTTPServerWithOptions(parser, chain, t, extendedIndex, fiatFixture, "")
+}
+
+// setupPublicHTTPServerWithOptions builds the server; a non-empty explorerURL switches the internal explorer off.
+func setupPublicHTTPServerWithOptions(parser bchain.BlockChainParser, chain bchain.BlockChain, t *testing.T, extendedIndex bool, fiatFixture func(*db.RocksDB) error, explorerURL string) (*PublicServer, string) {
 	// config with mocked CoinGecko API
 	config := common.Config{
 		CoinName:        "Fakecoin",
@@ -148,7 +153,7 @@ func setupPublicHTTPServerWithFiatFixture(parser bchain.BlockChainParser, chain 
 	}
 
 	// s.Run is never called, binding can be to any port
-	s, err := NewPublicServer("localhost:12345", "", d, chain, mempool, txCache, "", metrics, is, fiatRates, false)
+	s, err := NewPublicServer("localhost:12345", "", d, chain, mempool, txCache, explorerURL, metrics, is, fiatRates, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -26,7 +26,13 @@
  * width and the table scrolls inside its own box instead of breaking per character.
  *
  * The cascade order matters: build hub.min.N.css with csso --no-restructure, which
- * minifies without merging or reordering rules.
+ * minifies without merging or reordering rules. Build commands (run from the repo root;
+ * the perl step restores the \XXXX escapes that csso decodes to UTF-8):
+ *   npx csso-cli@4.0.2 static/css/hub.css --no-restructure -o /tmp/hub.css
+ *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/hub.css > static/css/hub.min.6.css
+ *   npx csso-cli@4.0.2 static/css/main.css -o /tmp/main.css
+ *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/main.css > static/css/main.min.6.css
+ *   npx terser@5.51.2 static/js/main.js -c -m -o static/js/main.min.6.js
  *
  * Links: .hub-page colors plain anchors only. Bootstrap .btn and .nav-link anchors on
  * upstream pages keep their own colors.

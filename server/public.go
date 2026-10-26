@@ -176,6 +176,8 @@ func NewPublicServer(binding string, certFiles string, db *db.RocksDB, chain bch
 	serveMux.HandleFunc(publicPath(path, "openapi.yaml"), s.openAPISpecHandler)
 	// default handler
 	serveMux.HandleFunc(path, s.htmlTemplateHandler(s.explorerIndex))
+	// the status page is served from startup, including during initial sync, like the index
+	serveMux.HandleFunc(path+"status", s.htmlTemplateHandler(s.explorerStatus))
 	// default API handler
 	serveMux.HandleFunc(path+"api/", s.jsonHandler(s.apiIndex, apiV2))
 
@@ -198,7 +200,6 @@ func (s *PublicServer) ConnectFullPublicInterface() {
 	_, path := splitBinding(s.binding)
 	// support for test pages
 	serveMux.Handle(publicPath(path, "test-websocket.html"), prefixedStaticFileServer(publicPath(path, "")))
-	serveMux.HandleFunc(path+"status", s.htmlTemplateHandler(s.explorerStatus))
 	if s.internalExplorer {
 		// internal explorer handlers
 		serveMux.HandleFunc(path+"tx/", s.htmlTemplateHandler(s.explorerTx))

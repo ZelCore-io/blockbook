@@ -92,7 +92,15 @@ Articles render on the home page (`/`) only, in a "News from Zelcore and SSP" se
 
 ## Status page
 
-The former index tables (Blockbook and backend status, sync state, version, commit and build) moved unchanged to `/status`; the home page is now a landing page with the band figures, products, latest blocks and transactions, the campaign, a network card and articles. `/status` is served by the full public interface and linked from every footer. The Historical Fiat rates row is hidden when it has no value.
+The former index tables (Blockbook and backend status, sync state, version, commit and build) moved unchanged to `/status`; the home page is now a landing page with the band figures, products, latest blocks and transactions, the campaign, a network card and articles. `/status` is served from startup, including during initial sync, and linked from every footer. The Historical Fiat rates row is hidden when it has no value.
+
+## Upstream merges
+
+Three templates diverge from upstream Blockbook in ways a `git merge` will not flag, so port upstream changes to them by hand:
+
+- `static/templates/address.html`: UTXO addresses render through the new `addressHub` block. The bitcoin-type `{{else}}` branches inside `addressAccount` no longer run, so an upstream fix there merges cleanly into dead code; port it to `addressHub`.
+- `static/templates/index.html` → `static/templates/status.html`: the old index body (the status tables) now lives in `status.html`, and `index.html` is the landing page. Upstream edits to the status tables conflict in `index.html` and belong in `status.html`.
+- `static/templates/block.html`: shared by UTXO, EVM and Tron chains and now wrapped in hub cards. Check upstream block-page changes against all three chain types.
 
 ## Fonts and licensing
 

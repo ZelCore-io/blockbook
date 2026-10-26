@@ -27,6 +27,9 @@ fills the band figures and lays out everything below it. The status tables live 
         {{- if $bb.InitialSync}}
         <div class="hub-card hub-muted" role="status">Application is now in initial synchronization and does not provide any data.</div>
         {{- end}}
+        {{- if not $bb.SyncMode}}
+        <div class="hub-card hub-muted" role="status">Synchronization with backend is disabled, the state of index is not up to date.</div>
+        {{- end}}
         <section class="hub-card hub-card-flush">
             <nav class="hub-tabs" aria-label="Latest activity">
                 <a href="/?tab=blocks"{{if eq .HomeTab "blocks"}} class="active" aria-current="page"{{end}}>Blocks</a>
