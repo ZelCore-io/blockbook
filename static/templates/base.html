@@ -25,6 +25,8 @@
                 {{- with .ExplorerContent.ThemeIcon}}<span class="hub-mark"><img src="{{.}}" alt="{{$.CoinLabel}}" width="36" height="36" referrerpolicy="no-referrer"></span>{{else}}<span class="hub-mark" aria-hidden="true">{{.CoinShortcut}}</span>{{end -}}
                 <span>{{.CoinLabel}} Explorer</span>
             </a>
+            <a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer">
+                {{- with .ExplorerContent.FluxSymbol}}<img src="{{.}}" alt="Flux" width="22" height="22" referrerpolicy="no-referrer">{{end}}Powered by Flux</a>
             <nav class="hub-nav-links" aria-label="Main">
                 {{- if .InternalExplorer}}
                 <a href="/blocks">Blocks</a>
@@ -86,7 +88,8 @@
             {{- range .ExplorerContent.Products}}{{if and .Name (ne .ID "zelcore")}}
             <a href="{{.TargetURL}}" target="_blank" rel="noopener noreferrer">{{.Name}}</a>
             {{- end}}{{end}}
-            <a href="https://runonflux.com" target="_blank" rel="noopener noreferrer">Powered by Flux</a>
+            <a href="https://runonflux.com" target="_blank" rel="noopener noreferrer">
+                {{- with .ExplorerContent.FluxSymbol}}<img src="{{.}}" alt="Flux" width="24" height="24" loading="lazy" referrerpolicy="no-referrer">{{end}}Powered by Flux</a>
             <a href="https://docs.zelcore.io" target="_blank" rel="noopener noreferrer">Documentation</a>
             <a href="{{.TOSLink}}" target="_blank" rel="noopener noreferrer">Terms of use</a>
             <a href="/status">Status</a>
@@ -118,7 +121,7 @@
     </a>
     {{- end}}
     {{- with $zelcore}}
-    <a class="hub-zelcore-prompt" href="{{.TargetURL}}" target="_blank" rel="noopener noreferrer">
+    <a class="hub-zelcore-prompt{{if not .CTAFilled}} hub-product-outline{{end}}" href="{{.TargetURL}}" target="_blank" rel="noopener noreferrer" style="--tile-accent: {{.Accent}}">
         <span class="hub-product-icon" aria-hidden="true">{{if .IconURL}}<img src="{{.IconURL}}" alt="" width="40" height="40" loading="lazy" referrerpolicy="no-referrer">{{else}}Z{{end}}</span>
         <span>
             <span class="hub-zelcore-prompt-title">Watch in Zelcore</span>

@@ -10,23 +10,15 @@ fills the band figures and lays out everything below it. The status tables live 
 </dl>
 {{- end}}
 {{define "specific"}}{{$bb := .Info.Blockbook}}{{$be := .Info.Backend}}{{$link := .InternalExplorer}}
-{{- $products := false}}{{range .ExplorerContent.Products}}{{if .Name}}{{$products = true}}{{end}}{{end}}
-{{- if $products}}
+{{- with .ExplorerContent.ProductsMain}}
 <div class="hub-products">
     <section class="hub-products-grid" aria-labelledby="hub-products-title">
         <h2 class="hub-products-title" id="hub-products-title">Zelcore products</h2>
-        {{- range .ExplorerContent.Products}}{{if .Name}}
-        <a class="hub-product" href="{{.TargetURL}}" target="_blank" rel="noopener noreferrer">
-            <span class="hub-product-head">
-                <span class="hub-product-icon" aria-hidden="true">{{if .IconURL}}<img src="{{.IconURL}}" alt="" width="36" height="36" loading="lazy" referrerpolicy="no-referrer">{{else}}{{initials .Name}}{{end}}</span>
-                <span class="hub-product-name">{{.Name}}</span>
-            </span>
-            {{- if .Tagline}}
-            <span class="hub-product-tagline">{{.Tagline}}</span>
-            {{- end}}
-            <span class="hub-product-cta">{{if .CTALabel}}{{.CTALabel}}{{else}}Learn more{{end}} →</span>
-        </a>
-        {{- end}}{{end}}
+        {{- range .}}{{template "hubProduct" .}}{{end}}
+        {{- with $.ExplorerContent.ProductsMore}}
+        <h3 class="hub-products-more-title">More from Flux</h3>
+        {{- range .}}{{template "hubProduct" .}}{{end}}
+        {{- end}}
     </section>
 </div>
 {{- end}}
@@ -115,7 +107,7 @@ fills the band figures and lays out everything below it. The status tables live 
                 <div><dt>Difficulty</dt><dd class="hub-mono">{{$be.Difficulty}}</dd></div>
                 {{- end}}
                 <div><dt>Node</dt><dd class="hub-mono">{{if $be.Subversion}}{{$be.Subversion}}{{else}}{{$be.Version}}{{end}}</dd></div>
-                <div><dt>Status</dt><dd>{{if $bb.InSync}}<span class="badge bg-success">Synced</span>{{else}}<span class="badge bg-warning text-dark">Syncing</span>{{end}}</dd></div>
+                <div><dt>Status</dt><dd>{{if $bb.InSync}}<span class="hub-badge hub-badge-ok">Synced</span>{{else}}<span class="hub-badge hub-badge-warn">Syncing</span>{{end}}</dd></div>
             </dl>
         </section>
     </div>
@@ -136,4 +128,19 @@ fills the band figures and lays out everything below it. The status tables live 
     </div>
 </section>
 {{- end}}
+{{- end}}
+{{- /* A product tile. Accent is a validated #RRGGBB (Flux Blue Wave when the feed has none), so it is
+the only value that reaches the style attribute. CTAFilled picks a filled button when white text
+reaches 4.5:1 on the accent, else an outlined one with dark text. */ -}}
+{{- define "hubProduct"}}
+        <a class="hub-product{{if not .CTAFilled}} hub-product-outline{{end}}" href="{{.TargetURL}}" target="_blank" rel="noopener noreferrer" style="--tile-accent: {{.Accent}}">
+            <span class="hub-product-head">
+                <span class="hub-product-icon" aria-hidden="true">{{if .IconURL}}<img src="{{.IconURL}}" alt="" width="36" height="36" loading="lazy" referrerpolicy="no-referrer">{{else}}{{initials .Name}}{{end}}</span>
+                <span class="hub-product-name">{{.Name}}</span>
+            </span>
+            {{- if .Tagline}}
+            <span class="hub-product-tagline">{{.Tagline}}</span>
+            {{- end}}
+            <span class="hub-product-cta">{{if .CTALabel}}{{.CTALabel}}{{else}}Learn more{{end}} →</span>
+        </a>
 {{- end}}

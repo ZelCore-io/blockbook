@@ -330,3 +330,118 @@ func TestHomeLongProductValues(t *testing.T) {
 		t.Error(".hub-product must wrap long words and be allowed to shrink")
 	}
 }
+
+func sixProducts() []Product {
+	return []Product{
+		{ID: "zelcore", Name: "Zelcore", TargetURL: "https://zelcore.io", Color: "#1B63EF"},
+		{ID: "ssp", Name: "SSP Wallet", TargetURL: "https://sspwallet.io", Color: "#F59E0B"},
+		{ID: "flux", Name: "Flux", TargetURL: "https://runonflux.com", IconURL: "https://cdn.example.com/flux.svg"},
+		{ID: "vpn", Name: "CumulusVPN", TargetURL: "https://example.com/vpn", Color: "#0FB9AE"},
+		{ID: "os", Name: "FluxOS", TargetURL: "https://example.com/os", Color: "#36C9A5"},
+		{ID: "nodes", Name: "FluxNodes", TargetURL: "https://example.com/nodes", Color: "#36C9A5"},
+	}
+}
+
+func TestHomeMoreFromFluxRow(t *testing.T) {
+	html := renderHome(t, Snapshot{Products: sixProducts()}, nil)
+	more := strings.Index(html, `<h3 class="hub-products-more-title">More from Flux</h3>`)
+	if more < 0 || !within(html, "hub-products-grid", "</section>", "More from Flux") {
+		t.Fatal("More from Flux row missing inside the product strip")
+	}
+	for _, url := range []string{"https://zelcore.io", "https://sspwallet.io", "https://runonflux.com", "https://example.com/vpn"} {
+		tile := strings.Index(html, `<a class="hub-product`)
+		if i := strings.Index(html[tile:], `href="`+url+`"`); i < 0 || tile+i > more {
+			t.Errorf("%s must render in the strip, before the More row", url)
+		}
+	}
+	for _, url := range []string{"https://example.com/os", "https://example.com/nodes"} {
+		if i := strings.Index(html, `href="`+url+`"`); i < more {
+			t.Errorf("%s must render in the More row", url)
+		}
+	}
+	if strings.Count(html, `<a class="hub-product`) != 6 {
+		t.Errorf("want 6 tiles, got %d", strings.Count(html, `<a class="hub-product`))
+	}
+
+	legacy := renderHome(t, Snapshot{Products: sixProducts()[:4]}, nil)
+	if strings.Contains(legacy, "More from Flux") || strings.Contains(legacy, "hub-products-more") {
+		t.Error("4 products must not render the More row")
+	}
+	if strings.Count(legacy, `<a class="hub-product`) != 4 || !strings.Contains(legacy, "Zelcore products") {
+		t.Error("4 products must render in the strip")
+	}
+	// A legacy feed without colors renders every tile in Flux Blue Wave with a filled CTA.
+	plain := sixProducts()[:4]
+	for i := range plain {
+		plain[i].Color = ""
+	}
+	html = renderHome(t, Snapshot{Products: plain}, nil)
+	if strings.Count(html, `style="--tile-accent: #2B61D1"`) != 4 || strings.Contains(html, "hub-product-outline") {
+		t.Error("tiles without a color must use Flux Blue Wave and a filled CTA")
+	}
+}
+
+func TestHomeProductAccentAttribute(t *testing.T) {
+	html := renderHome(t, Snapshot{Products: sixProducts()}, nil)
+	for _, want := range []string{
+		`<a class="hub-product" href="https://zelcore.io" target="_blank" rel="noopener noreferrer" style="--tile-accent: #1B63EF">`,
+		`<a class="hub-product hub-product-outline" href="https://sspwallet.io" target="_blank" rel="noopener noreferrer" style="--tile-accent: #F59E0B">`,
+		`<a class="hub-product" href="https://runonflux.com" target="_blank" rel="noopener noreferrer" style="--tile-accent: #2B61D1">`,
+		`<a class="hub-product hub-product-outline" href="https://example.com/vpn" target="_blank" rel="noopener noreferrer" style="--tile-accent: #0FB9AE">`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	// A Snapshot built without the feed's validation (or a future code path that skips it)
+	// still never puts an invalid color into the attribute.
+	for _, bad := range []string{`red;background:url(//x)`, `#1B63EF" onmouseover="alert(1)`, `expression(alert(1))`, `#12345`} {
+		p := Product{ID: "x", Name: "X", TargetURL: "https://example.com/x", Color: bad}
+		html := renderHome(t, Snapshot{Products: []Product{p}}, nil)
+		if !strings.Contains(html, `style="--tile-accent: #2B61D1"`) {
+			t.Errorf("%q: tile must fall back to the default accent", bad)
+		}
+		for _, leak := range []string{"background:url", "onmouseover", "expression(", "#12345\"", "ZgotmplZ"} {
+			if strings.Contains(html, leak) {
+				t.Errorf("%q: rendered %q", bad, leak)
+			}
+		}
+	}
+	prompt := renderShell(t, Snapshot{Products: sixProducts()}, nil)
+	if !strings.Contains(prompt, `<a class="hub-zelcore-prompt" href="https://zelcore.io" target="_blank" rel="noopener noreferrer" style="--tile-accent: #1B63EF">`) {
+		t.Error("Zelcore prompt must carry the zelcore product accent")
+	}
+	amber := sixProducts()
+	amber[0].Color = "#F59E0B"
+	if prompt = renderShell(t, Snapshot{Products: amber}, nil); !strings.Contains(prompt, `<a class="hub-zelcore-prompt hub-product-outline" href="https://zelcore.io"`) {
+		t.Error("a prompt accent that fails 4.5:1 with white must use dark initials")
+	}
+}
+
+func TestFluxSymbolInBandAndFooter(t *testing.T) {
+	for _, home := range []bool{false, true} {
+		html := renderShell(t, Snapshot{Products: sixProducts()}, map[string]interface{}{"HomePage": home})
+		band := `<a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer"><img src="https://cdn.example.com/flux.svg" alt="Flux" width="22" height="22" referrerpolicy="no-referrer">Powered by Flux</a>`
+		if !within(html, "hub-band", "</header>", band) {
+			t.Errorf("home=%v: band lacks the Flux symbol link", home)
+		}
+		if !within(html, "hub-footer", "</footer>", `<a href="https://runonflux.com" target="_blank" rel="noopener noreferrer"><img src="https://cdn.example.com/flux.svg" alt="Flux" width="24" height="24" loading="lazy" referrerpolicy="no-referrer">Powered by Flux</a>`) {
+			t.Errorf("home=%v: footer lacks the Flux symbol", home)
+		}
+
+		noIcon := sixProducts()
+		noIcon[2].IconURL = ""
+		for name, s := range map[string]Snapshot{"no icon": {Products: noIcon}, "no flux product": {Products: sixProducts()[:2]}, "empty": {}} {
+			html := renderShell(t, s, map[string]interface{}{"HomePage": home})
+			if !within(html, "hub-band", "</header>", `<a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer">Powered by Flux</a>`) {
+				t.Errorf("home=%v %s: band must show the text-only Flux link", home, name)
+			}
+			if strings.Contains(html, `alt="Flux"`) {
+				t.Errorf("home=%v %s: renders a Flux symbol without a URL", home, name)
+			}
+			if !within(html, "hub-footer", "</footer>", `<a href="https://runonflux.com" target="_blank" rel="noopener noreferrer">Powered by Flux</a>`) {
+				t.Errorf("home=%v %s: footer Flux link changed", home, name)
+			}
+		}
+	}
+}

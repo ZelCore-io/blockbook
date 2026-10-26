@@ -1,12 +1,19 @@
 /*
  * Ecosystem Hub stylesheet. Loads after main.css; upstream class names keep working.
  *
+ * Flux ecosystem branding. Every color is from an official palette:
+ *   Flux Brand Book: Blue Wave #2B61D1, shades #4F7AD4 #86A1DA #2D2D2D #717171, black, white.
+ *   Product accents arrive per tile from the dashboard feed (--tile-accent, validated #RRGGBB).
+ * Hairlines and shadows are palette black or #2D2D2D at low alpha. There is no success or error
+ * color: statuses use text, and amounts use their sign.
+ *
  * Fonts are self-hosted from static/fonts/ (no third-party font hosts):
- *   Manrope (SIL OFL 1.1, see fonts/manrope/OFL.txt) from @fontsource/manrope 5.3.0
- *   Roboto Mono (SIL OFL 1.1, see fonts/roboto-mono/LICENSE) from @fontsource/roboto-mono 5.3.0
+ *   Montserrat, headings (SIL OFL 1.1, see fonts/montserrat/OFL.txt) from @fontsource/montserrat 5.3.0
+ *   Open Sans, body (SIL OFL 1.1, see fonts/open-sans/OFL.txt) from @fontsource/open-sans 5.3.0
+ *   Roboto Mono, hashes and amounts (SIL OFL 1.1, see fonts/roboto-mono/LICENSE) from @fontsource/roboto-mono 5.3.0
  *
  * Public classes: .hub-page, .hub-band, .hub-band-home, .hub-nav, .hub-search, .hub-figures,
- * .hub-products, .hub-product, .hub-layout, .hub-card, .hub-aside, .hub-campaign,
+ * .hub-products, .hub-product, .hub-powered, .hub-layout, .hub-card, .hub-aside, .hub-campaign,
  * .hub-zelcore-prompt, .hub-tabs, .hub-stat-grid, .hub-articles, .hub-footer, .hub-mono,
  * .hub-scroll, .hub-ellipsis, .hub-summary, .hub-badge, .hub-copy, .hub-section-head, .hub-raw,
  * .hub-io-label. Parts used inside them are named .hub-<block>-<part> (for example .hub-brand,
@@ -28,43 +35,51 @@
 /* ---------- Fonts ---------- */
 
 @font-face {
-    font-family: "Manrope";
-    font-style: normal;
-    font-weight: 400;
-    font-display: swap;
-    src: url("../fonts/manrope/manrope-latin-400-normal.woff2") format("woff2");
-}
-
-@font-face {
-    font-family: "Manrope";
-    font-style: normal;
-    font-weight: 500;
-    font-display: swap;
-    src: url("../fonts/manrope/manrope-latin-500-normal.woff2") format("woff2");
-}
-
-@font-face {
-    font-family: "Manrope";
+    font-family: "Montserrat";
     font-style: normal;
     font-weight: 600;
     font-display: swap;
-    src: url("../fonts/manrope/manrope-latin-600-normal.woff2") format("woff2");
+    src: url("../fonts/montserrat/montserrat-latin-600-normal.woff2") format("woff2");
 }
 
 @font-face {
-    font-family: "Manrope";
+    font-family: "Montserrat";
     font-style: normal;
     font-weight: 700;
     font-display: swap;
-    src: url("../fonts/manrope/manrope-latin-700-normal.woff2") format("woff2");
+    src: url("../fonts/montserrat/montserrat-latin-700-normal.woff2") format("woff2");
 }
 
 @font-face {
-    font-family: "Manrope";
+    font-family: "Montserrat";
     font-style: normal;
     font-weight: 800;
     font-display: swap;
-    src: url("../fonts/manrope/manrope-latin-800-normal.woff2") format("woff2");
+    src: url("../fonts/montserrat/montserrat-latin-800-normal.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Open Sans";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("../fonts/open-sans/open-sans-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Open Sans";
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url("../fonts/open-sans/open-sans-latin-600-normal.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Open Sans";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url("../fonts/open-sans/open-sans-latin-700-normal.woff2") format("woff2");
 }
 
 @font-face {
@@ -86,26 +101,28 @@
 /* ---------- Tokens ---------- */
 
 :root {
-    --hub-ink: #101828;
-    --hub-muted: #667085;
+    --hub-blue: #2B61D1;
+    --hub-ink: #000000;
+    --hub-muted: #717171;
     --hub-surface: #FFFFFF;
-    --hub-ground: #F3F5F8;
-    --hub-link: #0B5CAD;
-    --hub-link-hover: #08427D;
-    --hub-text-2: #344054;
-    --hub-text-3: #475467;
-    --hub-line: #EAECF0;
-    --hub-line-soft: #F2F4F7;
-    --hub-control-border: #D0D5DD;
-    --hub-ok: #067647;
-    --hub-ok-bg: #ECFDF3;
-    --hub-warn: #B54708;
-    --hub-warn-bg: #FFFAEB;
+    --hub-ground: #FFFFFF;
+    --hub-link: #2B61D1;
+    --hub-link-hover: #000000;
+    --hub-text-2: #2D2D2D;
+    --hub-text-3: #2D2D2D;
+    --hub-line: rgba(45, 45, 45, 0.14);
+    --hub-line-soft: rgba(45, 45, 45, 0.08);
+    --hub-line-strong: rgba(45, 45, 45, 0.3);
+    --hub-control-border: #717171;
+    --hub-placeholder: #86A1DA;
+    --hub-footer-bg: #2D2D2D;
+    --hub-footer-text: #86A1DA;
     --hub-radius: 18px;
     --hub-radius-sm: 12px;
     --hub-max: 1200px;
     --hub-gutter: 24px;
-    --hub-font: "Manrope", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+    --hub-font: "Open Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+    --hub-font-heading: "Montserrat", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
     --hub-font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
@@ -136,6 +153,14 @@
     font-family: var(--hub-font-mono);
 }
 
+/* Headings use Montserrat. main.css sets the body font on every element (*), so descendants are
+   listed too. :where() keeps this at zero specificity: it beats * only by coming later, and
+   .hub-mono inside a heading still wins. */
+:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-product-name, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary),
+:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-product-name, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary) * {
+    font-family: var(--hub-font-heading);
+}
+
 .hub-label {
     font-size: 12px;
     font-weight: 700;
@@ -147,7 +172,7 @@
 /* ---------- Band (header) ---------- */
 
 .hub-band {
-    background: var(--hub-band, #0A5A8C);
+    background: var(--hub-band, #2B61D1);
     color: #FFFFFF;
 }
 
@@ -184,7 +209,7 @@
     height: 36px;
     border-radius: 50%;
     background: #FFFFFF;
-    color: var(--hub-band, #0A5A8C);
+    color: var(--hub-band, #2B61D1);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -197,6 +222,32 @@
     width: 100%;
     height: 100%;
     object-fit: contain;
+}
+
+/* "Powered by Flux" next to the brand, with the Flux symbol from the feed when it has one. */
+.hub-powered {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.hub-powered::before {
+    content: "";
+    flex: none;
+    width: 1px;
+    height: 24px;
+    margin-right: 8px;
+    background: #FFFFFF;
+}
+
+.hub-powered img {
+    display: block;
+    flex: none;
+    width: 22px;
+    height: 22px;
 }
 
 .hub-nav-links {
@@ -281,7 +332,7 @@
     padding: 0 26px;
     background: var(--hub-ink);
     color: #FFFFFF;
-    font-family: var(--hub-font);
+    font-family: var(--hub-font-heading);
     font-weight: 700;
     font-size: 15px;
     cursor: pointer;
@@ -377,7 +428,7 @@
     background: var(--hub-surface);
     border-radius: var(--hub-radius);
     padding: 20px;
-    box-shadow: 0 8px 24px rgba(16, 24, 40, 0.08);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 12px;
@@ -390,6 +441,17 @@
     font-weight: 800;
 }
 
+/* The "More from Flux" row: products 5 and 6 under a rule, in the same 4-column grid. */
+.hub-products-more-title {
+    grid-column: 1 / -1;
+    margin: 6px 0 0;
+    padding-top: 14px;
+    border-top: 1px solid var(--hub-line);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--hub-text-2);
+}
+
 .hub-product {
     display: flex;
     flex-direction: column;
@@ -397,8 +459,10 @@
     min-width: 0;
     min-height: 132px;
     padding: 16px;
+    border: 1px solid var(--hub-line);
+    border-top: 4px solid var(--tile-accent, #2B61D1);
     border-radius: var(--hub-radius-sm);
-    background: #EEF4FF;
+    background: var(--hub-surface);
     color: var(--hub-ink);
     overflow-wrap: anywhere;
 }
@@ -425,7 +489,7 @@
     width: 36px;
     height: 36px;
     border-radius: 10px;
-    background: #1A56DB;
+    background: var(--tile-accent, #2B61D1);
     color: #FFFFFF;
     display: flex;
     align-items: center;
@@ -439,6 +503,12 @@
     width: 100%;
     height: 100%;
     object-fit: contain;
+    background: var(--hub-surface);
+}
+
+/* White initials need 4.5:1 on the accent; an accent that fails (hub-product-outline) gets black. */
+.hub-product-outline .hub-product-icon {
+    color: #000000;
 }
 
 .hub-product-name {
@@ -453,11 +523,23 @@
     color: var(--hub-text-2);
 }
 
+/* Filled in the accent with white text when that reaches 4.5:1 (Product.CTAFilled), otherwise
+   outlined in the accent with black text. */
 .hub-product-cta {
     margin-top: auto;
+    align-self: flex-start;
+    padding: 8px 14px;
+    border: 2px solid var(--tile-accent, #2B61D1);
+    border-radius: 999px;
+    background: var(--tile-accent, #2B61D1);
+    color: #FFFFFF;
     font-size: 14px;
     font-weight: 700;
-    color: var(--hub-link);
+}
+
+.hub-product-outline .hub-product-cta {
+    background: var(--hub-surface);
+    color: #000000;
 }
 
 @media (max-width: 991.98px) {
@@ -508,6 +590,7 @@
 .hub-card {
     min-width: 0;
     background: var(--hub-surface);
+    border: 1px solid var(--hub-line);
     border-radius: var(--hub-radius);
     padding: 20px;
     color: var(--hub-ink);
@@ -541,6 +624,7 @@
 
 .hub-campaign {
     display: block;
+    border: 1px solid var(--hub-line);
     border-radius: var(--hub-radius);
     overflow: hidden;
     background: var(--hub-surface);
@@ -561,7 +645,7 @@
     height: auto;
     aspect-ratio: 16 / 10;
     object-fit: cover;
-    background: #D9E6F7;
+    background: var(--hub-placeholder);
 }
 
 .hub-campaign-body {
@@ -586,8 +670,10 @@
     gap: 12px;
     min-height: 44px;
     padding: 16px;
+    border: 1px solid var(--hub-line);
+    border-left: 4px solid var(--tile-accent, #2B61D1);
     border-radius: var(--hub-radius);
-    background: #EEF4FF;
+    background: var(--hub-surface);
     color: var(--hub-ink);
     overflow-wrap: anywhere;
 }
@@ -635,7 +721,7 @@
     border-radius: 999px;
     background: transparent;
     color: var(--hub-text-2);
-    font-family: var(--hub-font);
+    font-family: var(--hub-font-heading);
     font-weight: 600;
     font-size: 14px;
     cursor: pointer;
@@ -648,7 +734,7 @@
 .hub-page .hub-tabs .active,
 .hub-page .hub-tabs [aria-selected="true"],
 .hub-page .hub-tabs [aria-current="page"] {
-    background: var(--hub-ink);
+    background: var(--hub-blue);
     color: #FFFFFF;
     font-weight: 700;
 }
@@ -732,11 +818,11 @@
 
 .hub-pager .active,
 .hub-pager [aria-current="page"] {
-    background: var(--hub-ink);
+    background: var(--hub-blue);
     color: #FFFFFF;
 }
 
-/* Beats .hub-page a:hover (0,2,1) so an active page link stays white on ink. */
+/* Beats .hub-page a:hover (0,2,1) so an active page link stays white on Blue Wave. */
 .hub-page .hub-pager .active,
 .hub-page .hub-pager .active:hover,
 .hub-page .hub-pager [aria-current="page"],
@@ -852,25 +938,27 @@
     min-width: 0;
 }
 
+/* Statuses are read from their text, not a color: ok has a Blue Wave outline, warn a dark one. */
 .hub-badge {
     display: inline-flex;
     align-items: center;
     padding: 4px 10px;
+    border: 1px solid var(--hub-line-strong);
     border-radius: 999px;
-    background: var(--hub-line-soft);
+    background: transparent;
     color: var(--hub-text-2);
     font-size: 13px;
     font-weight: 700;
 }
 
 .hub-badge-ok {
-    background: var(--hub-ok-bg);
-    color: var(--hub-ok);
+    border-color: var(--hub-blue);
+    color: var(--hub-ink);
 }
 
 .hub-badge-warn {
-    background: var(--hub-warn-bg);
-    color: var(--hub-warn);
+    border-color: var(--hub-text-2);
+    color: var(--hub-ink);
 }
 
 .hub-copy {
@@ -903,8 +991,8 @@
 }
 
 .hub-copy.hub-copied {
-    border-color: var(--hub-ok);
-    color: var(--hub-ok);
+    border-color: var(--hub-blue);
+    color: var(--hub-blue);
 }
 
 .hub-balance {
@@ -1050,6 +1138,13 @@
     display: inline-block;
 }
 
+/* Upstream paints that pill white on red; inside a hub card it is a status like the others. */
+.hub-card .tx-detail .unconfirmed {
+    border: 1px solid var(--hub-text-2);
+    background: transparent;
+    color: var(--hub-ink);
+}
+
 .hub-raw > summary {
     cursor: pointer;
     font-size: 16px;
@@ -1098,6 +1193,7 @@
 .hub-article {
     display: block;
     min-width: 0;
+    border: 1px solid var(--hub-line);
     border-radius: var(--hub-radius);
     overflow: hidden;
     background: var(--hub-surface);
@@ -1117,7 +1213,7 @@
     height: auto;
     aspect-ratio: 16 / 9;
     object-fit: cover;
-    background: #D9E6F7;
+    background: var(--hub-placeholder);
 }
 
 .hub-article-body {
@@ -1140,8 +1236,8 @@
 /* ---------- Footer ---------- */
 
 .hub-footer {
-    background: #101828;
-    color: #D0D5DD;
+    background: var(--hub-footer-bg);
+    color: var(--hub-footer-text);
 }
 
 .hub-footer-inner {
@@ -1159,12 +1255,21 @@
     display: inline-flex;
     align-items: center;
     min-height: 44px;
-    color: #D0D5DD;
+    color: #FFFFFF;
     overflow-wrap: anywhere;
 }
 
 .hub-footer a:hover {
     color: #FFFFFF;
+    text-decoration: underline;
+}
+
+.hub-footer a img {
+    display: block;
+    flex: none;
+    width: 24px;
+    height: 24px;
+    margin-right: 8px;
 }
 
 .hub-footer .hub-footer-brand {
@@ -1249,6 +1354,11 @@
     .hub-nav .hub-search {
         flex: 1 1 100%;
         margin-left: 0;
+    }
+
+    /* On phones the link usually wraps to its own row, where a leading divider looks stray. */
+    .hub-powered::before {
+        display: none;
     }
 
     .hub-footer-legal {
