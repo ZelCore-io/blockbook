@@ -682,6 +682,7 @@ func (s *PublicServer) parseTemplates() []*template.Template {
 		"formatInt64":              formatInt64,
 		"formatInt":                formatInt,
 		"formatUint32":             formatUint32,
+		"initials":                 initials,
 		"formatBigInt":             formatBigInt,
 		"setTxToTemplateData":      setTxToTemplateData,
 		"feePerByte":               feePerByte,
@@ -1324,18 +1325,31 @@ func (s *PublicServer) explorerIndex(w http.ResponseWriter, r *http.Request) (tp
 	}
 	data.HomePrice = homePrice(s.fiatRates.GetCurrentTicker("usd", ""), timeNow())
 	// The lists are best effort: the home page still renders when one of them is unavailable.
-	if data.Blocks, err = s.api.GetBlocks(1, homeItemsOnPage); err != nil {
-		glog.Error("explorerIndex GetBlocks: ", err)
-	}
-	if data.MempoolTxids, err = s.api.GetMempool(1, homeItemsOnPage); err != nil {
-		glog.Error("explorerIndex GetMempool: ", err)
-	}
-	if data.HomeTab == "txs" && (data.MempoolTxids == nil || len(data.MempoolTxids.Mempool) == 0) {
-		if data.Block, err = s.api.GetBlock(strconv.FormatUint(uint64(si.Blockbook.BestHeight), 10), 1, homeItemsOnPage); err != nil {
-			glog.Error("explorerIndex GetBlock: ", err)
+	// Each tab loads only its own list; the mempool figure in the band comes from Info.
+	if data.HomeTab == "blocks" {
+		if data.Blocks, err = s.api.GetBlocks(1, homeItemsOnPage); err != nil {
+			glog.Error("explorerIndex GetBlocks: ", err)
+		}
+	} else {
+		if data.MempoolTxids, err = s.api.GetMempool(1, homeItemsOnPage); err != nil {
+			glog.Error("explorerIndex GetMempool: ", err)
+		}
+		if data.MempoolTxids == nil || len(data.MempoolTxids.Mempool) == 0 {
+			if data.Block, err = s.api.GetBlock(strconv.FormatUint(uint64(si.Blockbook.BestHeight), 10), 1, homeItemsOnPage); err != nil {
+				glog.V(1).Info("explorerIndex GetBlock: ", err)
+			}
 		}
 	}
 	return indexTpl, data, nil
+}
+
+// initials returns the first letter of name, upper-cased, for an icon placeholder.
+// It works on runes, so a multibyte first letter is never split.
+func initials(name string) string {
+	for _, r := range strings.TrimSpace(name) {
+		return strings.ToUpper(string(r))
+	}
+	return ""
 }
 
 // homeItemsOnPage is the number of blocks or transactions listed on the home page.

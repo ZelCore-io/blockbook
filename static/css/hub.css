@@ -8,7 +8,7 @@
  * Public classes: .hub-page, .hub-band, .hub-band-home, .hub-nav, .hub-search, .hub-figures,
  * .hub-products, .hub-product, .hub-layout, .hub-card, .hub-aside, .hub-campaign,
  * .hub-zelcore-prompt, .hub-tabs, .hub-stat-grid, .hub-articles, .hub-footer, .hub-mono,
- * .hub-scroll. Parts used inside them are named .hub-<block>-<part> (for example .hub-brand,
+ * .hub-scroll, .hub-ellipsis. Parts used inside them are named .hub-<block>-<part> (for example .hub-brand,
  * .hub-mark, .hub-label) and are listed with their block below.
  *
  * Tables inside .hub-card must sit in a .hub-scroll wrapper. .hub-card sets
@@ -379,6 +379,8 @@
 .hub-products-title {
     grid-column: 1 / -1;
     margin: 0;
+    font-size: 16px;
+    font-weight: 800;
 }
 
 .hub-product {
@@ -675,6 +677,15 @@
     padding: 14px 16px;
     border-top: 1px solid var(--hub-line-soft);
     color: var(--hub-text-3);
+}
+
+/* A long hash or txid cell takes the spare width and ends in an ellipsis instead of widening the table. */
+.hub-ellipsis {
+    max-width: 0;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* A table scrolls inside .hub-scroll; its cells must not be broken per character. */

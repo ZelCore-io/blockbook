@@ -13,11 +13,12 @@ fills the band figures and lays out everything below it. The status tables live 
 {{- $products := false}}{{range .ExplorerContent.Products}}{{if .Name}}{{$products = true}}{{end}}{{end}}
 {{- if $products}}
 <div class="hub-products">
-    <section class="hub-products-grid" aria-label="Zelcore products">
+    <section class="hub-products-grid" aria-labelledby="hub-products-title">
+        <h2 class="hub-products-title" id="hub-products-title">Zelcore products</h2>
         {{- range .ExplorerContent.Products}}{{if .Name}}
         <a class="hub-product" href="{{.TargetURL}}" target="_blank" rel="noopener noreferrer">
             <span class="hub-product-head">
-                {{- if .IconURL}}<span class="hub-product-icon" aria-hidden="true"><img src="{{.IconURL}}" alt="" width="36" height="36" loading="lazy" referrerpolicy="no-referrer"></span>{{end -}}
+                <span class="hub-product-icon" aria-hidden="true">{{if .IconURL}}<img src="{{.IconURL}}" alt="" width="36" height="36" loading="lazy" referrerpolicy="no-referrer">{{else}}{{initials .Name}}{{end}}</span>
                 <span class="hub-product-name">{{.Name}}</span>
             </span>
             {{- if .Tagline}}
@@ -31,12 +32,15 @@ fills the band figures and lays out everything below it. The status tables live 
 {{- end}}
 <div class="hub-layout">
     <div class="hub-main">
+        {{- if $bb.InitialSync}}
+        <div class="hub-card hub-muted" role="status">Application is now in initial synchronization and does not provide any data.</div>
+        {{- end}}
         <section class="hub-card hub-card-flush">
             <nav class="hub-tabs" aria-label="Latest activity">
                 <a href="/?tab=blocks"{{if eq .HomeTab "blocks"}} class="active" aria-current="page"{{end}}>Blocks</a>
                 <a href="/?tab=txs"{{if eq .HomeTab "txs"}} class="active" aria-current="page"{{end}}>Transactions</a>
                 {{- if $link}}
-                <a class="hub-tabs-end" href="{{if eq .HomeTab "txs"}}/mempool{{else}}/blocks{{end}}">View all</a>
+                <a class="hub-tabs-end" href="{{if ne .HomeTab "txs"}}/blocks{{else if and .MempoolTxids .MempoolTxids.Mempool}}/mempool{{else if .Block}}/block/{{.Block.Height}}{{else}}/mempool{{end}}">View all</a>
                 {{- end}}
             </nav>
             {{- if eq .HomeTab "txs"}}
@@ -46,7 +50,7 @@ fills the band figures and lays out everything below it. The status tables live 
                     <tbody>
                         {{- range .MempoolTxids.Mempool}}
                         <tr>
-                            <td class="ellipsis" style="max-width: 0; width: 100%">{{if $link}}<a class="hub-mono" href="/tx/{{.Txid}}">{{.Txid}}</a>{{else}}<span class="hub-mono">{{.Txid}}</span>{{end}}</td>
+                            <td class="hub-ellipsis">{{if $link}}<a class="hub-mono" href="/tx/{{.Txid}}">{{.Txid}}</a>{{else}}<span class="hub-mono">{{.Txid}}</span>{{end}}</td>
                             <td class="text-nowrap">{{unixTimeSpan .Time}}</td>
                         </tr>
                         {{- end}}
@@ -60,7 +64,7 @@ fills the band figures and lays out everything below it. The status tables live 
                     <tbody>
                         {{- range .Block.Transactions}}
                         <tr>
-                            <td class="ellipsis" style="max-width: 0; width: 100%">{{if $link}}<a class="hub-mono" href="/tx/{{.Txid}}">{{.Txid}}</a>{{else}}<span class="hub-mono">{{.Txid}}</span>{{end}}</td>
+                            <td class="hub-ellipsis">{{if $link}}<a class="hub-mono" href="/tx/{{.Txid}}">{{.Txid}}</a>{{else}}<span class="hub-mono">{{.Txid}}</span>{{end}}</td>
                             <td class="text-nowrap">{{unixTimeSpan .Blocktime}}</td>
                         </tr>
                         {{- end}}
@@ -78,7 +82,7 @@ fills the band figures and lays out everything below it. The status tables live 
                         {{- range .Blocks.Blocks}}
                         <tr>
                             <td>{{if $link}}<a class="hub-mono" href="/block/{{.Height}}">{{formatUint32 .Height}}</a>{{else}}<span class="hub-mono">{{formatUint32 .Height}}</span>{{end}}<div class="hub-muted">{{unixTimeSpan .Time}}</div></td>
-                            <td class="hub-mono ellipsis" style="max-width: 0; width: 100%">{{.Hash}}</td>
+                            <td class="hub-mono hub-ellipsis">{{.Hash}}</td>
                             <td class="text-nowrap">{{.Txs}} tx · {{formatUint32 .Size}} B</td>
                         </tr>
                         {{- end}}

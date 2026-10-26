@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func renderShell(t *testing.T, s Snapshot, extra map[string]interface{}) string {
@@ -173,7 +174,13 @@ func TestLongValuesRender(t *testing.T) {
 func renderHome(t *testing.T, s Snapshot, extra map[string]interface{}) string {
 	t.Helper()
 	format := func(v interface{}) string { return fmt.Sprint(v) }
-	funcs := template.FuncMap{"formatUint32": format, "formatInt": format, "unixTimeSpan": format, "timeSpan": format}
+	initials := func(name string) string {
+		for _, r := range strings.TrimSpace(name) {
+			return strings.ToUpper(string(r))
+		}
+		return ""
+	}
+	funcs := template.FuncMap{"formatUint32": format, "formatInt": format, "unixTimeSpan": format, "timeSpan": format, "initials": initials}
 	tmpl, err := template.New("base.html").Funcs(funcs).ParseFiles("../static/templates/base.html", "../static/templates/index.html")
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +219,7 @@ func TestHomeContentRendering(t *testing.T) {
 	html := renderHome(t, s, map[string]interface{}{"HomePrice": "$0.0237"})
 	for _, want := range []string{
 		`<div><dt>Price</dt><dd title="Exchange rates provided by Coingecko">$0.0237</dd></div>`, `<div><dt>Height</dt><dd>6315496</dd></div>`, `<div><dt>Mempool</dt><dd>0 tx</dd></div>`,
-		`<section class="hub-products-grid" aria-label="Zelcore products">`,
+		`<section class="hub-products-grid" aria-labelledby="hub-products-title">`, `<h2 class="hub-products-title" id="hub-products-title">Zelcore products</h2>`,
 		"&lt;script&gt;alert(1)", "&lt;script&gt;alert(2)", "&lt;script&gt;alert(3)",
 		`rel="sponsored noopener noreferrer"`, `referrerpolicy="no-referrer"`, `loading="lazy"`,
 		"Get the wallet", "Learn more",
@@ -258,6 +265,50 @@ func TestHomeEmptyContent(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %q", want)
 		}
+	}
+}
+
+func TestHomeProductInitials(t *testing.T) {
+	s := Snapshot{Products: []Product{
+		{ID: "elan", Name: "Élan wallet", TargetURL: "https://example.com/elan"},
+		{ID: "icon", Name: "Iconic", IconURL: "https://example.com/i.png", TargetURL: "https://example.com/icon"},
+	}}
+	html := renderHome(t, s, nil)
+	if !strings.Contains(html, `<span class="hub-product-icon" aria-hidden="true">É</span>`) {
+		t.Error("product without an icon must show its multibyte initial")
+	}
+	if !strings.Contains(html, `<span class="hub-product-icon" aria-hidden="true"><img src="https://example.com/i.png"`) {
+		t.Error("product with an icon must show the image")
+	}
+	if !utf8.ValidString(html) {
+		t.Error("rendered page is not valid UTF-8")
+	}
+}
+
+func TestHomeInitialSyncNotice(t *testing.T) {
+	notice := "Application is now in initial synchronization and does not provide any data."
+	info := map[string]interface{}{
+		"Blockbook": map[string]interface{}{"BestHeight": uint32(1), "MempoolSize": 0, "InSync": false, "InitialSync": true},
+		"Backend":   map[string]interface{}{"Version": "1"},
+	}
+	if html := renderHome(t, Snapshot{}, map[string]interface{}{"Info": info}); !strings.Contains(html, notice) {
+		t.Error("initial sync notice missing")
+	}
+	if html := renderHome(t, Snapshot{}, nil); strings.Contains(html, notice) {
+		t.Error("initial sync notice shown while synced")
+	}
+}
+
+func TestHomeTxsViewAll(t *testing.T) {
+	block := map[string]interface{}{"Height": uint32(42), "Transactions": []map[string]interface{}{{"Txid": "ab", "Blocktime": int64(1)}}}
+	html := renderHome(t, Snapshot{}, map[string]interface{}{"HomeTab": "txs", "Block": block})
+	if !strings.Contains(html, `<a class="hub-tabs-end" href="/block/42">View all</a>`) {
+		t.Error("View all must point at the block the list comes from")
+	}
+	mempool := map[string]interface{}{"Mempool": []map[string]interface{}{{"Txid": "cd", "Time": int64(1)}}}
+	html = renderHome(t, Snapshot{}, map[string]interface{}{"HomeTab": "txs", "MempoolTxids": mempool})
+	if !strings.Contains(html, `<a class="hub-tabs-end" href="/mempool">View all</a>`) || !strings.Contains(html, `href="/tx/cd"`) {
+		t.Error("View all must point at the mempool when the list comes from it")
 	}
 }
 

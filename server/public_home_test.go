@@ -57,7 +57,7 @@ func Test_PublicServer_HomeAndStatus(t *testing.T) {
 
 	blocksTab := `<nav class="hub-tabs" aria-label="Latest activity"><a href="/?tab=blocks" class="active" aria-current="page">Blocks</a><a href="/?tab=txs">Transactions</a><a class="hub-tabs-end" href="/blocks">View all</a></nav>`
 	newestBlockRow := `<tr><td><a class="hub-mono" href="/block/225494">225<span class="ns">494</span></a><div class="hub-muted">`
-	newestBlockHash := `<td class="hub-mono ellipsis" style="max-width: 0; width: 100%">00000000eb0443fd7dc4a1ed5c686a8e995057805f9a161d9a5a77a95e72b7b6</td><td class="text-nowrap">4 tx · 2<span class="ns">345</span><span class="ns">678</span> B</td></tr>`
+	newestBlockHash := `<td class="hub-mono hub-ellipsis">00000000eb0443fd7dc4a1ed5c686a8e995057805f9a161d9a5a77a95e72b7b6</td><td class="text-nowrap">4 tx · 2<span class="ns">345</span><span class="ns">678</span> B</td></tr>`
 
 	home := getHTML(t, ts.URL+"/")
 	checkHTML(t, "home", home, []string{
@@ -85,11 +85,29 @@ func Test_PublicServer_HomeAndStatus(t *testing.T) {
 
 	txs := getHTML(t, ts.URL+"/?tab=txs")
 	checkHTML(t, "txs tab", txs, []string{
-		`<nav class="hub-tabs" aria-label="Latest activity"><a href="/?tab=blocks">Blocks</a><a href="/?tab=txs" class="active" aria-current="page">Transactions</a><a class="hub-tabs-end" href="/mempool">View all</a></nav>`,
+		`<nav class="hub-tabs" aria-label="Latest activity"><a href="/?tab=blocks">Blocks</a><a href="/?tab=txs" class="active" aria-current="page">Transactions</a><a class="hub-tabs-end" href="/block/225494">View all</a></nav>`,
 		`The mempool is empty. Showing transactions from block <a href="/block/225494">225<span class="ns">494</span></a>.`,
 		`<a class="hub-mono" href="/tx/` + dbtestdata.TxidB2T1 + `">` + dbtestdata.TxidB2T1 + `</a>`,
 		`<a class="hub-mono" href="/tx/` + dbtestdata.TxidB2T2 + `">` + dbtestdata.TxidB2T2 + `</a>`,
-	}, []string{newestBlockHash})
+	}, []string{newestBlockHash, `href="/mempool">View all`})
+
+	// Each tab loads only its own list: the blocks tab never reads the mempool txids.
+	for _, c := range []struct {
+		url                    string
+		blocks, mempool, block bool
+	}{
+		{url: "/", blocks: true},
+		{url: "/?tab=blocks", blocks: true},
+		{url: "/?tab=txs", mempool: true, block: true},
+	} {
+		_, data, err := s.explorerIndex(httptest.NewRecorder(), httptest.NewRequest("GET", c.url, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (data.Blocks != nil) != c.blocks || (data.MempoolTxids != nil) != c.mempool || (data.Block != nil) != c.block {
+			t.Errorf("%s: loaded blocks=%v mempool=%v block=%v, want %v %v %v", c.url, data.Blocks != nil, data.MempoolTxids != nil, data.Block != nil, c.blocks, c.mempool, c.block)
+		}
+	}
 
 	bad := getHTML(t, ts.URL+"/?tab="+url.QueryEscape(`<script>alert(1)</script>`))
 	checkHTML(t, "bad tab", bad, []string{blocksTab, newestBlockRow}, []string{"alert(1)", "alert%281%29", "%3Cscript"})
@@ -155,5 +173,13 @@ func Test_homePrice(t *testing.T) {
 				t.Errorf("homePrice() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func Test_initials(t *testing.T) {
+	for name, want := range map[string]string{"Zelcore": "Z", "  ssp": "S", "élan": "É", "日本": "日", "": "", "   ": ""} {
+		if got := initials(name); got != want {
+			t.Errorf("initials(%q) = %q, want %q", name, got, want)
+		}
 	}
 }
