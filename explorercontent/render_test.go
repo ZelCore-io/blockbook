@@ -2,6 +2,7 @@ package explorercontent
 
 import (
 	"bytes"
+	"fmt"
 	"html/template"
 	"os"
 	"regexp"
@@ -164,5 +165,117 @@ func TestLongValuesRender(t *testing.T) {
 		if !strings.Contains(rule[1], "overflow-wrap: anywhere") {
 			t.Errorf("%s does not wrap long words", sel)
 		}
+	}
+}
+
+// renderHome renders base.html with index.html as the home page. The template functions are
+// stand-ins for the server's formatters, which live in a package that needs RocksDB.
+func renderHome(t *testing.T, s Snapshot, extra map[string]interface{}) string {
+	t.Helper()
+	format := func(v interface{}) string { return fmt.Sprint(v) }
+	funcs := template.FuncMap{"formatUint32": format, "formatInt": format, "unixTimeSpan": format, "timeSpan": format}
+	tmpl, err := template.New("base.html").Funcs(funcs).ParseFiles("../static/templates/base.html", "../static/templates/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := map[string]interface{}{
+		"Blockbook": map[string]interface{}{"BestHeight": uint32(6315496), "MempoolSize": 0, "InSync": true},
+		"Backend":   map[string]interface{}{"Difficulty": "60257.33", "Subversion": "/Groestlcoin:31.0.0/"},
+	}
+	blocks := map[string]interface{}{"Blocks": []map[string]interface{}{{"Height": uint32(6315496), "Hash": strings.Repeat("0", 64), "Time": int64(1), "Txs": 1, "Size": 249}}}
+	data := map[string]interface{}{"CoinLabel": "Groestlcoin", "CoinShortcut": "GRS", "InternalExplorer": true, "SourceURL": "https://github.com/ZelCore-io/blockbook", "TOSLink": "/terms", "ExplorerContent": s, "HomePage": true, "HomeTab": "blocks", "Info": info, "Blocks": blocks}
+	for k, v := range extra {
+		data[k] = v
+	}
+	var out bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&out, "base.html", data); err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
+}
+
+func TestHomeContentRendering(t *testing.T) {
+	now := time.Now().UTC()
+	s := sample(now)
+	s.Campaigns[0].Title = `<script>alert(1)</script>`
+	s.Articles = []Article{
+		{ID: "1", Source: "zelcore", Title: `<script>alert(2)</script>`, URL: "https://example.com/1", ThumbnailURL: "https://example.com/1.png", PublishedAt: "2026-10-15T08:00:00Z"},
+		{ID: "2", Source: "ssp", Title: "Kaspa is coming to SSP", URL: "https://example.com/2", PublishedAt: "2026-09-29T08:00:00Z"},
+		{ID: "3", Source: "zelcore", Title: "Third", URL: "https://example.com/3", PublishedAt: "2026-09-28T08:00:00Z"},
+		{ID: "4", Source: "zelcore", Title: "Fourth article", URL: "https://example.com/4", PublishedAt: "2026-09-27T08:00:00Z"},
+	}
+	s.Products = []Product{
+		{ID: "zelcore", Name: "Zelcore", Tagline: "Hold, send and swap GRS.", TargetURL: "https://zelcore.io", CTALabel: "Get the wallet"},
+		{ID: "ssp", Name: `<script>alert(3)</script>`, TargetURL: "https://sspwallet.io"},
+		{ID: "blank", TargetURL: "https://example.com/blank"},
+	}
+	html := renderHome(t, s, map[string]interface{}{"HomePrice": "$0.0237"})
+	for _, want := range []string{
+		`<div><dt>Price</dt><dd title="Exchange rates provided by Coingecko">$0.0237</dd></div>`, `<div><dt>Height</dt><dd>6315496</dd></div>`, `<div><dt>Mempool</dt><dd>0 tx</dd></div>`,
+		`<section class="hub-products-grid" aria-label="Zelcore products">`,
+		"&lt;script&gt;alert(1)", "&lt;script&gt;alert(2)", "&lt;script&gt;alert(3)",
+		`rel="sponsored noopener noreferrer"`, `referrerpolicy="no-referrer"`, `loading="lazy"`,
+		"Get the wallet", "Learn more",
+		"News from Zelcore and SSP", "Zelcore · ", `<time datetime="2026-10-15T08:00:00Z">2026-10-15</time>`, "SSP · ", "Kaspa is coming to SSP", "Third",
+		"<h2", "Network", "60257.33", "/Groestlcoin:31.0.0/", "Synced",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("home: missing %q", want)
+		}
+	}
+	if strings.Contains(html, "<script>alert") {
+		t.Error("home: unescaped injected markup")
+	}
+	if strings.Contains(html, "Fourth article") {
+		t.Error("home: more than 3 articles")
+	}
+	if strings.Contains(html, "https://example.com/blank") {
+		t.Error("home: product without a name renders")
+	}
+	if !within(html, "hub-campaign", "</a>", "Sponsored") || within(html, "hub-products", "</section>", "Sponsored") {
+		t.Error("home: the campaign, and only the campaign, is labelled Sponsored")
+	}
+	if strings.Count(html, `action="/search"`) != 1 {
+		t.Error("home: needs exactly one search form")
+	}
+	if strings.Index(html, "hub-campaign") > strings.Index(html, ">Network</h2>") {
+		t.Error("home: the campaign card comes before the Network card")
+	}
+}
+
+func TestHomeEmptyContent(t *testing.T) {
+	html := renderHome(t, Snapshot{}, nil)
+	for _, absent := range []string{"Zelcore products", "hub-products", "Sponsored", "hub-campaign", "News from Zelcore and SSP", "hub-articles", "<dt>Price</dt>"} {
+		if strings.Contains(html, absent) {
+			t.Errorf("empty content renders %q", absent)
+		}
+	}
+	unnamed := renderHome(t, Snapshot{Products: []Product{{ID: "x", TargetURL: "https://example.com/x"}}}, nil)
+	if strings.Contains(unnamed, "hub-products") {
+		t.Error("product strip renders with only unnamed products")
+	}
+	for _, want := range []string{"<h1>Explore Groestlcoin</h1>", ">Network</h2>", `href="/block/6315496"`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}
+
+func TestHomeLongProductValues(t *testing.T) {
+	name := strings.Repeat("N", 40)
+	tagline := strings.Repeat("T", 120)
+	html := renderHome(t, Snapshot{Products: []Product{{ID: "long", Name: name, Tagline: tagline, TargetURL: "https://example.com/long"}}}, nil)
+	for _, v := range []string{name, tagline} {
+		if !within(html, "hub-product\"", "</a>", v) {
+			t.Errorf("%d-char value not inside .hub-product", len(v))
+		}
+	}
+	css, err := os.ReadFile("../static/css/hub.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := regexp.MustCompile(`(?s)\n\.hub-product \{([^}]*)\}`).FindStringSubmatch(string(css))
+	if rule == nil || !strings.Contains(rule[1], "overflow-wrap: anywhere") || !strings.Contains(rule[1], "min-width: 0") {
+		t.Error(".hub-product must wrap long words and be allowed to shrink")
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"html"
 	"html/template"
 	"io"
+	"math"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -197,6 +198,7 @@ func (s *PublicServer) ConnectFullPublicInterface() {
 	_, path := splitBinding(s.binding)
 	// support for test pages
 	serveMux.Handle(publicPath(path, "test-websocket.html"), prefixedStaticFileServer(publicPath(path, "")))
+	serveMux.HandleFunc(path+"status", s.htmlTemplateHandler(s.explorerStatus))
 	if s.internalExplorer {
 		// internal explorer handlers
 		serveMux.HandleFunc(path+"tx/", s.htmlTemplateHandler(s.explorerTx))
@@ -544,6 +546,7 @@ const (
 	sendTransactionTpl
 	mempoolTpl
 	nftDetailTpl
+	statusTpl
 
 	publicTplCount
 )
@@ -551,7 +554,9 @@ const (
 // TemplateData is used to transfer data to the templates
 type TemplateData struct {
 	ExplorerContent          explorercontent.Snapshot
-	HomePage                 bool // index page: base.html renders the home band and skips the hubPage layout
+	HomePage                 bool   // index page: base.html renders the home band and skips the hubPage layout
+	HomeTab                  string // index page tab: "blocks" or "txs"
+	HomePrice                string // index page: formatted USD price, empty when the current ticker is missing or stale
 	CoinName                 string
 	CoinShortcut             string
 	CoinLabel                string
@@ -733,6 +738,7 @@ func (s *PublicServer) parseTemplates() []*template.Template {
 	t[errorTpl] = createTemplate("./static/templates/error.html", "./static/templates/base.html")
 	t[errorInternalTpl] = createTemplate("./static/templates/error.html", "./static/templates/base.html")
 	t[indexTpl] = createTemplate("./static/templates/index.html", "./static/templates/base.html")
+	t[statusTpl] = createTemplate("./static/templates/status.html", "./static/templates/base.html")
 	t[blocksTpl] = createTemplate("./static/templates/blocks.html", "./static/templates/paging.html", "./static/templates/base.html")
 	t[sendTransactionTpl] = createTemplate("./static/templates/sendtx.html", "./static/templates/base.html")
 	if s.chainParser.GetChainType() == bchain.ChainEthereumType {
@@ -1312,7 +1318,84 @@ func (s *PublicServer) explorerIndex(w http.ResponseWriter, r *http.Request) (tp
 	data := s.newTemplateData(r)
 	data.Info = si
 	data.HomePage = true
+	data.HomeTab = "blocks"
+	if r.URL.Query().Get("tab") == "txs" {
+		data.HomeTab = "txs"
+	}
+	data.HomePrice = homePrice(s.fiatRates.GetCurrentTicker("usd", ""), timeNow())
+	// The lists are best effort: the home page still renders when one of them is unavailable.
+	if data.Blocks, err = s.api.GetBlocks(1, homeItemsOnPage); err != nil {
+		glog.Error("explorerIndex GetBlocks: ", err)
+	}
+	if data.MempoolTxids, err = s.api.GetMempool(1, homeItemsOnPage); err != nil {
+		glog.Error("explorerIndex GetMempool: ", err)
+	}
+	if data.HomeTab == "txs" && (data.MempoolTxids == nil || len(data.MempoolTxids.Mempool) == 0) {
+		if data.Block, err = s.api.GetBlock(strconv.FormatUint(uint64(si.Blockbook.BestHeight), 10), 1, homeItemsOnPage); err != nil {
+			glog.Error("explorerIndex GetBlock: ", err)
+		}
+	}
 	return indexTpl, data, nil
+}
+
+// homeItemsOnPage is the number of blocks or transactions listed on the home page.
+const homeItemsOnPage = 8
+
+// homePriceMaxAge is how old the current fiat ticker may be for the home page to show a price.
+const homePriceMaxAge = 2 * time.Hour
+
+// homePrice returns the USD price for the home page, or "" when the ticker is missing,
+// has no USD rate, or is older than homePriceMaxAge.
+func homePrice(ticker *common.CurrencyRatesTicker, now time.Time) string {
+	if ticker == nil || now.Sub(ticker.Timestamp) > homePriceMaxAge {
+		return ""
+	}
+	return formatUSDPrice(float64(ticker.Rates["usd"]))
+}
+
+// formatUSDPrice formats a USD price with two decimals, or with three significant digits
+// for prices below one cent ($0.0237), and with thousands separators ($64,123.45).
+func formatUSDPrice(rate float64) string {
+	if !(rate > 0) || math.IsInf(rate, 0) {
+		return ""
+	}
+	decimals := 2
+	if d := 2 - int(math.Floor(math.Log10(rate))); d > decimals {
+		decimals = d
+	}
+	if decimals > 12 {
+		decimals = 12
+	}
+	s := strconv.FormatFloat(rate, 'f', decimals, 64)
+	intPart, frac, _ := strings.Cut(s, ".")
+	if len(frac) > 2 {
+		frac = strings.TrimRight(frac, "0")
+		for len(frac) < 2 {
+			frac += "0"
+		}
+	}
+	var b strings.Builder
+	b.WriteByte('$')
+	for i, c := range intPart {
+		if i > 0 && (len(intPart)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(c)
+	}
+	b.WriteByte('.')
+	b.WriteString(frac)
+	return b.String()
+}
+
+func (s *PublicServer) explorerStatus(w http.ResponseWriter, r *http.Request) (tpl, *TemplateData, error) {
+	s.metrics.ExplorerViews.With(common.Labels{"action": "status"}).Inc()
+	si, err := s.api.GetSystemInfo(false)
+	if err != nil {
+		return errorTpl, nil, err
+	}
+	data := s.newTemplateData(r)
+	data.Info = si
+	return statusTpl, data, nil
 }
 
 func (s *PublicServer) explorerSearch(w http.ResponseWriter, r *http.Request) (tpl, *TemplateData, error) {
