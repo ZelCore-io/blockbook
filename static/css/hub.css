@@ -865,7 +865,10 @@
     outline-offset: 2px;
 }
 
-/* On the colored band and the dark footer the ring is white. */
+/* On the colored band and the dark footer the ring is white. This sets the full outline
+   shorthand. Keep the declarations of the rules in this section distinct: csso merges
+   rules with identical declarations and can move one past a more specific rule, which
+   breaks the cascade in hub.min.6.css. */
 .hub-page .hub-band a:focus-visible,
 .hub-page .hub-band button:focus-visible,
 .hub-page .hub-band select:focus-visible,
@@ -874,19 +877,21 @@
 .hub-page .hub-footer button:focus-visible,
 .hub-page .hub-footer select:focus-visible,
 .hub-page .hub-footer summary:focus-visible {
-    outline-color: #FFFFFF;
+    outline: 2px solid #FFFFFF;
+    outline-offset: 2px;
 }
 
-/* The search box is white, so its controls keep the link-colored ring. The input ring is
-   drawn inside its edge so it stays on white in the compact (unpadded) nav search too. */
+/* The search box is white. The input gets a link-colored ring and the dark button a white
+   ring, both drawn inside their edges, so they stay visible in the compact (unpadded) nav
+   search too. */
 .hub-page .hub-search input:focus-visible {
     outline: 2px solid var(--hub-link);
     outline-offset: -2px;
 }
 
 .hub-page .hub-search button:focus-visible {
-    outline: 2px solid var(--hub-link);
-    outline-offset: 2px;
+    outline: 2px solid #FFFFFF;
+    outline-offset: -4px;
 }
 
 /* ---------- Narrow screens ---------- */
