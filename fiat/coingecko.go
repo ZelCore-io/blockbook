@@ -1063,6 +1063,82 @@ func (cg *Coingecko) UpdateHistoricalTickers() error {
 	return nil
 }
 
+// BackfillHistoricalTickers is the opt-in, one-time full-history backfill of the base coin
+// (fiat_rates_params.backfillHistory). For every tracked vsCurrency it fetches the whole daily
+// series (days=max) from the bootstrap URL and writes only the days that have no record in the
+// DB; existing records are never rewritten. Tokens are out of scope. Persistence is
+// all-or-nothing: if any currency fails, nothing is stored, so a day can never be marked present
+// while still missing the currencies of the failed requests. Returns the number of filled days
+// per currency.
+func (cg *Coingecko) BackfillHistoricalTickers() (map[string]int, error) {
+	ctx := context.Background()
+	cg.cacheMu.Lock()
+	vs := cg.vsCurrencies
+	cg.cacheMu.Unlock()
+	if vs == nil {
+		var err error
+		if vs, err = cg.simpleSupportedVSCurrenciesAt(ctx, cg.metadataURL(), priorityLow); err != nil {
+			return nil, err
+		}
+		cg.cacheMu.Lock()
+		cg.vsCurrencies = vs
+		cg.cacheMu.Unlock()
+	}
+
+	timestamps, err := cg.db.FiatRatesGetTickerTimestamps(time.Unix(0, 0))
+	if err != nil {
+		return nil, err
+	}
+	present := make(map[uint]struct{}, len(timestamps))
+	for _, ts := range timestamps {
+		present[uint(ts)] = struct{}{}
+	}
+
+	baseURL := cg.sourceURLForRange(coingeckoRangeHistorical)
+	tickersToUpdate := make(map[uint]*common.CurrencyRatesTicker)
+	filled := make(map[string]int, len(vs))
+	failed := 0
+	for _, currency := range vs {
+		mc, err := cg.coinMarketChartAt(ctx, baseURL, cg.coin, currency, "max", true, priorityLow)
+		if err != nil {
+			failed++
+			glog.Errorf("FiatRates backfill: fetch %s/%s failed: %v", cg.coin, currency, err)
+			if isCoingeckoCloudflareBanError(err) {
+				return nil, err
+			}
+			continue
+		}
+		missing := make(map[uint]struct{})
+		for _, p := range mc.Prices {
+			ts := uint(p[0])
+			if ts > 100000000000 {
+				ts /= 1000
+			}
+			if _, ok := present[ts]; !ok {
+				missing[ts] = struct{}{}
+			}
+		}
+		written, _, err := cg.fillFromMarketChart(tickersToUpdate, mc, currency, "", true, missing)
+		if err != nil {
+			return nil, fmt.Errorf("backfill: fill %s/%s: %w", cg.coin, currency, err)
+		}
+		filled[currency] = written
+		glog.Infof("FiatRates backfill: %s/%s filled %d missing day(s)", cg.coin, currency, written)
+	}
+	if failed > 0 {
+		return nil, fmt.Errorf("coingecko historical backfill incomplete: %d of %d currency fetches failed", failed, len(vs))
+	}
+	if err := cg.storeTickers(tickersToUpdate); err != nil {
+		return nil, err
+	}
+	total := 0
+	for _, n := range filled {
+		total += n
+	}
+	cg.observeFetchedUnits(fiatPhaseBackfill, total)
+	return filled, nil
+}
+
 // UpdateHistoricalTokenTickers gets historical tickers for the tokens
 func (cg *Coingecko) UpdateHistoricalTokenTickers() error {
 	cg.reqMu.Lock()

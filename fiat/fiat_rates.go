@@ -38,6 +38,7 @@ type RatesDownloaderInterface interface {
 	UpdateHistoricalTickers() error
 	UpdateHistoricalTokenTickers() error
 	ReconcileHistoricalRates(ctx context.Context, windowDays int, maxGapDays int) (int, error)
+	BackfillHistoricalTickers() (map[string]int, error)
 }
 
 const (
@@ -64,6 +65,7 @@ type FiatRates struct {
 	downloadTokens         bool
 	reconcileAtStartup     bool
 	reconcileMaxDuration   time.Duration
+	backfillHistory        bool
 	provider               string
 	allowedVsCurrencies    string
 	mux                    sync.RWMutex
@@ -105,6 +107,9 @@ func NewFiatRates(db *db.RocksDB, config *common.Config, metrics *common.Metrics
 		PeriodSeconds      int64  `json:"periodSeconds"`
 		Plan               string `json:"plan"`
 		TipURL             string `json:"tipUrl"`
+		// BackfillHistory opts in to a one-time, non-destructive full-history (days=max) backfill
+		// of the missing daily rates; a DB marker makes it run only once per DB.
+		BackfillHistory bool `json:"backfillHistory"`
 		// ReconcileHistoricalAtStartup toggles the blocking startup self-healing pass that
 		// repairs missing historical rates. Absent (nil) means enabled; set false to disable.
 		ReconcileHistoricalAtStartup *bool `json:"reconcileHistoricalAtStartup"`
@@ -131,6 +136,7 @@ func NewFiatRates(db *db.RocksDB, config *common.Config, metrics *common.Metrics
 	fr.downloadTokens = rdParams.PlatformIdentifier != "" && rdParams.PlatformVsCurrency != ""
 	fr.reconcileAtStartup = rdParams.ReconcileHistoricalAtStartup == nil || *rdParams.ReconcileHistoricalAtStartup
 	fr.reconcileMaxDuration = defaultReconcileMaxDuration
+	fr.backfillHistory = rdParams.BackfillHistory
 	if rdParams.ReconcileHistoricalMaxMinutes != nil && *rdParams.ReconcileHistoricalMaxMinutes > 0 {
 		fr.reconcileMaxDuration = time.Duration(*rdParams.ReconcileHistoricalMaxMinutes) * time.Minute
 	}
@@ -706,6 +712,10 @@ func (fr *FiatRates) runHistoricalCycle(is *common.InternalState) (done bool, ba
 	}
 
 	fr.observeUpdateDuration("historical_tickers", "success", historicalTickersStart)
+	if fr.backfillHistory && !bootstrapInProgress {
+		// runs before loadDailyTickers so the cache refresh below picks up the backfilled days
+		fr.runHistoricalBackfillIfDue()
+	}
 	loadDailyTickersStart := time.Now()
 	if err = fr.loadDailyTickers(); err != nil {
 		fr.observeUpdateDuration("load_daily_tickers", "error", loadDailyTickersStart)
@@ -779,4 +789,44 @@ func (fr *FiatRates) runHistoricalCycle(is *common.InternalState) (done bool, ba
 	}
 
 	return cycleSuccessful, banned
+}
+
+// runHistoricalBackfillIfDue runs the opt-in one-time full-history backfill unless the DB marker
+// says it already finished. Failures are counted; after maxHistoricalBackfillAttempts failed
+// runs the marker is set anyway so the backfill is not retried forever. Its outcome does not
+// affect the daily historical cycle.
+func (fr *FiatRates) runHistoricalBackfillIfDue() {
+	done, err := fr.db.FiatRatesGetHistoricalBackfillDone()
+	if err != nil {
+		glog.Error("FiatRatesDownloader: backfill state check error ", err)
+		return
+	}
+	if done {
+		return
+	}
+	glog.Info("FiatRatesDownloader: starting one-time full-history backfill")
+	start := time.Now()
+	filled, err := fr.downloader.BackfillHistoricalTickers()
+	if err != nil {
+		fr.observeUpdateDuration("historical_backfill", "error", start)
+		attempts, exhausted, attemptsErr := registerHistoricalBackfillAttemptFailure(fr.db)
+		if attemptsErr != nil {
+			glog.Error("FiatRatesDownloader: recording backfill attempt failure failed ", attemptsErr)
+		} else if exhausted {
+			glog.Warningf("FiatRatesDownloader: full-history backfill failed %d/%d times, giving up: %v", attempts, maxHistoricalBackfillAttempts, err)
+		} else {
+			glog.Warningf("FiatRatesDownloader: full-history backfill attempt %d/%d failed, will retry: %v", attempts, maxHistoricalBackfillAttempts, err)
+		}
+		return
+	}
+	fr.observeUpdateDuration("historical_backfill", "success", start)
+	if err := fr.db.FiatRatesSetHistoricalBackfillDone(true); err != nil {
+		glog.Error("FiatRatesDownloader: setting backfill done marker failed ", err)
+		return
+	}
+	total := 0
+	for _, n := range filled {
+		total += n
+	}
+	glog.Infof("FiatRatesDownloader: full-history backfill finished in %v, filled %d point(s) across %d currencies", time.Since(start), total, len(filled))
 }
