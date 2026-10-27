@@ -169,3 +169,7 @@
 </aside>
 {{- end}}
 {{- end}}
+
+{{- /* e: per-row copy buttons for the (truncated) addresses and txids inside transaction lists. They are shown on touch screens only (hub.css); the one-argument templates take the text to copy. */ -}}
+{{- define "hubIOCopy"}}<button type="button" class="hub-copy hub-io-copy" data-copy="{{.}}" aria-label="Copy address"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>{{end -}}
+{{- define "hubTxCopy"}}<button type="button" class="hub-copy hub-io-copy" data-copy="{{.}}" aria-label="Copy transaction ID"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>{{end -}}

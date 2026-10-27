@@ -1912,6 +1912,13 @@ func Test_PublicServer_OpenAPIDocs(t *testing.T) {
 	if v := resp.Header.Get("X-Content-Type-Options"); v != "nosniff" {
 		t.Fatalf("X-Content-Type-Options = %q, want nosniff", v)
 	}
+	docsBody, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(docsBody), `<a class="docs-back" href="/">`) || !strings.Contains(string(docsBody), "Fake Coin Explorer") {
+		t.Fatalf("/api-docs/ lacks the back link to the explorer: %s", docsBody)
+	}
+	if strings.Contains(string(docsBody), "__COIN_LABEL__") || strings.Contains(string(docsBody), "__HOME_URL__") || strings.Contains(string(docsBody), "__BAND_COLOR__") {
+		t.Fatalf("/api-docs/ left a placeholder unfilled")
+	}
 
 	for _, p := range []string{"/api-docs/openapi.yaml", "/openapi.yaml"} {
 		r := get(p)
@@ -2967,5 +2974,14 @@ func Test_countCommaSeparatedValues(t *testing.T) {
 				t.Errorf("countCommaSeparatedValues(%q, %d) = %d, want %d", tt.value, tt.limit, got, tt.want)
 			}
 		})
+	}
+}
+
+func Test_renderAPIDocsPage(t *testing.T) {
+	body := []byte(`<body style="--hub-band: __BAND_COLOR__"><a class="docs-back" href="__HOME_URL__">__COIN_LABEL__ Explorer</a>`)
+	got := string(renderAPIDocsPage(body, `Coin <b>&"`, "/x/", "#112233"))
+	want := `<body style="--hub-band: #112233"><a class="docs-back" href="/x/">Coin &lt;b&gt;&amp;&#34; Explorer</a>`
+	if got != want {
+		t.Errorf("renderAPIDocsPage() = %s, want %s", got, want)
 	}
 }
