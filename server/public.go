@@ -363,7 +363,7 @@ func (s *PublicServer) apiDocsHandler(basePath string) http.HandlerFunc {
 			}
 			http.Redirect(w, r, docsPath+"/", http.StatusMovedPermanently)
 		case docsPath + "/":
-			s.serveAPIDocs(w, r)
+			s.serveAPIDocs(w, r, basePath)
 		case specPath:
 			s.openAPISpecHandler(w, r)
 		default:
@@ -373,14 +373,34 @@ func (s *PublicServer) apiDocsHandler(basePath string) http.HandlerFunc {
 	}
 }
 
-func (s *PublicServer) serveAPIDocs(w http.ResponseWriter, r *http.Request) {
+func (s *PublicServer) serveAPIDocs(w http.ResponseWriter, r *http.Request, basePath string) {
 	if !allowGetOrHead(w, r) {
 		return
 	}
 	if s.metrics != nil {
 		s.metrics.ExplorerViews.With(common.Labels{"action": "api-docs"}).Inc()
 	}
-	serveStaticContent(w, r, apiDocsIndexFile, "text/html; charset=utf-8", true)
+	label := strings.TrimSpace(s.is.CoinLabel)
+	if label == "" {
+		label = s.is.Coin
+	}
+	color := "#2B61D1"
+	if s.content != nil {
+		color = s.content.Snapshot(time.Now()).ThemeColor()
+	}
+	serveStaticContent(w, r, apiDocsIndexFile, "text/html; charset=utf-8", true, func(body []byte) []byte {
+		return renderAPIDocsPage(body, label, publicPath(basePath, ""), color)
+	})
+}
+
+// renderAPIDocsPage fills the coin label, the explorer home link and the band colour into the
+// static Swagger page, so its "back to the explorer" bar follows the configured coin.
+func renderAPIDocsPage(body []byte, coinLabel, homeURL, bandColor string) []byte {
+	return []byte(strings.NewReplacer(
+		"__COIN_LABEL__", html.EscapeString(coinLabel),
+		"__HOME_URL__", html.EscapeString(homeURL),
+		"__BAND_COLOR__", html.EscapeString(bandColor),
+	).Replace(string(body)))
 }
 
 func (s *PublicServer) openAPISpecHandler(w http.ResponseWriter, r *http.Request) {
@@ -390,16 +410,19 @@ func (s *PublicServer) openAPISpecHandler(w http.ResponseWriter, r *http.Request
 	if s.metrics != nil {
 		s.metrics.ExplorerViews.With(common.Labels{"action": "openapi-spec"}).Inc()
 	}
-	serveStaticContent(w, r, openAPIFile, "application/yaml; charset=utf-8", false)
+	serveStaticContent(w, r, openAPIFile, "application/yaml; charset=utf-8", false, nil)
 }
 
-func serveStaticContent(w http.ResponseWriter, r *http.Request, filename string, contentType string, allowSwaggerAssets bool) {
+func serveStaticContent(w http.ResponseWriter, r *http.Request, filename string, contentType string, allowSwaggerAssets bool, transform func([]byte) []byte) {
 	body, err := os.ReadFile(filename)
 	if err != nil {
 		glog.Errorf("serve %s: %v", filename, err)
 		setOpenAPISecurityHeaders(w, "text/plain; charset=utf-8", allowSwaggerAssets)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
+	}
+	if transform != nil {
+		body = transform(body)
 	}
 
 	setOpenAPISecurityHeaders(w, contentType, allowSwaggerAssets)

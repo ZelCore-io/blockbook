@@ -1290,6 +1290,122 @@
     font-family: var(--hub-font-mono);
 }
 
+/* e: on phones the card-in-card doubled the side padding (about 56px) and forced the addresses to
+   truncate early: the inner box loses its frame and side padding, a hairline separates transactions. */
+@media (max-width: 575.98px) {
+    .hub-card .tx-detail {
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+    }
+
+    .hub-card .tx-detail + .tx-detail {
+        margin-top: 0;
+        border-top: 1px solid var(--hub-line);
+    }
+
+    .hub-card .tx-detail > .head,
+    .hub-card .tx-detail > .body,
+    .hub-card .tx-detail > .footer,
+    .hub-card .tx-detail > .subhead,
+    .hub-card .tx-detail > .subhead-2 {
+        padding-left: 0;
+        padding-right: 0;
+    }
+
+    .hub-card .tx-in .col-12,
+    .hub-card .tx-out .col-12,
+    .hub-card .tx-addr .col-12 {
+        padding-left: 0.6rem;
+        padding-right: 0.6rem;
+        background-color: var(--hub-surface);
+    }
+}
+
+/* e: copy buttons for truncated addresses and txids in transaction lists. The wrapper is
+   transparent on mouse-and-keyboard screens, where the upstream hover icon still works; there the
+   button stays out of sight until it is reached with the keyboard. */
+.hub-io-id {
+    display: contents;
+}
+
+.hub-io-copy {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.hub-io-copy:focus-visible {
+    position: static;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    margin: 0;
+    overflow: visible;
+    clip-path: none;
+}
+
+/* e: on touch screens the address/txid stays one tap from its copy button: the pair is a flex row
+   (text takes the rest of the width and ellipsizes), the amounts wrap onto the next line. */
+@media (hover: none), (pointer: coarse) {
+    .tx-detail .tx-in .col-12,
+    .tx-detail .tx-out .col-12 {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0 8px;
+        padding-top: 0.4rem;
+        padding-bottom: 0.7rem;
+    }
+
+    .tx-detail .hub-io-id {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex: 1 1 100%;
+        min-width: 0;
+    }
+
+    .tx-detail .hub-io-id .ellipsis {
+        float: none;
+        flex: 0 1 auto;
+        min-width: 0;
+        max-width: calc(100% - 48px);
+    }
+
+    .tx-detail .hub-io-id .hub-io-copy {
+        position: static;
+        flex: none;
+        width: 44px;
+        height: 44px;
+        min-width: 44px;
+        min-height: 44px;
+        margin: 0;
+        padding: 0;
+        overflow: visible;
+        clip-path: none;
+        border-color: var(--hub-line-strong);
+    }
+
+    .tx-detail .tx-in .col-12 > .tx-amt,
+    .tx-detail .tx-out .col-12 > .tx-amt {
+        float: none !important;
+        margin-left: auto;
+    }
+
+    .tx-detail > .head > div:first-child {
+        width: 100%;
+    }
+}
+
 /* Bootstrap badges never wrap; the unconfirmed tx's "confirmation estimated in ..." badge is
    wider than a 360 px card, so that badge may wrap. */
 .hub-card .tx-detail .badge.bg-info {
@@ -1327,6 +1443,18 @@
 .hub-raw-body pre {
     margin-top: 12px;
     max-height: 480px;
+}
+
+/* e: upstream sets .json to "smaller" and the pre inside it to 0.875em, which compounds to 9px on
+   the raw transaction (Bitcoin-type and Ethereum-type pages); keep it readable */
+.hub-page .json {
+    font-size: 13px;
+}
+
+.hub-page .json #raw {
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 12px 14px;
 }
 
 .hub-error-text {

@@ -608,7 +608,7 @@ window.addEventListener("DOMContentLoaded", () => {
         const text = b.getAttribute("data-copy");
         const done = (ok) => {
           if (!ok) {
-            const id = b.closest(".hub-summary")?.querySelector(".hub-summary-id");
+            const id = b.closest(".hub-summary")?.querySelector(".hub-summary-id") || b.previousElementSibling;
             if (id) {
               const range = document.createRange();
               range.selectNodeContents(id);

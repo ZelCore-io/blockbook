@@ -1,0 +1,94 @@
+/* e: API docs page: back bar to the explorer, readable badges, touch-sized operations */
+body {
+    margin: 0;
+    font-family: "Open Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+}
+
+.docs-bar {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    background: var(--hub-band, #2B61D1);
+    padding: 0 16px;
+}
+
+.docs-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    color: #fff;
+    font-family: "Montserrat", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+    font-weight: 600;
+    font-size: 15px;
+    text-decoration: none;
+}
+
+.docs-back:hover,
+.docs-back:focus-visible {
+    text-decoration: underline;
+}
+
+/* GET badge: white on #61affe is 2.3:1, this blue is above 4.5:1 */
+.swagger-ui .opblock.opblock-get .opblock-summary-method,
+.swagger-ui .opblock.opblock-get .tab-header .tab-item.active h4 span::after {
+    background: #1b5fbf;
+}
+
+.swagger-ui .info .title small,
+.swagger-ui .info .title small.version-stamp {
+    background: #4a4a4a;
+}
+
+.swagger-ui .info .title small pre {
+    color: #fff;
+}
+
+.swagger-ui .opblock .opblock-summary {
+    min-height: 44px;
+}
+
+.swagger-ui .opblock .opblock-summary-control {
+    min-height: 44px;
+}
+
+.swagger-ui .model-box,
+.swagger-ui section.models .model-container,
+.swagger-ui .model-box-control,
+.swagger-ui .opblock-body pre.microlight {
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.swagger-ui .model,
+.swagger-ui .opblock-body pre.microlight {
+    overflow-x: auto;
+    overflow-wrap: anywhere;
+}
+
+.swagger-ui .servers > label,
+.swagger-ui .servers > label select {
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+/* swagger gives the label a 15px right margin that pushes the schemes box past its container */
+.swagger-ui .servers > label {
+    margin-right: 0;
+}
+
+.swagger-ui .opblock-tag-section,
+.swagger-ui .schemes-server-container {
+    max-width: 100%;
+}
+
+@media (max-width: 575.98px) {
+    .swagger-ui .wrapper {
+        padding: 0 12px;
+    }
+
+    .swagger-ui .opblock .opblock-summary-path {
+        overflow-wrap: anywhere;
+    }
+}
