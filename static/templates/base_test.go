@@ -117,6 +117,17 @@ func TestShellThemeAndIcon(t *testing.T) {
 	}
 }
 
+func TestShellFavicon(t *testing.T) {
+	content := explorercontent.Snapshot{Products: []explorercontent.Product{{ID: "zelcore", Name: "Zelcore", IconURL: "https://cdn.example.com/zelcore.png"}}}
+	head := strings.Split(renderShell(t, map[string]any{"ExplorerContent": content}), "</head>")[0]
+	if !strings.Contains(head, `<link rel="icon" href="https://cdn.example.com/zelcore.png">`) {
+		t.Error("head misses the Zelcore icon link")
+	}
+	if strings.Contains(renderShell(t, map[string]any{}), `rel="icon"`) {
+		t.Error("empty content renders an icon link")
+	}
+}
+
 func TestShellBandKind(t *testing.T) {
 	inner := renderShell(t, map[string]any{"HomePage": false})
 	home := renderShell(t, map[string]any{"HomePage": true})

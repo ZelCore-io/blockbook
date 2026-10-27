@@ -13,6 +13,9 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="description" content="{{.CoinLabel}} Explorer">
     <title>{{.CoinLabel}} Explorer</title>
+    {{- /* No favicon file ships with the fork; the icon comes from the feed's Zelcore product. */}}
+    {{- with .ExplorerContent.ZelcoreProduct}}{{with .IconURL}}
+    <link rel="icon" href="{{.}}">{{end}}{{end}}
 </head>
 
 <body class="hub-page">
