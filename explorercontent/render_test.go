@@ -570,7 +570,7 @@ func TestHomeProductCarouselAssets(t *testing.T) {
 	// hover; the strip fades at its edges only in carousel mode.
 	for _, want := range []string{
 		".hub-products-nav-pair {", ".hub-products-nav-on .hub-products-title {", "width: 44px;",
-		".hub-products-strip.hub-products-carousel {\n    -webkit-mask-image: linear-gradient(90deg",
+		".hub-products-strip.hub-products-carousel {\n    padding-inline: 16px;\n    scroll-padding-inline: 16px;\n    -webkit-mask-image: linear-gradient(90deg",
 	} {
 		if !strings.Contains(string(css), want) {
 			t.Errorf("hub.css misses the carousel touch/fade rule %q", want)
