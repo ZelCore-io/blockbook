@@ -597,3 +597,26 @@ func TestHomeProductCarouselAssets(t *testing.T) {
 		}
 	}
 }
+
+// main.js switches between the coin and the secondary currency by editing the .prim-amt and
+// .sec-amt rules of main.min.N.css by exact selector text (changeCSSStyle). A restructuring
+// minifier merges .sec-amt into a ".base-amt,.cbase-amt,.csec-amt,.sec-amt" rule, and the switch
+// then hides every amount. It also needs the default secondary_coin cookie code.
+func TestMainAssetsCurrencySwitch(t *testing.T) {
+	css, err := os.ReadFile("../static/css/main.min.8.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range []string{"}.prim-amt{display:initial}", "}.sec-amt{display:none}"} {
+		if !strings.Contains(string(css), rule) {
+			t.Errorf("main.min.8.css must keep the stand-alone rule %q (build it with csso --no-restructure)", rule[1:])
+		}
+	}
+	js, err := os.ReadFile("../static/js/main.min.8.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(js), "secondaryCoinDefault") {
+		t.Error("main.min.8.js is not rebuilt with the default secondary_coin cookie")
+	}
+}
