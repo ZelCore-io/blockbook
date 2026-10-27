@@ -4,7 +4,9 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"math/big"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -316,6 +318,23 @@ func Test_PublicServer_PageHead(t *testing.T) {
 	defer ts.Close()
 
 	head := func(u string) string { return strings.Split(getHTML(t, ts.URL+u), "</head>")[0] }
+	// a search without results is a 404 error page (see public_seo.go)
+	head404 := func(u string) string {
+		t.Helper()
+		resp, err := http.DefaultClient.Do(newGetRequest(ts.URL + u))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("GET %s: status %d, want 404", u, resp.StatusCode)
+		}
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Split(string(b), "</head>")[0]
+	}
 
 	block := head("/block/225494")
 	checkHTML(t, "block without public URL", block, []string{
@@ -347,7 +366,7 @@ func Test_PublicServer_PageHead(t *testing.T) {
 	}, nil)
 
 	checkHTML(t, "sendtx", head("/sendtx"), []string{`<meta name="robots" content="noindex,follow">`, `<title>Send a raw Fake Coin transaction</title>`}, nil)
-	checkHTML(t, "search", head("/search?q=%3C%2Fscript%3Exx"), []string{`<meta name="robots" content="noindex`, `<title>No matching records found for &#39;&lt;/script&gt;xx&#39; · Fake Coin Explorer</title>`}, []string{`rel="canonical"`, `</script>xx`})
+	checkHTML(t, "search", head404("/search?q=%3C%2Fscript%3Exx"), []string{`<meta name="robots" content="noindex`, `<title>No matching records found for &#39;&lt;/script&gt;xx&#39; · Fake Coin Explorer</title>`}, []string{`rel="canonical"`, `</script>xx`})
 	checkHTML(t, "status", head("/status"), []string{`<link rel="canonical" href="https://explorer.example.com/status">`, `<title>Fake Coin Explorer status</title>`}, nil)
 	checkHTML(t, "blocks", head("/blocks"), []string{`<link rel="canonical" href="https://explorer.example.com/blocks">`}, nil)
 	checkHTML(t, "mempool", head("/mempool"), []string{`<link rel="canonical" href="https://explorer.example.com/mempool">`}, nil)
