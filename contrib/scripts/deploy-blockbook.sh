@@ -103,6 +103,9 @@ v = d.get("backend", {}).get("blocks") if k == "backendBlocks" else d.get("block
 print("" if v is None else str(v).lower() if isinstance(v, bool) else v)' "$1" "$2" 2>/dev/null || true
 }
 
+# Digits only: values from the API port or systemctl never reach bash arithmetic unchecked.
+num() { if [[ $1 =~ ^[0-9]{1,12}$ ]]; then echo "$((10#$1))"; else echo 0; fi; }
+
 # 1. Capabilities
 mem_total=$(awk '$1=="MemTotal:" {print int($2/1024)}' /proc/meminfo)
 mem_avail=$(awk '$1=="MemAvailable:" {print int($2/1024)}' /proc/meminfo)
@@ -136,14 +139,14 @@ installed_version=$(dpkg-query -W -f='${Version}' "$package")
 pre_json=$(api_get /api/ || true)
 pre_commit=$(api_field "$pre_json" gitCommit)
 pre_height=$(api_field "$pre_json" bestHeight)
-pre_restarts=$(systemctl show -p NRestarts --value "$service")
+pre_restarts=$(num "$(systemctl show -p NRestarts --value "$service")")
 log "Installed: $package $installed_version, service $(systemctl is-active "$service" || true)"
 if [[ -n $pre_json ]]; then
     log "Running: version $(api_field "$pre_json" version), commit ${pre_commit:0:12}, height $pre_height, inSync $(api_field "$pre_json" inSync)"
 else
     log "Running: API on port $port_public not reachable; height check after install is skipped."
 fi
-pre_height=${pre_height:-0}
+pre_height=$(num "$pre_height")
 
 if (( check_only )); then
     log 'Check only: nothing changed.'
@@ -238,20 +241,21 @@ log "Running commit ${post_commit:0:12}, version $(api_field "$post_json" versio
 
 log "Waiting up to ${sync_timeout}s for inSync at height >= $pre_height"
 synced=0
+height=0
 for ((waited = 0; waited < sync_timeout; waited += 15)); do
     systemctl is-active --quiet "$service" || verify_failed 'service stopped while syncing'
     post_json=$(api_get /api/ || true)
-    height=$(api_field "$post_json" bestHeight)
-    if [[ $(api_field "$post_json" inSync) == true && ${height:-0} -ge $pre_height ]]; then
+    height=$(num "$(api_field "$post_json" bestHeight)")
+    if [[ $(api_field "$post_json" inSync) == true ]] && (( height >= pre_height )); then
         synced=1
         break
     fi
     sleep 15
 done
-(( synced )) || verify_failed "not in sync at height >= $pre_height after ${sync_timeout}s (now ${height:-unknown})"
+(( synced )) || verify_failed "not in sync at height >= $pre_height after ${sync_timeout}s (now $height)"
 log "In sync at height $height (backend $(api_field "$post_json" backendBlocks))"
 
-restarts=$(systemctl show -p NRestarts --value "$service")
+restarts=$(num "$(systemctl show -p NRestarts --value "$service")")
 [[ $restarts == "$pre_restarts" ]] || verify_failed "service restarted $((restarts - pre_restarts)) times"
 
 home=$(api_get / || true)
