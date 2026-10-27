@@ -44,7 +44,7 @@ previous/next buttons on top of the same scrolling row. */ -}}
             {{- if eq .HomeTab "txs"}}
             {{- if and .MempoolTxids .MempoolTxids.Mempool}}
             <div class="hub-scroll">
-                <table>
+                <table class="hub-linkrows">
                     <tbody>
                         {{- range .MempoolTxids.Mempool}}
                         <tr>
@@ -58,7 +58,7 @@ previous/next buttons on top of the same scrolling row. */ -}}
             {{- else if and .Block .Block.Transactions}}
             <p class="hub-muted px-3 pt-3 mb-0">The mempool is empty. Showing transactions from block {{if $link}}<a href="/block/{{.Block.Height}}">{{formatUint32 .Block.Height}}</a>{{else}}{{formatUint32 .Block.Height}}{{end}}.</p>
             <div class="hub-scroll">
-                <table>
+                <table class="hub-linkrows">
                     <tbody>
                         {{- range .Block.Transactions}}
                         <tr>
@@ -75,7 +75,7 @@ previous/next buttons on top of the same scrolling row. */ -}}
             {{- else}}
             {{- if and .Blocks .Blocks.Blocks}}
             <div class="hub-scroll">
-                <table>
+                <table class="hub-linkrows">
                     <tbody>
                         {{- range .Blocks.Blocks}}
                         <tr>

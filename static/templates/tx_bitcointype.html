@@ -34,7 +34,7 @@
     </div>
     <div>
         <dt>Size</dt>
-        <dd>{{if $tx.Size}}{{formatInt $tx.Size}} B{{else}}-{{end}}</dd>
+        <dd>{{if $tx.Size}}<span class="hub-stat-num">{{formatInt $tx.Size}} B</span>{{else}}-{{end}}</dd>
         {{if $tx.VSize}}<dd class="hub-stat-note">vsize {{formatInt $tx.VSize}}</dd>{{end}}
     </div>
 </dl>
