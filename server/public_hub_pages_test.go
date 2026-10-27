@@ -67,6 +67,7 @@ func Test_PublicServer_HubInnerPages(t *testing.T) {
 	} else {
 		checkHTML(t, "/search?q=1234", html, []string{`<section class="hub-card hub-error">`, licenseFooter}, nil)
 	}
+	checkHTML(t, "/sendtx", getHTML(t, ts.URL+"/sendtx"), []string{`<button type="submit" class="hub-btn">Send</button>`}, []string{"btn-outline-secondary"})
 
 	// The aside renders on inner pages only when there is a campaign or a zelcore product.
 	contents := []struct {

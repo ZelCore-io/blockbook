@@ -566,6 +566,23 @@ func TestHomeProductCarouselAssets(t *testing.T) {
 	if carousel == nil || !strings.Contains(carousel[1], "scroll-snap-type: none") || !strings.Contains(carousel[1], "scroll-behavior: auto") {
 		t.Error("carousel mode must turn off snapping and CSS smooth scrolling")
 	}
+	// On touch the buttons move into the title row (44px, opaque); hover colours only with a real
+	// hover; the strip fades at its edges only in carousel mode.
+	for _, want := range []string{
+		".hub-products-nav-pair {", ".hub-products-nav-on .hub-products-title {", "width: 44px;",
+		".hub-products-strip.hub-products-carousel {\n    -webkit-mask-image: linear-gradient(90deg",
+	} {
+		if !strings.Contains(string(css), want) {
+			t.Errorf("hub.css misses the carousel touch/fade rule %q", want)
+		}
+	}
+	hoverBlock := regexp.MustCompile(`(?s)@media \(hover: hover\) and \(pointer: fine\) \{\s*\.hub-products-nav \{.*?\n\}\n`).FindString(string(css))
+	if !strings.Contains(hoverBlock, ".hub-products-nav:hover {") {
+		t.Error(".hub-products-nav:hover must sit inside the (hover: hover) and (pointer: fine) block")
+	}
+	if regexp.MustCompile(`(?m)^\.hub-products-nav:hover`).MatchString(string(css)) {
+		t.Error("a top-level .hub-products-nav:hover sticks after a tap on touch screens")
+	}
 	min, err := os.ReadFile("../static/css/hub.min.8.css")
 	if err != nil || !strings.Contains(string(min), ".hub-products-strip.hub-products-carousel{") || !strings.Contains(string(min), ".hub-products-nav{") {
 		t.Error("hub.min.8.css is not rebuilt with the carousel rules")

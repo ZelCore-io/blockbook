@@ -68,7 +68,7 @@ func Test_PublicServer_HomeAndStatus(t *testing.T) {
 		newestBlockRow,
 		newestBlockHash,
 		`<a class="hub-mono" href="/block/225493">225<span class="ns">493</span></a>`,
-		`<h2 id="hub-network-title">Network</h2><dl class="hub-stat-grid"><div><dt>Node</dt><dd class="hub-mono">/Fakecoin:0.0.1/</dd></div><div><dt>Status</dt><dd><span class="hub-badge hub-badge-ok">Synced</span></dd></div></dl></section></div></div></main><footer class="hub-footer">`,
+		`<h2 id="hub-network-title">Network</h2><dl class="hub-stat-grid"><div class="hub-stat-wide"><dt>Node</dt><dd class="hub-mono hub-stat-node">/Fakecoin:0.0.1/</dd></div><div><dt>Status</dt><dd><span class="hub-badge hub-badge-ok">Synced</span></dd></div></dl></section></div></div></main><footer class="hub-footer">`,
 	}, []string{"Application status", "<dt>Price</dt>", "Flux ecosystem products", "Sponsored", "News from Zelcore and SSP", "<dt>Difficulty</dt>", "More explorers", "hub-explorer"})
 	if n := strings.Count(home, `action="/search"`); n != 1 {
 		t.Errorf("home: %d search forms, want 1", n)
@@ -77,9 +77,10 @@ func Test_PublicServer_HomeAndStatus(t *testing.T) {
 	status := getHTML(t, ts.URL+"/status")
 	checkHTML(t, "status", status, []string{
 		`<header class="hub-band" style="--hub-band: #2B61D1">`,
-		`<main><div class="hub-layout"><div class="hub-main"><h1>Application status</h1>`,
+		`<main><div class="hub-layout"><div class="hub-main"><section class="hub-card"><h1>Application status</h1></section>`,
+		`<div class="hub-status-grid"><section class="hub-card"><h2>Blockbook</h2><table class="table data-table info-table"><tbody><tr><td>Coin</td>`,
 		`</td></tr><tr><td>Mempool in Sync</td><td><h6 class="badge bg-danger">false</h6></td></tr><tr><td>Last Mempool Update</td><td></td></tr><tr><td>Transactions in Mempool</td><td><a href="/mempool">0</a></td></tr><tr><td>Current Fiat rates</td>`,
-		`</td></tr></tbody></table></div><div class="col-lg-6"><table class="table data-table info-table"><tbody><tr><td style="white-space: nowrap;"><h3>Backend</h3></td><td></td></tr><tr><td>Chain</td><td>fakecoin</td></tr><tr><td>Version</td><td>001001</td></tr><tr><td>Subversion</td><td>/Fakecoin:0.0.1/</td></tr><tr><td>Last Block</td><td>2</td></tr><tr><td>Difficulty</td><td></td></tr></tbody></table></div></div></div></div></main><footer class="hub-footer">`,
+		`</td></tr></tbody></table></section><section class="hub-card"><h2>Backend</h2><table class="table data-table info-table"><tbody><tr><td>Chain</td><td>fakecoin</td></tr><tr><td>Version</td><td>001001</td></tr><tr><td>Subversion</td><td>/Fakecoin:0.0.1/</td></tr><tr><td>Last Block</td><td>2</td></tr><tr><td>Difficulty</td><td></td></tr></tbody></table></section></div></div></div></main><footer class="hub-footer">`,
 		`unknown (development build)</a>`,
 	}, []string{"hub-band-home", "Explore Fake Coin", `class="hub-tabs"`})
 
