@@ -201,6 +201,9 @@ func Test_PublicServer_SEO_CrawlFiles(t *testing.T) {
 		if set.URLs[4].LastMod == "" || set.URLs[0].LastMod != set.URLs[4].LastMod {
 			t.Errorf("sitemap lastmod: home %q, newest block %q", set.URLs[0].LastMod, set.URLs[4].LastMod)
 		}
+		if cc := sm.header.Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("sitemap.xml without public_url: Cache-Control %q, want no-store", cc)
+		}
 		if strings.Contains(sm.body, "/tx/") || strings.Contains(sm.body, "/address/") {
 			t.Error("sitemap.xml must not list tx or address pages")
 		}
@@ -210,6 +213,12 @@ func Test_PublicServer_SEO_CrawlFiles(t *testing.T) {
 	llms := seoGet(t, ts.URL+"/llms.txt", nil)
 	if llms.status != http.StatusOK || llms.header.Get("Content-Type") != "text/plain; charset=utf-8" {
 		t.Fatalf("llms.txt: status %d, Content-Type %q", llms.status, llms.header.Get("Content-Type"))
+	}
+	if cc := llms.header.Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("llms.txt without public_url: Cache-Control %q, want no-store", cc)
+	}
+	if cc := robots.header.Get("Cache-Control"); cc != "public, max-age=3600" {
+		t.Errorf("robots.txt: Cache-Control %q (its body has no request host)", cc)
 	}
 	checkHTML(t, "llms.txt", llms.body, []string{"# Fake Coin Explorer\n", "Blockchain explorer for Fakecoin (FAKE)", "ZelCore", "Flux", "Canonical host: " + ts.URL + "\n", "[API documentation](" + ts.URL + "/api-docs)", ts.URL + "/api/v2/tx/{txid}", ts.URL + "/api/v2/xpub/{xpub}", ts.URL + "/block/{height or hash}"}, nil)
 
@@ -221,6 +230,12 @@ func Test_PublicServer_SEO_CrawlFiles(t *testing.T) {
 	sm := seoGet(t, ts.URL+"/sitemap.xml", map[string]string{"X-Forwarded-Proto": "http"})
 	checkHTML(t, "sitemap public_url", sm.body, []string{"<loc>https://explorer.example.org/</loc>", "<loc>https://explorer.example.org/block/225494</loc>"}, []string{ts.URL})
 	llms = seoGet(t, ts.URL+"/llms.txt", nil)
+	if cc := sm.header.Get("Cache-Control"); cc != "public, max-age=300" {
+		t.Errorf("sitemap.xml with public_url: Cache-Control %q", cc)
+	}
+	if cc := llms.header.Get("Cache-Control"); cc != "public, max-age=3600" {
+		t.Errorf("llms.txt with public_url: Cache-Control %q", cc)
+	}
 	checkHTML(t, "llms.txt public_url", llms.body, []string{"Canonical host: https://explorer.example.org\n"}, []string{ts.URL})
 
 	// only GET and HEAD
@@ -289,20 +304,60 @@ func Test_faviconTarget(t *testing.T) {
 }
 
 func Test_setDeepPageCacheControl(t *testing.T) {
+	const public = "public, max-age=86400"
+	plain := &TemplateData{}
+	withFiat := &TemplateData{SecondaryCoin: "USD"}
 	for _, c := range []struct {
+		name          string
 		confirmations int64
+		url           string
+		cookie        bool
+		data          *TemplateData
 		want          string
 	}{
-		{0, ""},
-		{1, ""},
-		{100, ""},
-		{101, "public, max-age=86400"},
-		{1000000, "public, max-age=86400"},
+		{"unconfirmed", 0, "/tx/x", false, plain, ""},
+		{"young", 1, "/tx/x", false, plain, ""},
+		{"at threshold", 100, "/tx/x", false, plain, ""},
+		{"deep", 101, "/tx/x", false, plain, public},
+		{"very deep", 1000000, "/block/1?page=2", false, plain, public},
+		{"secondary param", 1000, "/tx/x?secondary=eur", false, plain, ""},
+		{"use_secondary param", 1000, "/tx/x?use_secondary=true", false, plain, ""},
+		{"empty secondary param", 1000, "/tx/x?secondary=", false, plain, ""},
+		{"secondary cookie", 1000, "/tx/x", true, plain, ""},
+		{"response sets the cookie", 1000, "/tx/x", false, withFiat, ""},
+		{"no data", 1000, "/tx/x", false, nil, ""},
 	} {
+		r := httptest.NewRequest("GET", c.url, nil)
+		if c.cookie {
+			r.AddCookie(&http.Cookie{Name: secondaryCoinCookieName, Value: "EUR=true"})
+		}
 		w := httptest.NewRecorder()
-		setDeepPageCacheControl(w, c.confirmations)
+		setDeepPageCacheControl(w, r, c.data, c.confirmations)
 		if got := w.Header().Get("Cache-Control"); got != c.want {
-			t.Errorf("%d confirmations: Cache-Control %q, want %q", c.confirmations, got, c.want)
+			t.Errorf("%s: Cache-Control %q, want %q", c.name, got, c.want)
+		}
+		wantVary := ""
+		if c.want != "" {
+			wantVary = "Cookie"
+		}
+		if got := w.Header().Get("Vary"); got != wantVary {
+			t.Errorf("%s: Vary %q, want %q", c.name, got, wantVary)
+		}
+	}
+}
+
+// The fiat-rates path end to end: a deep page whose response sets secondary_coin is never public.
+func Test_setDeepPageCacheControl_PostHandlerCookie(t *testing.T) {
+	s := &PublicServer{}
+	for _, data := range []*TemplateData{{}, {SecondaryCoin: "USD"}} {
+		w := httptest.NewRecorder()
+		setDeepPageCacheControl(w, httptest.NewRequest("GET", "/tx/x", nil), data, 1000)
+		s.postHtmlTemplateHandler(data, w, httptest.NewRequest("GET", "/tx/x", nil))
+		public := strings.HasPrefix(w.Header().Get("Cache-Control"), "public")
+		if setCookie := w.Header().Get("Set-Cookie") != ""; public && setCookie {
+			t.Errorf("SecondaryCoin %q: public Cache-Control together with Set-Cookie", data.SecondaryCoin)
+		} else if !public && !setCookie {
+			t.Errorf("SecondaryCoin %q: an identical-for-everyone deep page should be public", data.SecondaryCoin)
 		}
 	}
 }

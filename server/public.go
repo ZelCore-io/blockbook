@@ -1066,7 +1066,7 @@ func (s *PublicServer) explorerTx(w http.ResponseWriter, r *http.Request) (tpl, 
 	data.Tx = tx
 	data.TxIOCollapseThreshold = txIOCollapseThresholdTx
 	if tx != nil {
-		setDeepPageCacheControl(w, int64(tx.Confirmations))
+		setDeepPageCacheControl(w, r, data, int64(tx.Confirmations))
 	}
 	return txTpl, data, nil
 }
@@ -1326,7 +1326,7 @@ func (s *PublicServer) explorerBlock(w http.ResponseWriter, r *http.Request) (tp
 	}
 	data := s.newTemplateData(r)
 	data.Block = block
-	setDeepPageCacheControl(w, int64(block.Confirmations))
+	setDeepPageCacheControl(w, r, data, int64(block.Confirmations))
 	data.Page = block.Page
 	data.PagingRange, data.PrevPage, data.NextPage = getPagingRange(block.Page, block.TotalPages)
 	return blockTpl, data, nil

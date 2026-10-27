@@ -38,11 +38,27 @@ var aiCrawlers = []string{
 }
 
 // setDeepPageCacheControl lets shared caches keep a block or tx page for a day once it has more
-// than deepPageConfirmations confirmations; younger pages keep the default (no header).
-func setDeepPageCacheControl(w http.ResponseWriter, confirmations int64) {
-	if confirmations > deepPageConfirmations {
-		w.Header().Set("Cache-Control", deepPageCacheControl)
+// than deepPageConfirmations confirmations, but only when the response is the same for every
+// visitor: no secondary/use_secondary query parameters, no secondary_coin cookie on the request
+// and no Set-Cookie on the response. postHtmlTemplateHandler sets that cookie whenever the page
+// has a secondary currency (fiat rates on), and main.js needs it for the amount tooltips and
+// the currency switch, so pages with fiat rates keep the default (no Cache-Control header).
+func setDeepPageCacheControl(w http.ResponseWriter, r *http.Request, data *TemplateData, confirmations int64) {
+	if confirmations <= deepPageConfirmations || data == nil || data.SecondaryCoin != "" {
+		return
 	}
+	q := r.URL.Query()
+	if _, ok := q["secondary"]; ok {
+		return
+	}
+	if _, ok := q["use_secondary"]; ok {
+		return
+	}
+	if _, err := r.Cookie(secondaryCoinCookieName); err == nil {
+		return
+	}
+	w.Header().Set("Cache-Control", deepPageCacheControl)
+	w.Header().Add("Vary", "Cookie")
 }
 
 // notFoundPage renders the hub error page for a path no route serves; the error template is
@@ -96,6 +112,16 @@ func validHost(h string) bool {
 		}
 	}
 	return true
+}
+
+// crawlCacheControl is the Cache-Control of a body built from baseURL: public caching only when
+// public_url is set; otherwise the body carries the request's own Host and X-Forwarded-Proto, so
+// a shared cache must not hand it to other visitors.
+func crawlCacheControl(publicURL, public string) string {
+	if publicURL == "" {
+		return "no-store"
+	}
+	return public
 }
 
 func writeCrawlText(w http.ResponseWriter, contentType, cacheControl, body string) {
@@ -196,7 +222,7 @@ func (s *PublicServer) sitemapHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	writeCrawlText(w, "application/xml; charset=utf-8", "public, max-age=300", string(body))
+	writeCrawlText(w, "application/xml; charset=utf-8", crawlCacheControl(s.publicURL, "public, max-age=300"), string(body))
 }
 
 // llmsTxt describes the explorer for language models (llmstxt.org): what it is, its page
@@ -250,7 +276,7 @@ func (s *PublicServer) llmsTxtHandler(w http.ResponseWriter, r *http.Request) {
 	if !allowGetOrHead(w, r) {
 		return
 	}
-	writeCrawlText(w, "text/plain; charset=utf-8", "public, max-age=3600", s.llmsTxt(s.baseURL(r)))
+	writeCrawlText(w, "text/plain; charset=utf-8", crawlCacheControl(s.publicURL, "public, max-age=3600"), s.llmsTxt(s.baseURL(r)))
 }
 
 // faviconTarget is where /favicon.ico redirects: the Zelcore product icon from the explorer
