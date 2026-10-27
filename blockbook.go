@@ -369,7 +369,7 @@ func mainWithExitCode() int {
 
 	var publicServer *server.PublicServer
 	if *publicBinding != "" {
-		publicServer, err = startPublicServer()
+		publicServer, err = startPublicServer(config.PublicURL)
 		if err != nil {
 			glog.Error("public server: ", err)
 			return exitCodeFatal
@@ -559,12 +559,13 @@ func startInternalServer() (*server.InternalServer, error) {
 	return internalServer, nil
 }
 
-func startPublicServer() (*server.PublicServer, error) {
+func startPublicServer(publicURL string) (*server.PublicServer, error) {
 	// start public server in limited functionality, extend it after sync is finished by calling ConnectFullPublicInterface
 	publicServer, err := server.NewPublicServer(*publicBinding, *certFiles, index, chain, mempool, txCache, *explorerURL, metrics, internalState, fiatRates, *debugMode)
 	if err != nil {
 		return nil, err
 	}
+	publicServer.SetPublicURL(publicURL)
 	if *explorerContentURL != "" {
 		cache := *explorerContentCache
 		if cache == "" {

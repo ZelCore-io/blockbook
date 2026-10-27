@@ -90,11 +90,18 @@ type PublicServer struct {
 	mempool             bchain.Mempool
 	api                 *api.Worker
 	explorerURL         string
+	publicURL           string
 	internalExplorer    bool
 	is                  *common.InternalState
 	fiatRates           *fiat.FiatRates
 	useSatsAmountFormat bool
 	isFullInterface     bool
+}
+
+// SetPublicURL sets the public base URL of the explorer (blockchaincfg "public_url"); a trailing
+// slash is removed. An empty value means canonical links and absolute sitemap URLs are not known.
+func (s *PublicServer) SetPublicURL(publicURL string) {
+	s.publicURL = strings.TrimRight(strings.TrimSpace(publicURL), "/")
 }
 
 // NewPublicServer creates new public server http interface to blockbook and returns its handle
