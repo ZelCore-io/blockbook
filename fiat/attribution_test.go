@@ -6,23 +6,19 @@ import "testing"
 
 func Test_ratesSource(t *testing.T) {
 	tests := []struct {
-		name string
-		urls []string
-		want string
+		name        string
+		attribution string
+		want        string
 	}{
-		{"defaults", []string{"", ""}, RatesSourceCoingecko},
-		{"no host", []string{"none", ""}, RatesSourceCoingecko},
-		{"trezor bootstrap and coingecko tip", []string{"https://cdn.trezor.io/dynamic/coingecko/api/v3", "https://api.coingecko.com/api/v3"}, RatesSourceCoingecko},
-		{"coingecko pro", []string{"", "https://pro-api.coingecko.com/api/v3"}, RatesSourceCoingecko},
-		{"relay", []string{"https://rates.example.com/api/v3", "https://rates.example.com/api/v3"}, RatesSourceZelCore},
-		{"relay tip only", []string{"", "https://rates.example.com/api/v3"}, RatesSourceZelCore},
-		{"look-alike host", []string{"https://coingecko.com.example.net/api/v3", ""}, RatesSourceZelCore},
-		{"upper case", []string{"https://API.CoinGecko.com/api/v3", ""}, RatesSourceCoingecko},
+		{"absent", "", RatesSourceCoingecko},
+		{"blank", "  \t ", RatesSourceCoingecko},
+		{"explicit", "ZelCore", "ZelCore"},
+		{"trimmed and collapsed", "  Example   Rates \n", "Example Rates"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ratesSource(tt.urls...); got != tt.want {
-				t.Errorf("ratesSource(%q) = %q, want %q", tt.urls, got, tt.want)
+			if got := ratesSource(tt.attribution); got != tt.want {
+				t.Errorf("ratesSource(%q) = %q, want %q", tt.attribution, got, tt.want)
 			}
 		})
 	}
