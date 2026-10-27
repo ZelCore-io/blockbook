@@ -28,8 +28,9 @@
                 {{- with .ExplorerContent.ThemeIcon}}<span class="hub-mark"><img src="{{.}}" alt="{{$.CoinLabel}}" width="36" height="36" referrerpolicy="no-referrer"></span>{{else}}<span class="hub-mark" aria-hidden="true">{{.CoinShortcut}}</span>{{end -}}
                 <span>{{.CoinLabel}} Explorer</span>
             </a>
-            <a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer">
-                {{- with .ExplorerContent.FluxSymbol}}<span class="hub-powered-mark"><img src="{{.}}" alt="Flux" width="22" height="22" referrerpolicy="no-referrer"></span>{{end}}Powered by Flux</a>
+            {{- /* On phones only the Flux symbol shows (hub.css), so the link carries its name in aria-label. */}}
+            <a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer" aria-label="Powered by Flux">
+                {{- with .ExplorerContent.FluxSymbol}}<span class="hub-powered-mark"><img src="{{.}}" alt="" width="22" height="22" referrerpolicy="no-referrer"></span>{{end}}<span class="hub-powered-text">Powered by Flux</span></a>
             <nav class="hub-nav-links" aria-label="Main">
                 {{- if .InternalExplorer}}
                 <a href="/blocks">Blocks</a>
@@ -41,7 +42,7 @@
             {{- if and .InternalExplorer (not .HomePage)}}
             <form class="hub-search" id="search" role="search" action="/search" method="get">
                 <label class="visually-hidden" for="search-q">Search</label>
-                <input id="search-q" name="q" type="text" placeholder="Search for block, transaction, address or xpub" focus="true">
+                <span class="hub-search-field"><input id="search-q" name="q" type="text" placeholder="Search for block, transaction, address or xpub" focus="true"><span class="hub-search-hint" aria-hidden="true">Block, tx, address or xpub</span></span>
                 <button type="submit">Search</button>
             </form>
             {{- end}}
@@ -57,9 +58,9 @@
                         <label class="btn" for="secondary-coin">{{.SecondaryCoin}}</label>
                         <button type="button" class="btn dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Other currencies"></button>
                         <div class="dropdown-menu row">
-                            {{range $c := .SecondaryCurrencies}}
-                            <div class="col-3"><a href="?secondary={{$c}}&use_secondary=true">{{$c}}</a></div>
-                            {{end}}
+                            {{- range $c := .SecondaryCurrencies}}
+                            <div class="col-4 col-sm-3"><a href="?secondary={{$c}}&use_secondary=true"{{if eq $c $.SecondaryCoin}} class="active" aria-current="true"{{end}}>{{$c}}</a></div>
+                            {{- end}}
                         </div>
                     </div>
                 </div>
@@ -73,7 +74,7 @@
                 {{- if .InternalExplorer}}
                 <form class="hub-search" id="search" role="search" action="/search" method="get">
                     <label class="visually-hidden" for="search-q">Search</label>
-                    <input id="search-q" name="q" type="text" placeholder="Search for block, transaction, address or xpub" focus="true">
+                    <span class="hub-search-field"><input id="search-q" name="q" type="text" placeholder="Search for block, transaction, address or xpub" focus="true"><span class="hub-search-hint" aria-hidden="true">Block, tx, address or xpub</span></span>
                     <button type="submit">Search</button>
                 </form>
                 {{- end}}
