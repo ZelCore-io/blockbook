@@ -797,6 +797,52 @@ func TestNewFiatRates_AllowsBootstrapOnDefaultHistoricalURLWithoutAPIKey(t *test
 	}
 }
 
+func TestNewFiatRates_ParsesTipURL(t *testing.T) {
+	const tip = "https://viprates.zelcore.io/v2/blockbook/api/v3"
+	tests := []struct {
+		name   string
+		params string
+		want   string
+	}{
+		{name: "tipUrl set", params: `{"url":"` + tip + `","tipUrl":"` + tip + `","coin":"bitcoin","periodSeconds":60}`, want: tip},
+		{name: "tipUrl absent", params: `{"coin":"bitcoin","periodSeconds":60}`, want: coingeckoFreeURL},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := common.Config{
+				CoinName:        "fakecoin",
+				FiatRates:       "coingecko",
+				FiatRatesParams: tt.params,
+			}
+			d, is, tmp := setupRocksDB(t, &testBitcoinParser{
+				BitcoinParser: bitcoinTestnetParser(),
+			}, &config)
+			defer closeAndDestroyRocksDB(t, d, tmp)
+
+			envNames := append([]string{coingeckoAPIKeyEnv}, coinGeckoScopedAPIKeyEnvNames(is.GetNetwork(), is.CoinShortcut)...)
+			for _, envName := range envNames {
+				if v, ok := os.LookupEnv(envName); ok {
+					value := v
+					defer os.Setenv(envName, value)
+				}
+				_ = os.Unsetenv(envName)
+			}
+
+			fiatRates, err := NewFiatRates(d, &config, nil, nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			cg, ok := fiatRates.downloader.(*Coingecko)
+			if !ok {
+				t.Fatalf("unexpected downloader type: %T", fiatRates.downloader)
+			}
+			if cg.tipURL != tt.want {
+				t.Fatalf("unexpected tip url: got %q, want %q", cg.tipURL, tt.want)
+			}
+		})
+	}
+}
+
 func TestNewFiatRates_AllowsNoKeyOrURLWhenHistoricalFiatAlreadyExists(t *testing.T) {
 	config := common.Config{
 		CoinName:        "fakecoin",

@@ -104,6 +104,7 @@ func NewFiatRates(db *db.RocksDB, config *common.Config, metrics *common.Metrics
 		PlatformVsCurrency string `json:"platformVsCurrency"`
 		PeriodSeconds      int64  `json:"periodSeconds"`
 		Plan               string `json:"plan"`
+		TipURL             string `json:"tipUrl"`
 		// ReconcileHistoricalAtStartup toggles the blocking startup self-healing pass that
 		// repairs missing historical rates. Absent (nil) means enabled; set false to disable.
 		ReconcileHistoricalAtStartup *bool `json:"reconcileHistoricalAtStartup"`
@@ -168,7 +169,7 @@ func NewFiatRates(db *db.RocksDB, config *common.Config, metrics *common.Metrics
 				return nil, coingeckoBootstrapPreconditionError()
 			}
 		}
-		fr.downloader = NewCoinGeckoDownloader(db, network, coinShortcut, rdParams.URL, rdParams.Coin, rdParams.PlatformIdentifier, rdParams.PlatformVsCurrency, fr.allowedVsCurrencies, fr.timeFormat, rdParams.Plan, metrics, throttle)
+		fr.downloader = NewCoinGeckoDownloader(db, network, coinShortcut, rdParams.URL, rdParams.Coin, rdParams.PlatformIdentifier, rdParams.PlatformVsCurrency, fr.allowedVsCurrencies, fr.timeFormat, rdParams.Plan, rdParams.TipURL, metrics, throttle)
 		if is != nil {
 			is.HasFiatRates = true
 			is.HasTokenFiatRates = fr.downloadTokens
