@@ -66,6 +66,7 @@
                 "averageBlockTimeMs": 600000,
                 "alternative_estimate_fee": "mempoolspaceprecise",
                 "alternative_estimate_fee_params": "{\"url\": \"https://mempool.space/testnet4/api/v1/fees/precise\", \"periodSeconds\": 60}",
+                "public_url": "https://blockbook.tbtc.zelcore.io",
                 "block_golomb_filter_p": 20,
                 "block_filter_scripts": "taproot-noordinals",
                 "block_filter_use_zeroed_key": true,

@@ -58,7 +58,12 @@
       "block_addresses_to_keep": 300,
       "xpub_magic": 76067358,
       "slip44": 175,
-      "additional_params": {}
+      "additional_params": {
+        "fiat_rates": "coingecko",
+        "fiat_rates_vs_currencies": "AED,ARS,AUD,BDT,BHD,BMD,BRL,CAD,CHF,CLP,CNY,CZK,DKK,EUR,GBP,HKD,HUF,IDR,ILS,INR,JPY,KRW,KWD,LKR,MMK,MXN,MYR,NGN,NOK,NZD,PHP,PKR,PLN,RUB,SAR,SEK,SGD,THB,TRY,TWD,UAH,USD,VND,ZAR,BTC,ETH",
+        "public_url": "https://blockbook.rvn.zelcore.io",
+        "fiat_rates_params": "{\"url\": \"https://viprates.zelcore.io/v2/blockbook/api/v3\", \"tipUrl\": \"https://viprates.zelcore.io/v2/blockbook/api/v3\", \"attribution\": \"ZelCore\", \"coin\": \"ravencoin\", \"periodSeconds\": 900}"
+      }
     }
   },
   "meta": {
