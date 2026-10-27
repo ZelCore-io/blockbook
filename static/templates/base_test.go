@@ -201,3 +201,56 @@ func TestShellFooterMoreExplorers(t *testing.T) {
 		}
 	}
 }
+
+func TestShellPageHead(t *testing.T) {
+	jsonLD := template.JS(`{"@context":"https://schema.org","name":"a</script>b"}`)
+	head := strings.Split(renderShell(t, map[string]any{
+		"PageTitle":       `Coin <b> block 1 · 2 transactions`,
+		"PageDescription": `Block "1" & more`,
+		"Robots":          "noindex,follow",
+		"Canonical":       "https://explorer.example.com/block/1?page=2",
+		"OGImage":         "https://cdn.example.com/coin.svg",
+		"JSONLD":          jsonLD,
+	}), "</head>")[0]
+	for _, want := range []string{
+		`<meta name="description" content="Block &#34;1&#34; &amp; more">`,
+		`<meta name="robots" content="noindex,follow">`,
+		`<title>Coin &lt;b&gt; block 1 · 2 transactions</title>`,
+		`<link rel="canonical" href="https://explorer.example.com/block/1?page=2">`,
+		`<meta property="og:type" content="website">`,
+		`<meta property="og:site_name" content="Groestlcoin Explorer">`,
+		`<meta property="og:title" content="Coin &lt;b&gt; block 1 · 2 transactions">`,
+		`<meta property="og:description" content="Block &#34;1&#34; &amp; more">`,
+		`<meta property="og:url" content="https://explorer.example.com/block/1?page=2">`,
+		`<meta property="og:image" content="https://cdn.example.com/coin.svg">`,
+		`<meta name="twitter:card" content="summary">`,
+		`<meta name="twitter:image" content="https://cdn.example.com/coin.svg">`,
+		`<script type="application/ld+json">` + string(jsonLD) + `</script>`,
+	} {
+		if !strings.Contains(head, want) {
+			t.Errorf("head misses %q", want)
+		}
+	}
+	if strings.Count(head, "<title>") != 1 || strings.Count(head, `name="description"`) != 1 {
+		t.Error("head must carry exactly one title and one description")
+	}
+	if strings.Contains(head, "ZgotmplZ") {
+		t.Error("html/template rejected a head value")
+	}
+
+	// Without the Go-built fields (and without public_url) the head keeps the coin defaults and
+	// carries no robots, canonical, social or JSON-LD tags.
+	plain := strings.Split(renderShell(t, map[string]any{}), "</head>")[0]
+	for _, absent := range []string{`name="robots"`, `rel="canonical"`, `og:`, `twitter:`, `ld+json`} {
+		if strings.Contains(plain, absent) {
+			t.Errorf("default head renders %q", absent)
+		}
+	}
+	noCanonical := strings.Split(renderShell(t, map[string]any{"PageTitle": "T", "PageDescription": "D"}), "</head>")[0]
+	if strings.Contains(noCanonical, `rel="canonical"`) || strings.Contains(noCanonical, `og:url`) || strings.Contains(noCanonical, `og:image`) {
+		t.Error("an empty canonical or image renders a tag")
+	}
+	if !strings.Contains(noCanonical, `<meta property="og:title" content="T">`) {
+		t.Error("social tags missing without a canonical")
+	}
+}

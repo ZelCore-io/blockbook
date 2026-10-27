@@ -171,6 +171,7 @@ func NewPublicServer(binding string, certFiles string, db *db.RocksDB, chain bch
 	s.htmlTemplates.newTemplateDataWithError = s.newTemplateDataWithError
 	s.htmlTemplates.parseTemplates = s.parseTemplates
 	s.htmlTemplates.postHtmlTemplateHandler = s.postHtmlTemplateHandler
+	s.htmlTemplates.prepareTemplateData = s.setPageHead
 	s.templates = s.parseTemplates()
 
 	// map only basic functions, the rest is enabled by method MapFullPublicInterface
@@ -605,7 +606,14 @@ type TemplateData struct {
 	TxSecondaryCoinRate      float64
 	TxTicker                 *common.CurrencyRatesTicker
 	TxIOCollapseThreshold    int
-	contractRates            map[contractRateKey]contractRate
+	// per-page <head>, filled by setPageHead just before the page is rendered
+	PageTitle       string
+	PageDescription string
+	Canonical       string      // absolute canonical URL, empty without public_url
+	Robots          string      // meta robots value, empty means indexable
+	OGImage         string      // social preview image URL
+	JSONLD          template.JS // schema.org JSON-LD, already JSON-encoded
+	contractRates   map[contractRateKey]contractRate
 }
 
 type contractRateKey struct {

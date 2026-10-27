@@ -74,6 +74,8 @@ type htmlTemplates[TD any] struct {
 	newTemplateDataWithError func(error *api.APIError, r *http.Request) *TD
 	parseTemplates           func() []*template.Template
 	postHtmlTemplateHandler  func(data *TD, w http.ResponseWriter, r *http.Request)
+	// prepareTemplateData, if set, runs on the final page data just before it is rendered
+	prepareTemplateData func(t tpl, data *TD, r *http.Request)
 }
 
 // debugErrorText renders an error for a debug-mode response with its URLs reduced to scheme and
@@ -170,6 +172,9 @@ func (s *htmlTemplates[TD]) htmlTemplateHandler(handler func(w http.ResponseWrit
 				// return 500 Internal Server Error with errorInternalTpl
 				if t == errorInternalTpl {
 					w.WriteHeader(http.StatusInternalServerError)
+				}
+				if s.prepareTemplateData != nil && data != nil {
+					s.prepareTemplateData(t, data, r)
 				}
 				if err := s.templates[t].ExecuteTemplate(w, "base.html", data); err != nil {
 					glog.Error(err)
