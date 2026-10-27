@@ -20,6 +20,8 @@ const FiatRatesTimeFormat = "20060102150405" // YYYYMMDDhhmmss
 
 const historicalFiatBootstrapStateKey = "HistoricalFiatBootstrapComplete"
 const historicalFiatBootstrapAttemptsKey = "HistoricalFiatBootstrapAttempts"
+const historicalFiatBackfillDoneKey = "HistoricalFiatBackfillDone"
+const historicalFiatBackfillAttemptsKey = "HistoricalFiatBackfillAttempts"
 
 func packTimestamp(t *time.Time) []byte {
 	return []byte(t.UTC().Format(FiatRatesTimeFormat))
@@ -364,4 +366,59 @@ func (d *RocksDB) FiatRatesSetHistoricalBootstrapAttempts(attempts int) error {
 		return err
 	}
 	return d.db.PutCF(d.wo, d.cfh[cfDefault], []byte(historicalFiatBootstrapAttemptsKey), data)
+}
+
+// FiatRatesGetHistoricalBackfillDone gets whether the one-time full-history backfill
+// (fiat_rates_params.backfillHistory) has finished for this DB.
+func (d *RocksDB) FiatRatesGetHistoricalBackfillDone() (bool, error) {
+	val, err := d.db.GetCF(d.ro, d.cfh[cfDefault], []byte(historicalFiatBackfillDoneKey))
+	if err != nil {
+		return false, err
+	}
+	defer val.Free()
+	data := val.Data()
+	if data == nil {
+		return false, nil
+	}
+	var done bool
+	if err := json.Unmarshal(data, &done); err != nil {
+		return false, err
+	}
+	return done, nil
+}
+
+// FiatRatesSetHistoricalBackfillDone stores the one-time full-history backfill marker.
+func (d *RocksDB) FiatRatesSetHistoricalBackfillDone(done bool) error {
+	data, err := json.Marshal(done)
+	if err != nil {
+		return err
+	}
+	return d.db.PutCF(d.wo, d.cfh[cfDefault], []byte(historicalFiatBackfillDoneKey), data)
+}
+
+// FiatRatesGetHistoricalBackfillAttempts gets the number of failed full-history backfill attempts.
+func (d *RocksDB) FiatRatesGetHistoricalBackfillAttempts() (int, error) {
+	val, err := d.db.GetCF(d.ro, d.cfh[cfDefault], []byte(historicalFiatBackfillAttemptsKey))
+	if err != nil {
+		return 0, err
+	}
+	defer val.Free()
+	data := val.Data()
+	if data == nil {
+		return 0, nil
+	}
+	var attempts int
+	if err := json.Unmarshal(data, &attempts); err != nil {
+		return 0, err
+	}
+	return attempts, nil
+}
+
+// FiatRatesSetHistoricalBackfillAttempts stores the number of failed full-history backfill attempts.
+func (d *RocksDB) FiatRatesSetHistoricalBackfillAttempts(attempts int) error {
+	data, err := json.Marshal(attempts)
+	if err != nil {
+		return err
+	}
+	return d.db.PutCF(d.wo, d.cfh[cfDefault], []byte(historicalFiatBackfillAttemptsKey), data)
 }
