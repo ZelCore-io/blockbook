@@ -11,9 +11,29 @@
     <script src="/static/js/bootstrap.bundle.5.2.2.min.js"></script>
     <script src="/static/js/main{{.Minified}}.js"></script>
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="description" content="{{.CoinLabel}} Explorer">
+    {{- /* The per-page head fields are built in Go by setPageHead (server/page_head.go). */}}
+    <meta name="description" content="{{if .PageDescription}}{{.PageDescription}}{{else}}{{.CoinLabel}} Explorer{{end}}">
     {{if .Robots}}<meta name="robots" content="{{.Robots}}">{{end}}
-    <title>{{.CoinLabel}} Explorer</title>
+    <title>{{if .PageTitle}}{{.PageTitle}}{{else}}{{.CoinLabel}} Explorer{{end}}</title>
+    {{- with .Canonical}}
+    <link rel="canonical" href="{{.}}">{{end}}
+    {{- if .PageTitle}}
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="{{.CoinLabel}} Explorer">
+    <meta property="og:title" content="{{.PageTitle}}">
+    <meta property="og:description" content="{{.PageDescription}}">
+    {{- with .Canonical}}
+    <meta property="og:url" content="{{.}}">{{end}}
+    {{- with .OGImage}}
+    <meta property="og:image" content="{{.}}">{{end}}
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="{{.PageTitle}}">
+    <meta name="twitter:description" content="{{.PageDescription}}">
+    {{- with .OGImage}}
+    <meta name="twitter:image" content="{{.}}">{{end}}
+    {{- end}}
+    {{- with .JSONLD}}
+    <script type="application/ld+json">{{.}}</script>{{end}}
     {{- /* No favicon file ships with the fork; the icon comes from the feed's Zelcore product. */}}
     {{- with .ExplorerContent.ZelcoreProduct}}{{with .IconURL}}
     <link rel="icon" href="{{.}}">{{end}}{{end}}
