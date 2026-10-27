@@ -21,7 +21,11 @@ const (
 	// deepPageConfirmations is how many confirmations a block or tx page needs before it is
 	// treated as settled and served with deepPageCacheControl.
 	deepPageConfirmations = 100
-	deepPageCacheControl  = "public, max-age=86400"
+	// settled tx pages are cached for 10 minutes (a reorg or a late currency/rates change must
+	// not linger), with stale-while-revalidate so a cache can serve the old copy while it
+	// fetches a new one; block pages are immutable enough for a day.
+	deepTxCacheControl    = "public, max-age=600, stale-while-revalidate=3600"
+	deepBlockCacheControl = "public, max-age=86400"
 	// sitemapBlocks is the number of latest block pages listed in sitemap.xml.
 	sitemapBlocks = 100
 
@@ -37,17 +41,17 @@ var aiCrawlers = []string{
 	"Google-Extended", "Applebot-Extended", "CCBot",
 }
 
-// setDeepPageCacheControl lets shared caches keep a block or tx page for a day once it has more
-// than deepPageConfirmations confirmations, but only when the response is the same for every
+// setDeepPageCacheControl lets shared caches keep a block or tx page once it has more than
+// deepPageConfirmations confirmations (cacheControl is deepTxCacheControl or deepBlockCacheControl), but only when the response is the same for every
 // visitor: the request carries no secondary_coin cookie and no secondary/use_secondary query
 // parameters, so the page shows the default currency and postHtmlTemplateHandler sends no
 // Set-Cookie (main.js creates the default cookie in the browser). Vary: Cookie keeps a visitor's
 // own currency choice out of the shared copy.
-func setDeepPageCacheControl(w http.ResponseWriter, r *http.Request, data *TemplateData, confirmations int64) {
+func setDeepPageCacheControl(w http.ResponseWriter, r *http.Request, data *TemplateData, confirmations int64, cacheControl string) {
 	if confirmations <= deepPageConfirmations || data == nil || !defaultSecondaryRequest(r) {
 		return
 	}
-	w.Header().Set("Cache-Control", deepPageCacheControl)
+	w.Header().Set("Cache-Control", cacheControl)
 	w.Header().Add("Vary", "Cookie")
 }
 
@@ -234,6 +238,11 @@ func (s *PublicServer) sitemapHandler(w http.ResponseWriter, r *http.Request) {
 // llmsTxt describes the explorer for language models (llmstxt.org): what it is, its page
 // patterns and its public API. Everything comes from the coin config and the server setup.
 func (s *PublicServer) llmsTxt(base string) string {
+	return s.llmsTxtFor(base, s.content.Snapshot(time.Now()))
+}
+
+// llmsTxtFor renders llms.txt for the given explorer content snapshot.
+func (s *PublicServer) llmsTxtFor(base string, snap explorercontent.Snapshot) string {
 	label := s.is.CoinLabel
 	if label == "" {
 		label = s.is.Coin
@@ -244,9 +253,18 @@ func (s *PublicServer) llmsTxt(base string) string {
 	}
 	var b strings.Builder
 	b.WriteString("# " + label + " Explorer\n\n")
-	b.WriteString("> Blockchain explorer for " + coin + ": blocks, transactions and addresses. Operated by ZelCore (https://zelcore.io), powered by Flux (https://runonflux.com). Based on Blockbook by SatoshiLabs, AGPL-3.0.\n\n")
+	b.WriteString("> Blockchain explorer for " + coin + ": blocks, transactions and addresses.")
+	// operator and platform come from the explorer content feed, like the JSON-LD publisher
+	if line := productLine(snap.ZelcoreProduct()); line != "" {
+		b.WriteString(" Operated by " + line + ".")
+	}
+	if line := productLine(snap.ProductByID("flux")); line != "" {
+		b.WriteString(" Powered by " + line + ".")
+	}
+	b.WriteString(" Based on Blockbook by SatoshiLabs, AGPL-3.0.\n\n")
 	b.WriteString("Canonical host: " + base + "\n\n")
-	if s.internalExplorer {
+	// the page patterns are listed only when the full internal explorer serves them (the sitemap's condition)
+	if s.internalExplorer && s.isFullInterface {
 		b.WriteString("## Pages\n\n")
 		b.WriteString("- [Home](" + base + "/): latest blocks and transactions\n")
 		b.WriteString("- [Blocks](" + base + "/blocks): all blocks, newest first\n")
@@ -278,6 +296,19 @@ func (s *PublicServer) llmsTxt(base string) string {
 	return b.String()
 }
 
+// productLine is "Name (https://origin)" for a feed product with a name and an https target, else "".
+func productLine(p *explorercontent.Product) string {
+	if p == nil {
+		return ""
+	}
+	name := strings.Join(strings.Fields(p.Name), " ")
+	origin := httpsOrigin(p.TargetURL)
+	if name == "" || origin == "" {
+		return ""
+	}
+	return name + " (" + origin + ")"
+}
+
 func (s *PublicServer) llmsTxtHandler(w http.ResponseWriter, r *http.Request) {
 	if !allowGetOrHead(w, r) {
 		return
@@ -286,14 +317,14 @@ func (s *PublicServer) llmsTxtHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // faviconTarget is where /favicon.ico redirects: the Zelcore product icon from the explorer
-// content feed when it is an absolute http(s) URL, else "".
+// content feed when it is an absolute https URL, else "".
 func faviconTarget(snap explorercontent.Snapshot) string {
 	p := snap.ZelcoreProduct()
 	if p == nil || p.IconURL == "" {
 		return ""
 	}
 	u, err := url.Parse(p.IconURL)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+	if err != nil || u.Scheme != "https" || u.Host == "" {
 		return ""
 	}
 	return u.String()

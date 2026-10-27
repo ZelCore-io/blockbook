@@ -389,10 +389,7 @@ func (s *PublicServer) serveAPIDocs(w http.ResponseWriter, r *http.Request, base
 	if label == "" {
 		label = s.is.Coin
 	}
-	color := "#2B61D1"
-	if s.content != nil {
-		color = s.content.Snapshot(time.Now()).ThemeColor()
-	}
+	color := s.content.Snapshot(time.Now()).ThemeColor()
 	serveStaticContent(w, r, apiDocsIndexFile, "text/html; charset=utf-8", true, func(body []byte) []byte {
 		return renderAPIDocsPage(body, label, publicPath(basePath, ""), color)
 	})
@@ -570,8 +567,9 @@ func (s *PublicServer) newTemplateData(r *http.Request) *TemplateData {
 func (s *PublicServer) newTemplateDataWithError(error *api.APIError, r *http.Request) *TemplateData {
 	td := s.newTemplateData(r)
 	td.Error = error
-	// error pages are never indexed: not found ids, unknown routes and backend errors alike
-	td.Robots = "noindex"
+	// error pages are never indexed: not found ids, unknown routes and backend errors alike;
+	// a search page also lets crawlers follow its links
+	td.Robots = errorPageRobots(r)
 	if error != nil && error.Public {
 		td.ErrorTitle = "Not found"
 		td.ErrorHint = errorHintCheckID
@@ -640,7 +638,7 @@ type TemplateData struct {
 	CurrentSecondaryCoinRate float64
 	CurrentTicker            *common.CurrencyRatesTicker
 	SecondaryCurrencies      []string
-	RatesSource              string // who to credit for the exchange rates ("Coingecko" or "ZelCore"), empty without fiat rates
+	RatesSource              string // who to credit for the exchange rates (the fiat_rates_params attribution, default "Coingecko"), empty without fiat rates
 	TxDate                   string
 	TxSecondaryCoinRate      float64
 	TxTicker                 *common.CurrencyRatesTicker
@@ -1100,7 +1098,7 @@ func (s *PublicServer) explorerTx(w http.ResponseWriter, r *http.Request) (tpl, 
 	data.Tx = tx
 	data.TxIOCollapseThreshold = txIOCollapseThresholdTx
 	if tx != nil {
-		setDeepPageCacheControl(w, r, data, int64(tx.Confirmations))
+		setDeepPageCacheControl(w, r, data, int64(tx.Confirmations), deepTxCacheControl)
 	}
 	return txTpl, data, nil
 }
@@ -1360,7 +1358,7 @@ func (s *PublicServer) explorerBlock(w http.ResponseWriter, r *http.Request) (tp
 	}
 	data := s.newTemplateData(r)
 	data.Block = block
-	setDeepPageCacheControl(w, r, data, int64(block.Confirmations))
+	setDeepPageCacheControl(w, r, data, int64(block.Confirmations), deepBlockCacheControl)
 	data.Page = block.Page
 	data.PagingRange, data.PrevPage, data.NextPage = getPagingRange(block.Page, block.TotalPages)
 	return blockTpl, data, nil

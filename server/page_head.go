@@ -21,6 +21,15 @@ const maxDescriptionLen = 160
 // robotsNoindexFollow keeps a page out of the index while its links are still followed.
 const robotsNoindexFollow = "noindex,follow"
 
+// errorPageRobots is the robots value of an error page: never indexed, and a search page (the
+// no-results page of /search) keeps its links followable.
+func errorPageRobots(r *http.Request) string {
+	if strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/search") {
+		return robotsNoindexFollow
+	}
+	return "noindex"
+}
+
 // breadcrumb is one BreadcrumbList item; path is relative to the public URL.
 type breadcrumb struct {
 	name string
@@ -217,11 +226,7 @@ func (s *PublicServer) setPageHead(t tpl, td *TemplateData, r *http.Request) {
 		title = text + " · " + site
 		description = site + ": " + text
 		if td.Robots == "" {
-			if strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/search") {
-				robots = robotsNoindexFollow
-			} else {
-				robots = "noindex"
-			}
+			robots = errorPageRobots(r)
 		}
 	}
 	if title == "" {

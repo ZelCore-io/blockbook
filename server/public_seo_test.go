@@ -93,7 +93,7 @@ func Test_PublicServer_SEO_StatusCodes_BitcoinType(t *testing.T) {
 		{name: "unknown block", path: "/block/99999999", status: http.StatusNotFound, contentType: html, want: notFound},
 		{name: "bad xpub", path: "/xpub/xpubJunk", status: http.StatusNotFound, contentType: html, want: notFound},
 		{name: "spending not found", path: "/spending/" + strings.Repeat("ab", 32) + "/0", status: http.StatusNotFound, contentType: html, want: notFound},
-		{name: "search no results", path: "/search/?q=zzz%3Cb%3E", status: http.StatusNotFound, contentType: html, want: []string{noindexMeta, `<h1>No results</h1>`, `No matching records found for &#39;zzz&lt;b&gt;&#39;`, `Check the hash or address and try again.`, `value="zzz&lt;b&gt;" placeholder="Search for block, transaction, address or xpub" autofocus>`}, absent: []string{"<b>"}},
+		{name: "search no results", path: "/search/?q=zzz%3Cb%3E", status: http.StatusNotFound, contentType: html, want: []string{`<meta name="robots" content="noindex,follow">`, `<h1>No results</h1>`, `No matching records found for &#39;zzz&lt;b&gt;&#39;`, `Check the hash or address and try again.`, `value="zzz&lt;b&gt;" placeholder="Search for block, transaction, address or xpub" autofocus>`}, absent: []string{"<b>"}},
 	})
 }
 
@@ -222,7 +222,7 @@ func Test_PublicServer_SEO_CrawlFiles(t *testing.T) {
 	if cc := robots.header.Get("Cache-Control"); cc != "public, max-age=3600" {
 		t.Errorf("robots.txt: Cache-Control %q (its body has no request host)", cc)
 	}
-	checkHTML(t, "llms.txt", llms.body, []string{"# Fake Coin Explorer\n", "Blockchain explorer for Fakecoin (FAKE)", "ZelCore", "Flux", "Canonical host: " + ts.URL + "\n", "[API documentation](" + ts.URL + "/api-docs)", ts.URL + "/api/v2/tx/{txid}", ts.URL + "/api/v2/xpub/{xpub}", ts.URL + "/block/{height or hash}"}, nil)
+	checkHTML(t, "llms.txt", llms.body, []string{"# Fake Coin Explorer\n", "Blockchain explorer for Fakecoin (FAKE)", "Based on Blockbook by SatoshiLabs", "Canonical host: " + ts.URL + "\n", "[API documentation](" + ts.URL + "/api-docs)", ts.URL + "/api/v2/tx/{txid}", ts.URL + "/api/v2/xpub/{xpub}", ts.URL + "/block/{height or hash}"}, []string{"Operated by", "Powered by", "ZelCore", "Flux"})
 
 	// with public_url: Sitemap line, absolute URLs and canonical host from the config, whatever the Host
 	s.SetPublicURL("https://explorer.example.org/")
@@ -298,6 +298,7 @@ func Test_faviconTarget(t *testing.T) {
 		{"icon", product("https://cdn.example.org/zelcore.png"), "https://cdn.example.org/zelcore.png"},
 		{"relative icon", product("/zelcore.png"), ""},
 		{"javascript icon", product("javascript:alert(1)"), ""},
+		{"plain http icon", product("http://cdn.example.org/zelcore.png"), ""},
 	} {
 		if got := faviconTarget(c.snap); got != c.want {
 			t.Errorf("%s: faviconTarget = %q, want %q", c.name, got, c.want)
@@ -307,6 +308,7 @@ func Test_faviconTarget(t *testing.T) {
 
 func Test_setDeepPageCacheControl(t *testing.T) {
 	const public = "public, max-age=86400"
+	const publicTx = "public, max-age=600, stale-while-revalidate=3600"
 	plain := &TemplateData{}
 	withFiat := &TemplateData{SecondaryCoin: "USD"}
 	for _, c := range []struct {
@@ -320,13 +322,14 @@ func Test_setDeepPageCacheControl(t *testing.T) {
 		{"unconfirmed", 0, "/tx/x", false, plain, ""},
 		{"young", 1, "/tx/x", false, plain, ""},
 		{"at threshold", 100, "/tx/x", false, plain, ""},
-		{"deep", 101, "/tx/x", false, plain, public},
-		{"very deep", 1000000, "/block/1?page=2", false, plain, public},
+		{"deep tx", 101, "/tx/x", false, plain, publicTx},
+		{"deep block", 101, "/block/1", false, plain, public},
+		{"very deep block", 1000000, "/block/1?page=2", false, plain, public},
 		{"secondary param", 1000, "/tx/x?secondary=eur", false, plain, ""},
 		{"use_secondary param", 1000, "/tx/x?use_secondary=true", false, plain, ""},
 		{"empty secondary param", 1000, "/tx/x?secondary=", false, plain, ""},
 		{"secondary cookie", 1000, "/tx/x", true, plain, ""},
-		{"fiat rates, default currency", 1000, "/tx/x", false, withFiat, public},
+		{"fiat rates, default currency", 1000, "/tx/x", false, withFiat, publicTx},
 		{"fiat rates, chosen currency", 1000, "/tx/x", true, withFiat, ""},
 		{"fiat rates, currency param", 1000, "/tx/x?secondary=eur", false, withFiat, ""},
 		{"no data", 1000, "/tx/x", false, nil, ""},
@@ -336,7 +339,11 @@ func Test_setDeepPageCacheControl(t *testing.T) {
 			r.AddCookie(&http.Cookie{Name: secondaryCoinCookieName, Value: "EUR=true"})
 		}
 		w := httptest.NewRecorder()
-		setDeepPageCacheControl(w, r, c.data, c.confirmations)
+		cc := deepTxCacheControl
+		if strings.HasPrefix(c.url, "/block/") {
+			cc = deepBlockCacheControl
+		}
+		setDeepPageCacheControl(w, r, c.data, c.confirmations, cc)
 		if got := w.Header().Get("Cache-Control"); got != c.want {
 			t.Errorf("%s: Cache-Control %q, want %q", c.name, got, c.want)
 		}
@@ -372,7 +379,7 @@ func Test_setDeepPageCacheControl_PostHandlerCookie(t *testing.T) {
 			r.AddCookie(&http.Cookie{Name: secondaryCoinCookieName, Value: c.cookie})
 		}
 		w := httptest.NewRecorder()
-		setDeepPageCacheControl(w, r, c.data, 1000)
+		setDeepPageCacheControl(w, r, c.data, 1000, deepTxCacheControl)
 		s.postHtmlTemplateHandler(c.data, w, r)
 		public := strings.HasPrefix(w.Header().Get("Cache-Control"), "public")
 		setCookie := w.Header().Get("Set-Cookie")
@@ -401,13 +408,13 @@ func Test_PublicServer_DeepPageFiatCookie(t *testing.T) {
 	// a settled page: any template will do, the headers are what is tested
 	deep := s.htmlTemplateHandler(func(w http.ResponseWriter, r *http.Request) (tpl, *TemplateData, error) {
 		data := s.newTemplateData(r)
-		setDeepPageCacheControl(w, r, data, 1000)
+		setDeepPageCacheControl(w, r, data, 1000, deepTxCacheControl)
 		return sendTransactionTpl, data, nil
 	})
 	for _, c := range []struct {
 		name, url, cookie, wantCache, wantSetCookie, wantScript string
 	}{
-		{"first visit", "/x", "", "public, max-age=86400", "", `var hasSecondary=true;var secondaryCoinDefault="USD=false";`},
+		{"first visit", "/x", "", "public, max-age=600, stale-while-revalidate=3600", "", `var hasSecondary=true;var secondaryCoinDefault="USD=false";`},
 		{"cookie", "/x", "EUR=true", "", "secondary_coin=EUR=true; Path=/", `var secondaryCoinDefault="EUR=true";`},
 		{"param", "/x?secondary=eur", "", "", "secondary_coin=EUR=false; Path=/", `var secondaryCoinDefault="EUR=false";`},
 	} {
@@ -427,5 +434,59 @@ func Test_PublicServer_DeepPageFiatCookie(t *testing.T) {
 			t.Errorf("%s: Vary %q, want Cookie", c.name, w.Header().Get("Vary"))
 		}
 		checkHTML(t, c.name, w.Body.String(), []string{c.wantScript}, nil)
+	}
+}
+
+func Test_llmsTxt_OperatorFromFeed(t *testing.T) {
+	parser, chain := setupChain(t)
+	s, dbpath := setupPublicHTTPServer(parser, chain, t, false)
+	defer closeAndDestroyPublicServer(t, s, dbpath)
+	s.ConnectFullPublicInterface()
+	const base = "https://explorer.example.org"
+	zelcore := explorercontent.Product{ID: "zelcore", Name: "Zelcore", TargetURL: "https://zelcore.example/?utm=x"}
+	flux := explorercontent.Product{ID: "flux", Name: "Flux", TargetURL: "https://flux.example/path"}
+	for _, c := range []struct {
+		name     string
+		products []explorercontent.Product
+		want     []string
+		absent   []string
+	}{
+		{"no feed", nil, []string{"addresses. Based on Blockbook"}, []string{"Operated by", "Powered by", "ZelCore", "Flux"}},
+		{"both", []explorercontent.Product{zelcore, flux}, []string{"addresses. Operated by Zelcore (https://zelcore.example). Powered by Flux (https://flux.example). Based on Blockbook"}, nil},
+		{"operator only", []explorercontent.Product{zelcore}, []string{"Operated by Zelcore (https://zelcore.example). Based on Blockbook"}, []string{"Powered by"}},
+		{"platform only", []explorercontent.Product{flux}, []string{"Powered by Flux (https://flux.example). Based on Blockbook"}, []string{"Operated by"}},
+		{"http target", []explorercontent.Product{{ID: "zelcore", Name: "Zelcore", TargetURL: "http://zelcore.example"}, flux}, []string{"Powered by Flux"}, []string{"Operated by", "http://"}},
+		{"no name", []explorercontent.Product{{ID: "zelcore", TargetURL: "https://zelcore.example"}}, nil, []string{"Operated by"}},
+		{"name with newline", []explorercontent.Product{{ID: "zelcore", Name: "Zel\n# core", TargetURL: "https://zelcore.example"}}, []string{"Operated by Zel # core (https://zelcore.example)."}, []string{"\n# core"}},
+	} {
+		checkHTML(t, c.name, s.llmsTxtFor(base, explorercontent.Snapshot{Products: c.products}), c.want, c.absent)
+	}
+}
+
+// The page patterns are listed only when the full internal explorer serves them.
+func Test_llmsTxt_PagePatterns(t *testing.T) {
+	parser, chain := setupChain(t)
+	s, dbpath := setupPublicHTTPServer(parser, chain, t, false)
+	defer closeAndDestroyPublicServer(t, s, dbpath)
+	patterns := map[string]string{"Block": "/block/{height or hash}", "Transaction": "/tx/{txid}", "Address": "/address/{address}"}
+	for _, c := range []struct {
+		name                    string
+		internal, fullInterface bool
+		listed                  bool
+	}{
+		{"initial sync", true, false, false},
+		{"external explorer", false, true, false},
+		{"full internal explorer", true, true, true},
+	} {
+		s.internalExplorer, s.isFullInterface = c.internal, c.fullInterface
+		out := s.llmsTxt("https://explorer.example.org")
+		for label, p := range patterns {
+			if got := strings.Contains(out, "- "+label+": https://explorer.example.org"+p+"\n"); got != c.listed {
+				t.Errorf("%s: page pattern %s listed = %v, want %v", c.name, p, got, c.listed)
+			}
+		}
+		if !strings.Contains(out, "/status") || !strings.Contains(out, "## API") {
+			t.Errorf("%s: llms.txt lost its status link or API section", c.name)
+		}
 	}
 }

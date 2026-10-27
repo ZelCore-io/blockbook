@@ -366,8 +366,28 @@ func Test_PublicServer_PageHead(t *testing.T) {
 	}, nil)
 
 	checkHTML(t, "sendtx", head("/sendtx"), []string{`<meta name="robots" content="noindex,follow">`, `<title>Send a raw Fake Coin transaction</title>`}, nil)
-	checkHTML(t, "search", head404("/search?q=%3C%2Fscript%3Exx"), []string{`<meta name="robots" content="noindex`, `<title>No matching records found for &#39;&lt;/script&gt;xx&#39; · Fake Coin Explorer</title>`}, []string{`rel="canonical"`, `</script>xx`})
+	checkHTML(t, "search", head404("/search?q=%3C%2Fscript%3Exx"), []string{`<meta name="robots" content="noindex,follow">`, `<title>No matching records found for &#39;&lt;/script&gt;xx&#39; · Fake Coin Explorer</title>`}, []string{`rel="canonical"`, `</script>xx`})
 	checkHTML(t, "status", head("/status"), []string{`<link rel="canonical" href="https://explorer.example.com/status">`, `<title>Fake Coin Explorer status</title>`}, nil)
 	checkHTML(t, "blocks", head("/blocks"), []string{`<link rel="canonical" href="https://explorer.example.com/blocks">`}, nil)
 	checkHTML(t, "mempool", head("/mempool"), []string{`<link rel="canonical" href="https://explorer.example.com/mempool">`}, nil)
+}
+
+// Error pages are noindex; the no-results search page also lets crawlers follow its links. This
+// holds for the data newTemplateDataWithError builds, before setPageHead runs.
+func Test_newTemplateDataWithError_Robots(t *testing.T) {
+	parser, chain := setupChain(t)
+	s, dbpath := setupPublicHTTPServer(parser, chain, t, false)
+	defer closeAndDestroyPublicServer(t, s, dbpath)
+	for _, c := range []struct{ url, want string }{
+		{"/tx/00", "noindex"},
+		{"/search?q=nothing", "noindex,follow"},
+		{"/search/?q=nothing", "noindex,follow"},
+		{"/blocksearch", "noindex"},
+		{"/blocks", "noindex"},
+	} {
+		td := s.newTemplateDataWithError(&api.APIError{Text: "x", Public: true}, httptest.NewRequest("GET", c.url, nil))
+		if td.Robots != c.want {
+			t.Errorf("%s: Robots %q, want %q", c.url, td.Robots, c.want)
+		}
+	}
 }

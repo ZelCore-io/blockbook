@@ -252,15 +252,18 @@ func (s Snapshot) FluxSymbol() string {
 	return ""
 }
 
-// ZelcoreProduct is the tile that feeds the "Watch in Zelcore" prompt, or nil.
-func (s Snapshot) ZelcoreProduct() *Product {
+// ProductByID is the first product tile with the given id, or nil.
+func (s Snapshot) ProductByID(id string) *Product {
 	for i := range s.Products {
-		if s.Products[i].ID == "zelcore" {
+		if s.Products[i].ID == id {
 			return &s.Products[i]
 		}
 	}
 	return nil
 }
+
+// ZelcoreProduct is the tile that feeds the "Watch in Zelcore" prompt, or nil.
+func (s Snapshot) ZelcoreProduct() *Product { return s.ProductByID("zelcore") }
 
 // MoreExplorers are the valid explorers to link under "More explorers", at most 24. Every entry
 // is checked again, so a Snapshot built without the feed's validation still renders only safe
