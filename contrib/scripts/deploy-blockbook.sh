@@ -5,22 +5,42 @@
 #
 # Steps: report host capabilities, record the running instance, build the package with the
 # production settings (through build-with-swap.sh when RAM is short), back up the installed
-# files, install with --force-confold (keeps the server's blockchaincfg.json), restart and
-# verify. A failed check restores the backup unless --no-rollback is given.
+# files, install with --force-confold (keeps the server's blockchaincfg.json), merge new
+# settings of the package's blockchaincfg.json into it, restart and verify. A failed check
+# restores the backup unless --no-rollback is given.
+#
+# Config drift: --force-confold keeps the host's blockchaincfg.json and drops the package's
+# version next to it as blockchaincfg.json.dpkg-dist. After the install the script compares the
+# two at the top level and prints three lists: keys the package added, keys whose value
+# differs, and keys only the host has. Values of keys named like rpc_pass, rpc_user, password,
+# secret, key or token are shown as <redacted>. By default the added keys are merged into the
+# live file before the restart (the live value wins for every key that already exists); changed
+# keys are only reported. The live file is backed up first, written through a temp file plus
+# mv, and checked to be valid JSON. After a merge the .dpkg-dist file is renamed to
+# .dpkg-dist.applied-<timestamp>. A failed merge keeps the original file and counts as a
+# failed check.
 #
 # Only the blockbook-<coin> package is built and installed. The backend package is never
 # built, installed or restarted, and the index database is never touched.
 #
 # Options:
-#   --check              print capabilities and the running instance, change nothing
+#   --check              print capabilities, the running instance and the config diff against an
+#                        existing blockchaincfg.json.dpkg-dist, change nothing
 #   --skip-build         install the package already in build/ instead of building
 #   --sync-timeout SEC   how long to wait for inSync and the previous height (default 1800)
 #   --api-timeout SEC    how long to wait for the API after the restart (default 900)
 #   --no-rollback        leave the new version in place when a check fails
+#   --config-merge=MODE  what to do with the package's blockchaincfg.json (default added)
+#                          added           merge keys missing on the host (live values win)
+#                          none            report the differences only
+#                          pick:KEY1,KEY2  as added, and also take the package value of the
+#                                          named top-level keys, e.g. pick:fiat_rates_params
 #
 # Environment:
 #   BLOCKBOOK_MIN_BUILD_MEM_MIB   RAM + free swap needed to build without extra swap (default 8192)
 #   BLOCKBOOK_SWAP_MIB            temporary swap size passed to build-with-swap.sh (default 4096)
+#
+# Requires jq on the host for the config comparison.
 #
 # Long builds: run under nohup and follow the log printed at start, e.g.
 #   nohup contrib/scripts/deploy-blockbook.sh bitcoin > /root/bb-deploy.out 2>&1 &
@@ -34,10 +54,92 @@ usage() {
     exit "${1:-0}"
 }
 
+# ---- blockchaincfg.json drift handling ----------------------------------------------------
+# Top-level key comparison of the live config against the package's .dpkg-dist copy. These
+# functions only need jq, so contrib/scripts/test-deploy-config-merge.sh can source this file.
+
+# Key names whose values are never printed (case-insensitive).
+cfg_secret_re='rpc_pass|rpc_user|password|secret|key|token'
+
+# cfg_validate FILE: succeed when FILE holds one JSON object.
+cfg_validate() { jq -e 'type == "object"' "$1" >/dev/null 2>&1; }
+
+# cfg_report LIVE DIST: print the added, changed and host-only top-level keys. Values of keys
+# matching cfg_secret_re (also nested ones) are replaced by <redacted>; long values are cut.
+cfg_report() {
+    jq -r -n --slurpfile live "$1" --slurpfile dist "$2" --arg re "$cfg_secret_re" '
+        def secret: test($re; "i");
+        def hide: walk(if type == "object"
+                       then with_entries(if (.key | secret) then .value = "<redacted>" else . end)
+                       else . end);
+        def show($k; $v): if ($k | secret) then "<redacted>" else ($v | hide | tojson | .[0:200]) end;
+        $live[0] as $l | $dist[0] as $d |
+        ($d | keys_unsorted | map(select(. as $k | $l | has($k) | not))) as $added |
+        ($d | keys_unsorted | map(select(. as $k | ($l | has($k)) and $l[$k] != $d[$k]))) as $changed |
+        ($l | keys_unsorted | map(select(. as $k | $d | has($k) | not))) as $only |
+        "Added by the package, missing on the host (\($added | length)):",
+        ($added[] | . as $k | "  + \($k) = \(show($k; $d[$k]))"),
+        "Changed, host value differs from the package (\($changed | length)); never applied automatically:",
+        ($changed[] | . as $k | "  ~ \($k): host \(show($k; $l[$k])), package \(show($k; $d[$k]))"),
+        "Host-only, not in the package (\($only | length)):",
+        ($only[] | "  - \(.)")'
+}
+
+# cfg_merge LIVE DIST MODE BACKUP_DIR
+#   MODE is added, none or pick:KEY1,KEY2. Writes LIVE atomically (temp file in the same
+#   directory with the mode and owner of LIVE, then mv) after copying it into BACKUP_DIR.
+#   Returns 0 when LIVE was replaced, 10 when nothing was changed, 1 on any failure
+#   (LIVE is left untouched).
+cfg_merge() {
+    local live=$1 dist=$2 mode=$3 backup_dir=$4 picks='' picks_json missing tmp
+    case $mode in
+        added) ;;
+        none) return 10 ;;
+        pick:*) picks=${mode#pick:} ;;
+        *) echo "Error: bad config merge mode: $mode" >&2; return 1 ;;
+    esac
+    cfg_validate "$live" || { echo "Error: $live is not a valid JSON object" >&2; return 1; }
+    cfg_validate "$dist" || { echo "Error: $dist is not a valid JSON object" >&2; return 1; }
+
+    picks_json=$(jq -c -n --arg p "$picks" '$p | split(",") | map(select(length > 0))')
+    missing=$(jq -r -n --slurpfile d "$dist" --argjson picks "$picks_json" \
+        '$picks | map(select(. as $k | $d[0] | has($k) | not)) | join(",")')
+    [[ -z $missing ]] || { echo "Error: pick: key(s) not in the package config: $missing" >&2; return 1; }
+
+    tmp=$(mktemp "$live.merge.XXXXXX") || return 1
+    # cp -p gives the temp file the mode and owner of the live file; its content is replaced.
+    if ! cp -p "$live" "$tmp" ||
+       ! jq --indent 4 --slurpfile d "$dist" --argjson picks "$picks_json" '
+            . as $l | $d[0] as $d
+            | $l
+            + ($d | with_entries(select(.key as $k | $l | has($k) | not)))
+            + ($d | with_entries(select(.key as $k | $picks | index($k) != null)))' "$live" > "$tmp"; then
+        rm -f -- "$tmp"; echo 'Error: jq merge failed' >&2; return 1
+    fi
+    if ! cfg_validate "$tmp"; then
+        rm -f -- "$tmp"; echo 'Error: merged config is not valid JSON' >&2; return 1
+    fi
+    # Same data as before: leave the file alone (no rewrite, no new backup).
+    if [[ $(jq -S -c . "$tmp") == "$(jq -S -c . "$live")" ]]; then
+        rm -f -- "$tmp"; return 10
+    fi
+    if ! { mkdir -p "$backup_dir" && cp -p "$live" "$backup_dir/blockchaincfg.json.pre-merge"; }; then
+        rm -f -- "$tmp"; echo "Error: could not back up $live to $backup_dir" >&2; return 1
+    fi
+    if ! mv -f -- "$tmp" "$live"; then
+        rm -f -- "$tmp"; echo "Error: could not replace $live" >&2; return 1
+    fi
+    return 0
+}
+
+# Sourced (by the test): stop here, only the functions above are wanted.
+[[ ${BASH_SOURCE[0]} == "$0" ]] || return 0
+
 coin=''
 check_only=0
 skip_build=0
 rollback=1
+config_merge=added
 sync_timeout=1800
 api_timeout=900
 while [[ $# -gt 0 ]]; do
@@ -45,6 +147,7 @@ while [[ $# -gt 0 ]]; do
         --check) check_only=1 ;;
         --skip-build) skip_build=1 ;;
         --no-rollback) rollback=0 ;;
+        --config-merge=*) config_merge=${1#--config-merge=} ;;
         --sync-timeout) sync_timeout=${2:-}; shift ;;
         --api-timeout) api_timeout=${2:-}; shift ;;
         -h|--help) usage 0 ;;
@@ -56,13 +159,16 @@ done
 [[ -n $coin ]] || usage 1
 [[ $coin =~ ^[a-z0-9][a-z0-9_-]*$ ]] || fail 'Invalid coin identifier.'
 [[ $sync_timeout =~ ^[0-9]+$ && $api_timeout =~ ^[0-9]+$ ]] || fail 'Timeouts must be whole seconds.'
+[[ $config_merge == added || $config_merge == none ||
+   $config_merge =~ ^pick:[A-Za-z0-9_.-]+(,[A-Za-z0-9_.-]+)*$ ]] ||
+    fail "Invalid --config-merge value '$config_merge' (use added, none or pick:KEY1,KEY2)."
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 config=$repo/configs/coins/$coin.json
 [[ -f $config ]] || fail "Unknown coin: $coin"
 [[ $(uname -s) == Linux ]] || fail 'This script requires a Linux host.'
 [[ $(id -u) == 0 ]] || fail 'Run this script as root (sudo).'
-for tool in python3 git dpkg dpkg-deb systemctl curl awk df nproc; do
+for tool in python3 git dpkg dpkg-deb systemctl curl awk df nproc jq; do
     command -v "$tool" >/dev/null || fail "Required command is missing: $tool"
 done
 
@@ -148,6 +254,20 @@ else
 fi
 pre_height=$(num "$pre_height")
 
+config_live=$install_dir/config/blockchaincfg.json
+config_dist=$config_live.dpkg-dist
+log "Config merge mode: $config_merge"
+if [[ -f $config_dist ]]; then
+    log "Pending package config $config_dist vs the live $config_live:"
+    if cfg_validate "$config_live" && cfg_validate "$config_dist"; then
+        cfg_report "$config_live" "$config_dist"
+    else
+        log 'Cannot compare: one of the files is not a valid JSON object.'
+    fi
+else
+    log "No $config_dist yet; the diff is printed after the install."
+fi
+
 if (( check_only )); then
     log 'Check only: nothing changed.'
     exit 0
@@ -214,6 +334,29 @@ systemctl stop "$service"
 log 'Installing (existing blockchaincfg.json is kept)'
 if ! DEBIAN_FRONTEND=noninteractive dpkg --force-confold -i "$deb"; then
     verify_failed 'dpkg install failed'
+fi
+
+# Settings the new package ships for blockchaincfg.json land in .dpkg-dist and would be ignored.
+# Report and merge them while the service is stopped. The pre-merge copy goes into the backup.
+if [[ -f $config_dist ]]; then
+    log "Package config differs from the host config ($config_dist), mode $config_merge:"
+    if ! cfg_validate "$config_live" || ! cfg_validate "$config_dist"; then
+        verify_failed "$config_live or $config_dist is not a valid JSON object"
+    fi
+    cfg_report "$config_live" "$config_dist" || verify_failed "could not compare $config_live with $config_dist"
+    rc=0
+    cfg_merge "$config_live" "$config_dist" "$config_merge" "$backup" || rc=$?
+    case $rc in
+        0)
+            log "Merged into $config_live (previous file: $backup/blockchaincfg.json.pre-merge)"
+            mv -f -- "$config_dist" "$config_dist.applied-$stamp"
+            log "Package config kept as $config_dist.applied-$stamp"
+            ;;
+        10) log "Config merge ($config_merge): $config_live left as it is; $config_dist left in place." ;;
+        *) verify_failed "config merge failed, $config_live is unchanged" ;;
+    esac
+else
+    log "No $config_dist: the host config already matches the package or the package config did not change."
 fi
 systemctl daemon-reload
 if [[ -f $backup/unit.service ]] && ! diff -q "$backup/unit.service" "$unit_file" >/dev/null; then
