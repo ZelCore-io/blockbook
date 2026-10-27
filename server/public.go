@@ -499,6 +499,7 @@ func (s *PublicServer) newTemplateData(r *http.Request) *TemplateData {
 		t.Minified = ".min.8"
 	}
 	if s.is.HasFiatRates {
+		t.RatesSource = s.fiatRates.RatesSource()
 		// get the secondary coin and if it should be shown either from query parameters "secondary" and "use_secondary"
 		// or from the cookie "secondary_coin" in the format secondary=use_secondary, for example EUR=true
 		// the query parameters take precedence over the cookie
@@ -575,7 +576,7 @@ type TemplateData struct {
 	ExplorerContent          explorercontent.Snapshot
 	HomePage                 bool   // index page: base.html renders the home band and skips the hubPage layout
 	HomeTab                  string // index page tab: "blocks" or "txs"
-	HomePrice                string // index page: formatted USD price, empty when the current ticker is missing or stale
+	HomePrice                string // index page: formatted price in the secondary currency (USD by default), empty when the current ticker is missing or stale
 	CoinName                 string
 	CoinShortcut             string
 	CoinLabel                string
@@ -616,6 +617,7 @@ type TemplateData struct {
 	CurrentSecondaryCoinRate float64
 	CurrentTicker            *common.CurrencyRatesTicker
 	SecondaryCurrencies      []string
+	RatesSource              string // who to credit for the exchange rates ("Coingecko" or "ZelCore"), empty without fiat rates
 	TxDate                   string
 	TxSecondaryCoinRate      float64
 	TxTicker                 *common.CurrencyRatesTicker
@@ -1363,7 +1365,11 @@ func (s *PublicServer) explorerIndex(w http.ResponseWriter, r *http.Request) (tp
 	if r.URL.Query().Get("tab") == "txs" {
 		data.HomeTab = "txs"
 	}
-	data.HomePrice = homePrice(s.fiatRates.GetCurrentTicker("usd", ""), timeNow())
+	priceCurrency := "usd"
+	if data.SecondaryCoin != "" {
+		priceCurrency = strings.ToLower(data.SecondaryCoin)
+	}
+	data.HomePrice = homePrice(s.fiatRates.GetCurrentTicker(priceCurrency, ""), priceCurrency, timeNow())
 	// The lists are best effort: the home page still renders when one of them is unavailable.
 	// Each tab loads only its own list; the mempool figure in the band comes from Info.
 	if data.HomeTab == "blocks" {
@@ -1398,18 +1404,35 @@ const homeItemsOnPage = 8
 // homePriceMaxAge is how old the current fiat ticker may be for the home page to show a price.
 const homePriceMaxAge = 2 * time.Hour
 
-// homePrice returns the USD price for the home page, or "" when the ticker is missing,
-// has no USD rate, or is older than homePriceMaxAge.
-func homePrice(ticker *common.CurrencyRatesTicker, now time.Time) string {
+// homePrice returns the home page price in the given lower-case currency (the visitor's secondary
+// currency), or "" when the ticker is missing, has no rate for it, or is older than homePriceMaxAge.
+// USD keeps the "$" form; other currencies are written like the explorer's secondary amounts, with
+// the upper-case code after the number ("0.0219 EUR").
+func homePrice(ticker *common.CurrencyRatesTicker, currency string, now time.Time) string {
 	if ticker == nil || now.Sub(ticker.Timestamp) > homePriceMaxAge {
 		return ""
 	}
-	return formatUSDPrice(float64(ticker.Rates["usd"]))
+	rate := float64(ticker.Rates[currency])
+	if currency == "usd" {
+		return formatUSDPrice(rate)
+	}
+	if n := formatPriceNumber(rate); n != "" {
+		return n + " " + strings.ToUpper(currency)
+	}
+	return ""
 }
 
 // formatUSDPrice formats a USD price with two decimals, or with three significant digits
 // for prices below one cent ($0.0237), and with thousands separators ($64,123.45).
 func formatUSDPrice(rate float64) string {
+	if n := formatPriceNumber(rate); n != "" {
+		return "$" + n
+	}
+	return ""
+}
+
+// formatPriceNumber formats a price like formatUSDPrice, without the currency sign.
+func formatPriceNumber(rate float64) string {
 	if !(rate > 0) || math.IsInf(rate, 0) {
 		return ""
 	}
@@ -1429,7 +1452,6 @@ func formatUSDPrice(rate float64) string {
 		}
 	}
 	var b strings.Builder
-	b.WriteByte('$')
 	for i, c := range intPart {
 		if i > 0 && (len(intPart)-i)%3 == 0 {
 			b.WriteByte(',')

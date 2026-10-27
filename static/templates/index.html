@@ -3,7 +3,7 @@ fills the band figures and lays out everything below it. The status tables live 
 {{define "hubHomeFigures"}}{{$bb := .Info.Blockbook}}
 <dl class="hub-figures">
     {{- if .HomePrice}}
-    <div><dt>Price</dt><dd title="Exchange rates provided by Coingecko">{{.HomePrice}}</dd></div>
+    <div><dt>Price</dt><dd{{with .RatesSource}} title="Exchange rates provided by {{.}}"{{end}}>{{.HomePrice}}</dd></div>
     {{- end}}
     <div><dt>Height</dt><dd>{{formatUint32 $bb.BestHeight}}</dd></div>
     <div><dt>Mempool</dt><dd>{{formatInt $bb.MempoolSize}} tx</dd></div>

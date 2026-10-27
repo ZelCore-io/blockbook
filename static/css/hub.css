@@ -271,6 +271,20 @@
     object-fit: contain;
 }
 
+/* D: on phones the Flux link shrinks to its symbol at the end of the brand row (the link keeps its
+   name in aria-label). Without a symbol from the feed the text stays. */
+@media (max-width: 575.98px) {
+    .hub-powered {
+        margin-left: auto;
+        min-width: 44px;
+        justify-content: center;
+    }
+
+    .hub-powered:has(.hub-powered-mark) .hub-powered-text {
+        display: none;
+    }
+}
+
 .hub-nav-links {
     display: flex;
     flex-wrap: wrap;
@@ -289,6 +303,80 @@
     display: flex;
     align-items: center;
     gap: 12px;
+}
+
+/* D: currency switch. main.css styles it for the old white header (#header .bb-group, grey box
+   with a 0.6rem border); on the band it gets the hub radius and 44px targets on touch. */
+.hub-nav-end .bb-group {
+    border-width: 3px;
+    border-radius: var(--hub-radius-sm);
+}
+
+.hub-nav-end .bb-group > .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    --bs-btn-border-radius: 9px;
+}
+
+@media (pointer: coarse) {
+    .hub-nav-end .bb-group > .btn {
+        min-width: 44px;
+        min-height: 44px;
+    }
+}
+
+/* The dropdown toggle's padding-right: 0 (main.css) leaves the caret glued to the edge. */
+.hub-nav-end #header .btn.dropdown-toggle {
+    padding-right: var(--bs-btn-padding-x);
+}
+
+/* The currency menu: a hub card with roomy links, three columns on phones (col-4) and four from
+   576px (col-sm-3). Its height is capped so it fits a landscape phone; the rest scrolls. */
+.hub-nav-end #header .dropdown-menu {
+    --bs-dropdown-min-width: 16rem;
+    max-height: max(200px, calc(100vh - 160px));
+    max-height: max(200px, calc(100dvh - 160px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    margin: 0;
+    padding: 6px;
+    border: 1px solid var(--hub-line);
+    border-radius: var(--hub-radius-sm);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.hub-nav-end #header .dropdown-menu > div {
+    padding: 0;
+}
+
+.hub-nav-end #header .dropdown-menu a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 36px;
+    border-radius: 8px;
+    color: var(--hub-ink);
+    font-size: 14px;
+}
+
+.hub-nav-end #header .dropdown-menu a.active {
+    background: var(--hub-line-soft);
+    color: var(--hub-link);
+    font-weight: 700;
+}
+
+@media (pointer: coarse) {
+    .hub-nav-end #header .dropdown-menu a {
+        min-height: 44px;
+    }
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .hub-nav-end #header .dropdown-menu a:hover {
+        background: var(--hub-line-soft);
+        color: var(--hub-link-hover);
+    }
 }
 
 .hub-pill {
@@ -317,6 +405,33 @@
     font-size: 14px;
 }
 
+/* D: below 992px the currency switch joins the nav links' row and the inner-page search takes the
+   next row, left-aligned and growing to the full width (P14). On phones the links share their row
+   with the switch and wrap inside the space left (P1); the brand fills the first row so the links always start a new one. */
+@media (max-width: 991.98px) {
+    .hub-nav-end {
+        order: 1;
+    }
+
+    .hub-nav .hub-search {
+        order: 2;
+        flex: 1 1 100%;
+        margin-left: 0;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .hub-brand {
+        flex: 1 1 calc(100% - 64px);
+    }
+
+    .hub-nav-links {
+        flex: 1 1 0;
+        min-width: 0;
+        gap: 0 16px;
+    }
+}
+
 /* ---------- Search ---------- */
 
 .hub-search {
@@ -343,6 +458,45 @@
 .hub-search input::placeholder {
     color: var(--hub-muted);
     opacity: 1;
+}
+
+/* D: the input and its short hint. Below 576px the long placeholder is made transparent (it stays
+   in the markup for assistive tech and wider screens) and the shorter hint shows in its place while
+   the field is empty. */
+.hub-search-field {
+    position: relative;
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.hub-search-hint {
+    display: none;
+}
+
+@media (max-width: 575.98px) {
+    .hub-search input::placeholder {
+        color: transparent;
+    }
+
+    .hub-search-field input:placeholder-shown + .hub-search-hint {
+        display: block;
+        position: absolute;
+        top: 50%;
+        left: 16px;
+        right: 16px;
+        transform: translateY(-50%);
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        color: var(--hub-muted);
+        font-size: 16px;
+        pointer-events: none;
+    }
+
+    .hub-nav .hub-search-field input:placeholder-shown + .hub-search-hint {
+        font-size: 14px;
+    }
 }
 
 .hub-search button {
@@ -407,14 +561,21 @@
     color: #FFFFFF;
 }
 
+/* D: one font for every figure, with tabular digits so the values do not jump as they update
+   (main.css sets the body font on every element, so the number spans are listed too). */
 .hub-figures dd,
 .hub-figure-value {
     margin: 0;
-    font-family: var(--hub-font-mono);
+    font-family: var(--hub-font-heading);
     font-size: 24px;
-    font-weight: 500;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
     color: #FFFFFF;
     overflow-wrap: anywhere;
+}
+
+.hub-figures dd * {
+    font-family: inherit;
 }
 
 @media (max-width: 575.98px) {

@@ -68,6 +68,7 @@ type FiatRates struct {
 	backfillHistory        bool
 	provider               string
 	allowedVsCurrencies    string
+	ratesSource            string
 	mux                    sync.RWMutex
 	currentTicker          *common.CurrencyRatesTicker
 	hourlyTickers          map[int64]*common.CurrencyRatesTicker
@@ -137,6 +138,7 @@ func NewFiatRates(db *db.RocksDB, config *common.Config, metrics *common.Metrics
 	fr.reconcileAtStartup = rdParams.ReconcileHistoricalAtStartup == nil || *rdParams.ReconcileHistoricalAtStartup
 	fr.reconcileMaxDuration = defaultReconcileMaxDuration
 	fr.backfillHistory = rdParams.BackfillHistory
+	fr.ratesSource = ratesSource(rdParams.URL, rdParams.TipURL)
 	if rdParams.ReconcileHistoricalMaxMinutes != nil && *rdParams.ReconcileHistoricalMaxMinutes > 0 {
 		fr.reconcileMaxDuration = time.Duration(*rdParams.ReconcileHistoricalMaxMinutes) * time.Minute
 	}

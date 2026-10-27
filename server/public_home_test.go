@@ -134,13 +134,18 @@ func Test_PublicServer_HomePriceFreshness(t *testing.T) {
 			ts := httptest.NewServer(s.https.Handler)
 			defer ts.Close()
 
-			// The price is always quoted in USD, even when the visitor picked another secondary currency.
-			home := getHTML(t, ts.URL+"/?secondary=eur")
+			// The price follows the visitor's secondary currency; USD is the default. The fixture's
+			// fiat_rates_params url has no host, so the rates are credited to Coingecko.
+			home := getHTML(t, ts.URL+"/")
+			eur := getHTML(t, ts.URL+"/?secondary=eur")
 			price := `<dl class="hub-figures"><div><dt>Price</dt><dd title="Exchange rates provided by Coingecko">$0.0237</dd></div><div><dt>Height</dt>`
+			eurPrice := `<dl class="hub-figures"><div><dt>Price</dt><dd title="Exchange rates provided by Coingecko">0.0219 EUR</dd></div><div><dt>Height</dt>`
 			if c.price {
 				checkHTML(t, c.name, home, []string{price}, nil)
+				checkHTML(t, c.name+" eur", eur, []string{eurPrice, `use_secondary=true" class="active" aria-current="true">EUR</a>`}, []string{"$0.0237"})
 			} else {
 				checkHTML(t, c.name, home, []string{`<dl class="hub-figures"><div><dt>Height</dt>`}, []string{"<dt>Price</dt>", "$0.0237"})
+				checkHTML(t, c.name+" eur", eur, []string{`<dl class="hub-figures"><div><dt>Height</dt>`}, []string{"<dt>Price</dt>", "0.0219"})
 			}
 		})
 	}
@@ -149,27 +154,33 @@ func Test_PublicServer_HomePriceFreshness(t *testing.T) {
 func Test_homePrice(t *testing.T) {
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 	ticker := func(age time.Duration, usd float32) *common.CurrencyRatesTicker {
-		return &common.CurrencyRatesTicker{Timestamp: now.Add(-age), Rates: map[string]float32{"usd": usd}}
+		return &common.CurrencyRatesTicker{Timestamp: now.Add(-age), Rates: map[string]float32{"usd": usd, "eur": usd * 0.9, "btc": 0.000000321, "jpy": 3.5}}
 	}
 	tests := []struct {
-		name   string
-		ticker *common.CurrencyRatesTicker
-		want   string
+		name     string
+		ticker   *common.CurrencyRatesTicker
+		currency string
+		want     string
 	}{
-		{"fresh GRS", ticker(10*time.Minute, 0.0237), "$0.0237"},
-		{"just within two hours", ticker(2*time.Hour, 0.0237), "$0.0237"},
-		{"stale", ticker(2*time.Hour+time.Second, 0.0237), ""},
-		{"missing ticker", nil, ""},
-		{"no usd rate", &common.CurrencyRatesTicker{Timestamp: now, Rates: map[string]float32{"eur": 1}}, ""},
-		{"zero", ticker(0, 0), ""},
-		{"cents", ticker(0, 0.5), "$0.50"},
-		{"dollars", ticker(0, 1.5), "$1.50"},
-		{"thousands", ticker(0, 64123.45), "$64,123.45"},
-		{"tiny", ticker(0, 0.000012345), "$0.0000123"},
+		{"fresh GRS", ticker(10*time.Minute, 0.0237), "usd", "$0.0237"},
+		{"just within two hours", ticker(2*time.Hour, 0.0237), "usd", "$0.0237"},
+		{"stale", ticker(2*time.Hour+time.Second, 0.0237), "usd", ""},
+		{"missing ticker", nil, "usd", ""},
+		{"no usd rate", &common.CurrencyRatesTicker{Timestamp: now, Rates: map[string]float32{"eur": 1}}, "usd", ""},
+		{"eur", ticker(10*time.Minute, 0.0237), "eur", "0.0213 EUR"},
+		{"btc", ticker(0, 1), "btc", "0.000000321 BTC"},
+		{"jpy", ticker(0, 1), "jpy", "3.50 JPY"},
+		{"missing currency", ticker(0, 1), "chf", ""},
+		{"stale eur", ticker(3*time.Hour, 0.0237), "eur", ""},
+		{"zero", ticker(0, 0), "usd", ""},
+		{"cents", ticker(0, 0.5), "usd", "$0.50"},
+		{"dollars", ticker(0, 1.5), "usd", "$1.50"},
+		{"thousands", ticker(0, 64123.45), "usd", "$64,123.45"},
+		{"tiny", ticker(0, 0.000012345), "usd", "$0.0000123"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := homePrice(tt.ticker, now); got != tt.want {
+			if got := homePrice(tt.ticker, tt.currency, now); got != tt.want {
 				t.Errorf("homePrice() = %q, want %q", got, tt.want)
 			}
 		})

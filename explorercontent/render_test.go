@@ -216,9 +216,9 @@ func TestHomeContentRendering(t *testing.T) {
 		{ID: "ssp", Name: `<script>alert(3)</script>`, TargetURL: "https://sspwallet.io"},
 		{ID: "blank", TargetURL: "https://example.com/blank"},
 	}
-	html := renderHome(t, s, map[string]interface{}{"HomePrice": "$0.0237"})
+	html := renderHome(t, s, map[string]interface{}{"HomePrice": "$0.0237", "RatesSource": "ZelCore"})
 	for _, want := range []string{
-		`<div><dt>Price</dt><dd title="Exchange rates provided by Coingecko">$0.0237</dd></div>`, `<div><dt>Height</dt><dd>6315496</dd></div>`, `<div><dt>Mempool</dt><dd>0 tx</dd></div>`,
+		`<div><dt>Price</dt><dd title="Exchange rates provided by ZelCore">$0.0237</dd></div>`, `<div><dt>Height</dt><dd>6315496</dd></div>`, `<div><dt>Mempool</dt><dd>0 tx</dd></div>`,
 		`<section class="hub-products-grid" aria-labelledby="hub-products-title">`, `<h2 class="hub-products-title" id="hub-products-title">Flux ecosystem products</h2>`,
 		"&lt;script&gt;alert(1)", "&lt;script&gt;alert(2)", "&lt;script&gt;alert(3)",
 		`rel="sponsored noopener noreferrer"`, `referrerpolicy="no-referrer"`, `loading="lazy"`,
@@ -426,7 +426,7 @@ func TestHomeProductAccentAttribute(t *testing.T) {
 func TestFluxSymbolInBandAndFooter(t *testing.T) {
 	for _, home := range []bool{false, true} {
 		html := renderShell(t, Snapshot{Products: sixProducts()}, map[string]interface{}{"HomePage": home})
-		band := `<a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer"><span class="hub-powered-mark"><img src="https://cdn.example.com/flux.svg" alt="Flux" width="22" height="22" referrerpolicy="no-referrer"></span>Powered by Flux</a>`
+		band := `<a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer" aria-label="Powered by Flux"><span class="hub-powered-mark"><img src="https://cdn.example.com/flux.svg" alt="" width="22" height="22" referrerpolicy="no-referrer"></span><span class="hub-powered-text">Powered by Flux</span></a>`
 		if !within(html, "hub-band", "</header>", band) {
 			t.Errorf("home=%v: band lacks the Flux symbol link", home)
 		}
@@ -438,7 +438,7 @@ func TestFluxSymbolInBandAndFooter(t *testing.T) {
 		noIcon[2].IconURL = ""
 		for name, s := range map[string]Snapshot{"no icon": {Products: noIcon}, "no flux product": {Products: sixProducts()[:2]}, "empty": {}} {
 			html := renderShell(t, s, map[string]interface{}{"HomePage": home})
-			if !within(html, "hub-band", "</header>", `<a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer">Powered by Flux</a>`) {
+			if !within(html, "hub-band", "</header>", `<a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer" aria-label="Powered by Flux"><span class="hub-powered-text">Powered by Flux</span></a>`) {
 				t.Errorf("home=%v %s: band must show the text-only Flux link", home, name)
 			}
 			if strings.Contains(html, `alt="Flux"`) {
