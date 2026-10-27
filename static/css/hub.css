@@ -31,10 +31,10 @@
  * .prim-amt / .sec-amt rules by exact selector, so they must stay separate rules). Build commands (run from the repo root;
  * the perl step restores the \XXXX escapes that csso decodes to UTF-8):
  *   npx csso-cli@4.0.2 static/css/hub.css --no-restructure -o /tmp/hub.css
- *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/hub.css > static/css/hub.min.8.css
+ *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/hub.css > static/css/hub.min.9.css
  *   npx csso-cli@4.0.2 static/css/main.css --no-restructure -o /tmp/main.css
- *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/main.css > static/css/main.min.8.css
- *   npx terser@5.51.2 static/js/main.js -c -m -o static/js/main.min.8.js
+ *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/main.css > static/css/main.min.9.css
+ *   npx terser@5.51.2 static/js/main.js -c -m -o static/js/main.min.9.js
  *
  * Links: .hub-page colors plain anchors only. Bootstrap .btn and .nav-link anchors on
  * upstream pages keep their own colors.
@@ -833,10 +833,14 @@
 }
 
 /* f: edge fade while the carousel runs, so tiles do not end in a hard cut. It is dropped while
-   keyboard focus is inside, because the mask would clip the focus rings at the strip edge. */
+   keyboard focus is inside, because the mask would clip the focus rings at the strip edge.
+   The 16px side padding keeps a resting tile (scrolled to its left edge) clear of the 14px fade;
+   only tiles moving in or out pass through it. */
 .hub-products-strip.hub-products-carousel {
-    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
-    mask-image: linear-gradient(90deg, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+    padding-inline: 16px;
+    scroll-padding-inline: 16px;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
 }
 
 .hub-products-strip.hub-products-carousel:focus-visible {

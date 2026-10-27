@@ -538,9 +538,9 @@ func TestLongExplorerNameWraps(t *testing.T) {
 			t.Errorf("%s must wrap long words and be at least 44px tall", sel)
 		}
 	}
-	min, err := os.ReadFile("../static/css/hub.min.8.css")
+	min, err := os.ReadFile("../static/css/hub.min.9.css")
 	if err != nil || !strings.Contains(string(min), ".hub-explorer{") || !strings.Contains(string(min), ".hub-footer-explorers-inner{") {
-		t.Error("hub.min.8.css is not rebuilt")
+		t.Error("hub.min.9.css is not rebuilt")
 	}
 }
 
@@ -570,7 +570,7 @@ func TestHomeProductCarouselAssets(t *testing.T) {
 	// hover; the strip fades at its edges only in carousel mode.
 	for _, want := range []string{
 		".hub-products-nav-pair {", ".hub-products-nav-on .hub-products-title {", "width: 44px;",
-		".hub-products-strip.hub-products-carousel {\n    -webkit-mask-image: linear-gradient(90deg",
+		".hub-products-strip.hub-products-carousel {\n    padding-inline: 16px;\n    scroll-padding-inline: 16px;\n    -webkit-mask-image: linear-gradient(90deg",
 	} {
 		if !strings.Contains(string(css), want) {
 			t.Errorf("hub.css misses the carousel touch/fade rule %q", want)
@@ -583,17 +583,17 @@ func TestHomeProductCarouselAssets(t *testing.T) {
 	if regexp.MustCompile(`(?m)^\.hub-products-nav:hover`).MatchString(string(css)) {
 		t.Error("a top-level .hub-products-nav:hover sticks after a tap on touch screens")
 	}
-	min, err := os.ReadFile("../static/css/hub.min.8.css")
+	min, err := os.ReadFile("../static/css/hub.min.9.css")
 	if err != nil || !strings.Contains(string(min), ".hub-products-strip.hub-products-carousel{") || !strings.Contains(string(min), ".hub-products-nav{") {
-		t.Error("hub.min.8.css is not rebuilt with the carousel rules")
+		t.Error("hub.min.9.css is not rebuilt with the carousel rules")
 	}
-	js, err := os.ReadFile("../static/js/main.min.8.js")
+	js, err := os.ReadFile("../static/js/main.min.9.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"Previous products", "Next products", "hub-product-clone", "prefers-reduced-motion: reduce", `"aria-hidden","true"`} {
 		if !strings.Contains(string(js), want) {
-			t.Errorf("main.min.8.js is not rebuilt with the carousel: missing %q", want)
+			t.Errorf("main.min.9.js is not rebuilt with the carousel: missing %q", want)
 		}
 	}
 }
@@ -603,20 +603,20 @@ func TestHomeProductCarouselAssets(t *testing.T) {
 // minifier merges .sec-amt into a ".base-amt,.cbase-amt,.csec-amt,.sec-amt" rule, and the switch
 // then hides every amount. It also needs the default secondary_coin cookie code.
 func TestMainAssetsCurrencySwitch(t *testing.T) {
-	css, err := os.ReadFile("../static/css/main.min.8.css")
+	css, err := os.ReadFile("../static/css/main.min.9.css")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, rule := range []string{"}.prim-amt{display:initial}", "}.sec-amt{display:none}"} {
 		if !strings.Contains(string(css), rule) {
-			t.Errorf("main.min.8.css must keep the stand-alone rule %q (build it with csso --no-restructure)", rule[1:])
+			t.Errorf("main.min.9.css must keep the stand-alone rule %q (build it with csso --no-restructure)", rule[1:])
 		}
 	}
-	js, err := os.ReadFile("../static/js/main.min.8.js")
+	js, err := os.ReadFile("../static/js/main.min.9.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(js), "secondaryCoinDefault") {
-		t.Error("main.min.8.js is not rebuilt with the default secondary_coin cookie")
+		t.Error("main.min.9.js is not rebuilt with the default secondary_coin cookie")
 	}
 }

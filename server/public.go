@@ -516,7 +516,7 @@ func (s *PublicServer) newTemplateData(r *http.Request) *TemplateData {
 		t.MultiTokenName = bchain.EthereumTokenStandardMap[bchain.MultiToken]
 	}
 	if !s.debug {
-		t.Minified = ".min.8"
+		t.Minified = ".min.9"
 	}
 	if s.is.HasFiatRates {
 		t.RatesSource = s.fiatRates.RatesSource()
