@@ -948,6 +948,29 @@
     white-space: nowrap;
 }
 
+/* C: home Blocks / Transactions lists. The row's one link covers the whole row, so the empty half of
+   a row is a tap target too. The link keeps its own text and focus ring. */
+.hub-linkrows tr {
+    position: relative;
+}
+
+.hub-linkrows a::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+}
+
+.hub-linkrows a:focus-visible {
+    outline: 2px solid var(--hub-link);
+    outline-offset: -2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .hub-linkrows tr:hover {
+        background: var(--hub-line-soft);
+    }
+}
+
 /* A table scrolls inside .hub-scroll; its cells must not be broken per character. */
 .hub-card .hub-scroll {
     overflow-wrap: normal;
@@ -958,6 +981,69 @@
    character. Labels break between words only; values keep breaking anywhere. */
 .hub-card .info-table tr > td:first-child {
     overflow-wrap: normal;
+}
+
+/* C: main.css sets overflow-wrap: anywhere on .data-table itself, which beats the .hub-scroll reset
+   above, so column headers broke per letter ("TIMEST / AMP"). Headers stay in one piece. */
+.hub-scroll th {
+    overflow-wrap: normal;
+    white-space: nowrap;
+}
+
+/* C: both info tables of a card (block page) and the tx Details table use one label width, so
+   "Mined Time" and "Total Input" stay on one line and the two stacked tables line up. A long
+   value (Merkle root, hash) wraps inside its cell instead of being cut at the card edge. */
+.hub-card .info-table tr > td:first-child {
+    width: 9rem;
+}
+
+.hub-card .info-table td.ellipsis {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+/* C: /blocks. Auto layout so columns size to their content; the hash column takes what is left and
+   ends in an ellipsis (.hub-ellipsis). Heights, times and counts never wrap. */
+.hub-table-fit {
+    table-layout: auto;
+}
+
+.hub-table-fit th,
+.hub-table-fit td {
+    white-space: nowrap;
+    overflow-wrap: normal;
+}
+
+.hub-th-short {
+    display: none;
+}
+
+@media (max-width: 575.98px) {
+    /* Every block hash starts with the same zeros and the height links to the block, so phones drop the column. */
+    .hub-col-hash {
+        display: none;
+    }
+
+    .hub-th-full {
+        display: none;
+    }
+
+    .hub-th-short {
+        display: inline;
+    }
+
+    .hub-table-fit.table > :not(caption) > * > * {
+        padding-left: 8px;
+        padding-right: 8px;
+    }
+
+    .hub-table-fit.table > :not(caption) > * > :first-child {
+        padding-left: 16px;
+    }
+
+    .hub-table-fit.table > :not(caption) > * > :last-child {
+        padding-right: 16px;
+    }
 }
 
 .hub-pager {
@@ -1023,6 +1109,12 @@
     font-size: 20px;
     font-weight: 500;
     color: var(--hub-ink);
+}
+
+/* C: a bare text node in a <dd> is set in the mono face, where the space before a unit ("253 B")
+   is a full-width gap. Wrapping the value in .hub-stat-num sets it like the amounts beside it. */
+.hub-stat-grid .hub-stat-num {
+    font-family: var(--hub-font);
 }
 
 .hub-stat-note,
@@ -1246,6 +1338,92 @@
     flex-wrap: wrap;
 }
 
+/* C: the pager's Previous / Next show a word on wide screens and an arrow on phones; the link keeps
+   its aria-label either way. */
+.hub-pg-arrow {
+    display: none;
+    font-size: 24px;
+    font-weight: 400;
+    line-height: 1;
+}
+
+/* C: pager buttons need a darker label than upstream's #757575 on #f6f6f6 (4.3:1). */
+.hub-card .btn-paging {
+    --bs-btn-color: #595959;
+}
+
+@media (max-width: 575.98px) {
+    /* The pager is one full-width line under the title: ‹ current ±1 … last ›. */
+    .hub-section-head .paging,
+    .hub-card .paging {
+        flex-wrap: nowrap;
+        justify-content: space-between !important;
+        align-items: center;
+        gap: 0;
+        width: 100%;
+        margin-left: 0;
+    }
+
+    .hub-card .paging .hub-pg-step {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        min-width: 44px;
+        min-height: 44px;
+        padding: 0;
+    }
+
+    .hub-pg-text {
+        display: none;
+    }
+
+    .hub-pg-arrow {
+        display: inline;
+    }
+
+    .hub-card .paging .paging-group {
+        flex: 0 1 auto;
+        margin-left: 6px !important;
+        margin-right: 6px !important;
+    }
+
+    .hub-card .paging .bb-group {
+        flex-wrap: nowrap;
+        align-items: center;
+        border-width: 0 3px;
+    }
+
+    .hub-card .paging-group > .bb-group {
+        border-width: 0 3px;
+    }
+
+    .hub-card .paging .bb-group > .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 38px;
+        min-height: 44px;
+        margin: 0;
+        --bs-btn-padding-x: 6px;
+    }
+
+    .hub-pg-gap {
+        padding: 0 4px;
+    }
+
+    /* Far pages go, except the last one; the gap after "1" goes with it. */
+    .hub-pg-far:not(:last-child),
+    .hub-pg-gap:nth-child(2) {
+        display: none !important;
+    }
+
+    /* Four or more digits: only the current page and the last one fit beside the arrows. */
+    .hub-pg-wide .hub-pg-near {
+        display: none !important;
+    }
+}
+
 /* Upstream tables keep their classes; inside a card they drop their outer margins. */
 .hub-card .data-table {
     width: 100%;
@@ -1288,6 +1466,26 @@
 
 .hub-card .tx-detail .ellipsis {
     font-family: var(--hub-font-mono);
+}
+
+/* C: small print inside cards ("(20.00 sat/vByte)") stays at 12 px, and the three upstream colours
+   below 4.5:1 are darkened: the unspent marker (3.1), the outpoint arrow (4.4). The arrow also
+   gets a 32 px target. */
+.hub-card .small,
+.hub-card small {
+    font-size: max(12px, 0.875em);
+}
+
+.hub-card .unspent {
+    color: #1e7e34 !important;
+}
+
+.hub-card .outpoint {
+    color: #595959 !important;
+    min-width: 32px;
+    min-height: 32px;
+    line-height: 32px;
+    text-align: center;
 }
 
 /* Bootstrap badges never wrap; the unconfirmed tx's "confirmation estimated in ..." badge is

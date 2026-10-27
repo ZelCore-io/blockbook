@@ -5,13 +5,13 @@
         {{if $blocks.Blocks}}{{template "paging" $data }}{{end}}
     </div>
     {{if $blocks.Blocks}}
-    <div class="hub-scroll"><table class="table table-hover data-table">
+    <div class="hub-scroll"><table class="table table-hover data-table hub-table-fit">
         <thead>
             <tr>
                 <th>Height</th>
-                <th class="col-md-6">Hash</th>
-                <th class="col-md-2">Timestamp</th>
-                <th class="text-end">Transactions</th>
+                <th class="hub-col-hash">Hash</th>
+                <th><span class="hub-th-full">Timestamp</span><span class="hub-th-short">Time</span></th>
+                <th class="text-end"><span class="hub-th-full">Transactions</span><span class="hub-th-short">Txs</span></th>
                 <th class="text-end">Size</th>
             </tr>
         </thead>
@@ -19,7 +19,7 @@
             {{range $b := $blocks.Blocks}}
             <tr>
                 <td><a href="/block/{{$b.Height}}">{{formatUint32 $b.Height}}</a></td>
-                <td class="ellipsis hub-mono">{{$b.Hash}}</td>
+                <td class="hub-ellipsis hub-mono hub-col-hash">{{$b.Hash}}</td>
                 <td>{{unixTimeSpan $b.Time}}</td>
                 <td class="text-end">{{formatUint32 $b.Txs}}</td>
                 <td class="text-end">{{formatUint32 $b.Size}}</td>
