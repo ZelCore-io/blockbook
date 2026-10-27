@@ -150,5 +150,5 @@
         </table>
     </div>
 </div>
-{{if .SecondaryCoin}}<span class="text-muted">Exchange rates provided by Coingecko.</span>{{end}}
+{{if and .SecondaryCoin .RatesSource}}<span class="text-muted">Exchange rates provided by {{.RatesSource}}.</span>{{end}}
 {{end}}
