@@ -1355,8 +1355,10 @@
 }
 
 /* f: the node version string ("/Name:1.2.3/") stays in one piece; only when even that cannot fit does it break.
-   Below 705px (where the three cells of the full-width aside are narrower than the string) it gets a row of its own. */
-.hub-stat-grid dd.hub-stat-node {
+   Below 705px (where the three cells of the full-width aside are narrower than the string) it gets a row of its own.
+   The difficulty ("67355.1597271 / 2303" on multi-algo coins) gets the same, so it breaks at the slash, not mid-number. */
+.hub-stat-grid dd.hub-stat-node,
+.hub-stat-grid dd.hub-stat-long {
     overflow-wrap: break-word;
     font-size: 16px;
 }

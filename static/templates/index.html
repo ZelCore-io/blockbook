@@ -110,7 +110,7 @@ previous/next buttons on top of the same scrolling row. */ -}}
             <h2 id="hub-network-title">Network</h2>
             <dl class="hub-stat-grid">
                 {{- if $be.Difficulty}}
-                <div><dt>Difficulty</dt><dd class="hub-mono">{{$be.Difficulty}}</dd></div>
+                <div class="hub-stat-wide"><dt>Difficulty</dt><dd class="hub-mono hub-stat-long">{{$be.Difficulty}}</dd></div>
                 {{- end}}
                 <div class="hub-stat-wide"><dt>Node</dt><dd class="hub-mono hub-stat-node">{{if $be.Subversion}}{{$be.Subversion}}{{else}}{{$be.Version}}{{end}}</dd></div>
                 <div><dt>Status</dt><dd>{{if $bb.InSync}}<span class="hub-badge hub-badge-ok">Synced</span>{{else}}<span class="hub-badge hub-badge-warn">Syncing</span>{{end}}</dd></div>
