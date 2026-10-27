@@ -68,6 +68,7 @@ type FiatRates struct {
 	backfillHistory        bool
 	provider               string
 	allowedVsCurrencies    string
+	ratesSource            string
 	mux                    sync.RWMutex
 	currentTicker          *common.CurrencyRatesTicker
 	hourlyTickers          map[int64]*common.CurrencyRatesTicker
@@ -107,6 +108,9 @@ func NewFiatRates(db *db.RocksDB, config *common.Config, metrics *common.Metrics
 		PeriodSeconds      int64  `json:"periodSeconds"`
 		Plan               string `json:"plan"`
 		TipURL             string `json:"tipUrl"`
+		// Attribution is the optional name credited for the exchange rates on the explorer
+		// pages; absent means the upstream, Coingecko.
+		Attribution string `json:"attribution"`
 		// BackfillHistory opts in to a one-time, non-destructive full-history (days=max) backfill
 		// of the missing daily rates; a DB marker makes it run only once per DB.
 		BackfillHistory bool `json:"backfillHistory"`
@@ -137,6 +141,7 @@ func NewFiatRates(db *db.RocksDB, config *common.Config, metrics *common.Metrics
 	fr.reconcileAtStartup = rdParams.ReconcileHistoricalAtStartup == nil || *rdParams.ReconcileHistoricalAtStartup
 	fr.reconcileMaxDuration = defaultReconcileMaxDuration
 	fr.backfillHistory = rdParams.BackfillHistory
+	fr.ratesSource = ratesSource(rdParams.Attribution)
 	if rdParams.ReconcileHistoricalMaxMinutes != nil && *rdParams.ReconcileHistoricalMaxMinutes > 0 {
 		fr.reconcileMaxDuration = time.Duration(*rdParams.ReconcileHistoricalMaxMinutes) * time.Minute
 	}

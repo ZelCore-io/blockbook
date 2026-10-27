@@ -7,12 +7,33 @@
     <link rel="stylesheet" href="/static/css/bootstrap.5.2.2.min.css">
     <link rel="stylesheet" href="/static/css/main{{.Minified}}.css">
     <link rel="stylesheet" href="/static/css/hub{{.Minified}}.css">
-    <script>var hasSecondary={{if .SecondaryCoin}}true{{else}}false{{end}};</script>
+    <script>var hasSecondary={{if .SecondaryCoin}}true;var secondaryCoinDefault="{{.SecondaryCoin}}={{.UseSecondaryCoin}}"{{else}}false{{end}};</script>
     <script src="/static/js/bootstrap.bundle.5.2.2.min.js"></script>
     <script src="/static/js/main{{.Minified}}.js"></script>
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="description" content="{{.CoinLabel}} Explorer">
-    <title>{{.CoinLabel}} Explorer</title>
+    {{- /* The per-page head fields are built in Go by setPageHead (server/page_head.go). */}}
+    <meta name="description" content="{{if .PageDescription}}{{.PageDescription}}{{else}}{{.CoinLabel}} Explorer{{end}}">
+    {{if .Robots}}<meta name="robots" content="{{.Robots}}">{{end}}
+    <title>{{if .PageTitle}}{{.PageTitle}}{{else}}{{.CoinLabel}} Explorer{{end}}</title>
+    {{- with .Canonical}}
+    <link rel="canonical" href="{{.}}">{{end}}
+    {{- if .PageTitle}}
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="{{.CoinLabel}} Explorer">
+    <meta property="og:title" content="{{.PageTitle}}">
+    <meta property="og:description" content="{{.PageDescription}}">
+    {{- with .Canonical}}
+    <meta property="og:url" content="{{.}}">{{end}}
+    {{- with .OGImage}}
+    <meta property="og:image" content="{{.}}">{{end}}
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="{{.PageTitle}}">
+    <meta name="twitter:description" content="{{.PageDescription}}">
+    {{- with .OGImage}}
+    <meta name="twitter:image" content="{{.}}">{{end}}
+    {{- end}}
+    {{- with .JSONLD}}
+    <script type="application/ld+json">{{.}}</script>{{end}}
     {{- /* No favicon file ships with the fork; the icon comes from the feed's Zelcore product. */}}
     {{- with .ExplorerContent.ZelcoreProduct}}{{with .IconURL}}
     <link rel="icon" href="{{.}}">{{end}}{{end}}
@@ -28,8 +49,9 @@
                 {{- with .ExplorerContent.ThemeIcon}}<span class="hub-mark"><img src="{{.}}" alt="{{$.CoinLabel}}" width="36" height="36" referrerpolicy="no-referrer"></span>{{else}}<span class="hub-mark" aria-hidden="true">{{.CoinShortcut}}</span>{{end -}}
                 <span>{{.CoinLabel}} Explorer</span>
             </a>
-            <a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer">
-                {{- with .ExplorerContent.FluxSymbol}}<span class="hub-powered-mark"><img src="{{.}}" alt="Flux" width="22" height="22" referrerpolicy="no-referrer"></span>{{end}}Powered by Flux</a>
+            {{- /* On phones only the Flux symbol shows (hub.css), so the link carries its name in aria-label. */}}
+            <a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer" aria-label="Powered by Flux">
+                {{- with .ExplorerContent.FluxSymbol}}<span class="hub-powered-mark"><img src="{{.}}" alt="" width="22" height="22" referrerpolicy="no-referrer"></span>{{end}}<span class="hub-powered-text">Powered by Flux</span></a>
             <nav class="hub-nav-links" aria-label="Main">
                 {{- if .InternalExplorer}}
                 <a href="/blocks">Blocks</a>
@@ -41,7 +63,7 @@
             {{- if and .InternalExplorer (not .HomePage)}}
             <form class="hub-search" id="search" role="search" action="/search" method="get">
                 <label class="visually-hidden" for="search-q">Search</label>
-                <input id="search-q" name="q" type="text" placeholder="Search for block, transaction, address or xpub" focus="true">
+                <span class="hub-search-field"><input id="search-q" name="q" type="text" placeholder="Search for block, transaction, address or xpub" focus="true"><span class="hub-search-hint" aria-hidden="true">Block, tx, address or xpub</span></span>
                 <button type="submit">Search</button>
             </form>
             {{- end}}
@@ -57,9 +79,9 @@
                         <label class="btn" for="secondary-coin">{{.SecondaryCoin}}</label>
                         <button type="button" class="btn dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Other currencies"></button>
                         <div class="dropdown-menu row">
-                            {{range $c := .SecondaryCurrencies}}
-                            <div class="col-3"><a href="?secondary={{$c}}&use_secondary=true">{{$c}}</a></div>
-                            {{end}}
+                            {{- range $c := .SecondaryCurrencies}}
+                            <div class="col-4 col-sm-3"><a href="?secondary={{$c}}&use_secondary=true"{{if eq $c $.SecondaryCoin}} class="active" aria-current="true"{{end}}>{{$c}}</a></div>
+                            {{- end}}
                         </div>
                     </div>
                 </div>
@@ -73,7 +95,7 @@
                 {{- if .InternalExplorer}}
                 <form class="hub-search" id="search" role="search" action="/search" method="get">
                     <label class="visually-hidden" for="search-q">Search</label>
-                    <input id="search-q" name="q" type="text" placeholder="Search for block, transaction, address or xpub" focus="true">
+                    <span class="hub-search-field"><input id="search-q" name="q" type="text" placeholder="Search for block, transaction, address or xpub" focus="true"><span class="hub-search-hint" aria-hidden="true">Block, tx, address or xpub</span></span>
                     <button type="submit">Search</button>
                 </form>
                 {{- end}}
@@ -147,3 +169,7 @@
 </aside>
 {{- end}}
 {{- end}}
+
+{{- /* e: per-row copy buttons for the (truncated) addresses and txids inside transaction lists. They are shown on touch screens only (hub.css); the one-argument templates take the text to copy. */ -}}
+{{- define "hubIOCopy"}}<button type="button" class="hub-copy hub-io-copy" data-copy="{{.}}" aria-label="Copy address"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>{{end -}}
+{{- define "hubTxCopy"}}<button type="button" class="hub-copy hub-io-copy" data-copy="{{.}}" aria-label="Copy transaction ID"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>{{end -}}

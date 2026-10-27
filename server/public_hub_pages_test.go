@@ -60,9 +60,14 @@ func Test_PublicServer_HubInnerPages(t *testing.T) {
 			t.Errorf("%s: %d tables, %d inside .hub-scroll", p, n, m)
 		}
 	}
-	for _, p := range []string{"/sendtx", "/search?q=1234"} {
-		checkHTML(t, p, getHTML(t, ts.URL+p), []string{`<section class="hub-card">`, licenseFooter}, nil)
+	checkHTML(t, "/sendtx", getHTML(t, ts.URL+"/sendtx"), []string{`<section class="hub-card">`, licenseFooter}, nil)
+	// a search without results is a 404 page (see public_seo_test.go)
+	if code, html := getStatus(t, ts.URL+"/search?q=1234"); code != http.StatusNotFound {
+		t.Errorf("/search?q=1234: status %d, want 404", code)
+	} else {
+		checkHTML(t, "/search?q=1234", html, []string{`<section class="hub-card hub-error">`, licenseFooter}, nil)
 	}
+	checkHTML(t, "/sendtx", getHTML(t, ts.URL+"/sendtx"), []string{`<button type="submit" class="hub-btn">Send</button>`}, []string{"btn-outline-secondary"})
 
 	// The aside renders on inner pages only when there is a campaign or a zelcore product.
 	contents := []struct {

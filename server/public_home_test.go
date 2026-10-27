@@ -68,7 +68,7 @@ func Test_PublicServer_HomeAndStatus(t *testing.T) {
 		newestBlockRow,
 		newestBlockHash,
 		`<a class="hub-mono" href="/block/225493">225<span class="ns">493</span></a>`,
-		`<h2 id="hub-network-title">Network</h2><dl class="hub-stat-grid"><div><dt>Node</dt><dd class="hub-mono">/Fakecoin:0.0.1/</dd></div><div><dt>Status</dt><dd><span class="hub-badge hub-badge-ok">Synced</span></dd></div></dl></section></div></div></main><footer class="hub-footer">`,
+		`<h2 id="hub-network-title">Network</h2><dl class="hub-stat-grid"><div class="hub-stat-wide"><dt>Node</dt><dd class="hub-mono hub-stat-node">/Fakecoin:0.0.1/</dd></div><div><dt>Status</dt><dd><span class="hub-badge hub-badge-ok">Synced</span></dd></div></dl></section></div></div></main><footer class="hub-footer">`,
 	}, []string{"Application status", "<dt>Price</dt>", "Flux ecosystem products", "Sponsored", "News from Zelcore and SSP", "<dt>Difficulty</dt>", "More explorers", "hub-explorer"})
 	if n := strings.Count(home, `action="/search"`); n != 1 {
 		t.Errorf("home: %d search forms, want 1", n)
@@ -77,9 +77,10 @@ func Test_PublicServer_HomeAndStatus(t *testing.T) {
 	status := getHTML(t, ts.URL+"/status")
 	checkHTML(t, "status", status, []string{
 		`<header class="hub-band" style="--hub-band: #2B61D1">`,
-		`<main><div class="hub-layout"><div class="hub-main"><h1>Application status</h1>`,
+		`<main><div class="hub-layout"><div class="hub-main"><section class="hub-card"><h1>Application status</h1></section>`,
+		`<div class="hub-status-grid"><section class="hub-card"><h2>Blockbook</h2><table class="table data-table info-table"><tbody><tr><td>Coin</td>`,
 		`</td></tr><tr><td>Mempool in Sync</td><td><h6 class="badge bg-danger">false</h6></td></tr><tr><td>Last Mempool Update</td><td></td></tr><tr><td>Transactions in Mempool</td><td><a href="/mempool">0</a></td></tr><tr><td>Current Fiat rates</td>`,
-		`</td></tr></tbody></table></div><div class="col-lg-6"><table class="table data-table info-table"><tbody><tr><td style="white-space: nowrap;"><h3>Backend</h3></td><td></td></tr><tr><td>Chain</td><td>fakecoin</td></tr><tr><td>Version</td><td>001001</td></tr><tr><td>Subversion</td><td>/Fakecoin:0.0.1/</td></tr><tr><td>Last Block</td><td>2</td></tr><tr><td>Difficulty</td><td></td></tr></tbody></table></div></div></div></div></main><footer class="hub-footer">`,
+		`</td></tr></tbody></table></section><section class="hub-card"><h2>Backend</h2><table class="table data-table info-table"><tbody><tr><td>Chain</td><td>fakecoin</td></tr><tr><td>Version</td><td>001001</td></tr><tr><td>Subversion</td><td>/Fakecoin:0.0.1/</td></tr><tr><td>Last Block</td><td>2</td></tr><tr><td>Difficulty</td><td></td></tr></tbody></table></section></div></div></div></main><footer class="hub-footer">`,
 		`unknown (development build)</a>`,
 	}, []string{"hub-band-home", "Explore Fake Coin", `class="hub-tabs"`})
 
@@ -134,13 +135,18 @@ func Test_PublicServer_HomePriceFreshness(t *testing.T) {
 			ts := httptest.NewServer(s.https.Handler)
 			defer ts.Close()
 
-			// The price is always quoted in USD, even when the visitor picked another secondary currency.
-			home := getHTML(t, ts.URL+"/?secondary=eur")
+			// The price follows the visitor's secondary currency; USD is the default. The fixture's
+			// fiat_rates_params url has no host, so the rates are credited to Coingecko.
+			home := getHTML(t, ts.URL+"/")
+			eur := getHTML(t, ts.URL+"/?secondary=eur")
 			price := `<dl class="hub-figures"><div><dt>Price</dt><dd title="Exchange rates provided by Coingecko">$0.0237</dd></div><div><dt>Height</dt>`
+			eurPrice := `<dl class="hub-figures"><div><dt>Price</dt><dd title="Exchange rates provided by Coingecko">0.0219 EUR</dd></div><div><dt>Height</dt>`
 			if c.price {
 				checkHTML(t, c.name, home, []string{price}, nil)
+				checkHTML(t, c.name+" eur", eur, []string{eurPrice, `use_secondary=true" class="active" aria-current="true">EUR</a>`}, []string{"$0.0237"})
 			} else {
 				checkHTML(t, c.name, home, []string{`<dl class="hub-figures"><div><dt>Height</dt>`}, []string{"<dt>Price</dt>", "$0.0237"})
+				checkHTML(t, c.name+" eur", eur, []string{`<dl class="hub-figures"><div><dt>Height</dt>`}, []string{"<dt>Price</dt>", "0.0219"})
 			}
 		})
 	}
@@ -149,27 +155,33 @@ func Test_PublicServer_HomePriceFreshness(t *testing.T) {
 func Test_homePrice(t *testing.T) {
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 	ticker := func(age time.Duration, usd float32) *common.CurrencyRatesTicker {
-		return &common.CurrencyRatesTicker{Timestamp: now.Add(-age), Rates: map[string]float32{"usd": usd}}
+		return &common.CurrencyRatesTicker{Timestamp: now.Add(-age), Rates: map[string]float32{"usd": usd, "eur": usd * 0.9, "btc": 0.000000321, "jpy": 3.5}}
 	}
 	tests := []struct {
-		name   string
-		ticker *common.CurrencyRatesTicker
-		want   string
+		name     string
+		ticker   *common.CurrencyRatesTicker
+		currency string
+		want     string
 	}{
-		{"fresh GRS", ticker(10*time.Minute, 0.0237), "$0.0237"},
-		{"just within two hours", ticker(2*time.Hour, 0.0237), "$0.0237"},
-		{"stale", ticker(2*time.Hour+time.Second, 0.0237), ""},
-		{"missing ticker", nil, ""},
-		{"no usd rate", &common.CurrencyRatesTicker{Timestamp: now, Rates: map[string]float32{"eur": 1}}, ""},
-		{"zero", ticker(0, 0), ""},
-		{"cents", ticker(0, 0.5), "$0.50"},
-		{"dollars", ticker(0, 1.5), "$1.50"},
-		{"thousands", ticker(0, 64123.45), "$64,123.45"},
-		{"tiny", ticker(0, 0.000012345), "$0.0000123"},
+		{"fresh GRS", ticker(10*time.Minute, 0.0237), "usd", "$0.0237"},
+		{"just within two hours", ticker(2*time.Hour, 0.0237), "usd", "$0.0237"},
+		{"stale", ticker(2*time.Hour+time.Second, 0.0237), "usd", ""},
+		{"missing ticker", nil, "usd", ""},
+		{"no usd rate", &common.CurrencyRatesTicker{Timestamp: now, Rates: map[string]float32{"eur": 1}}, "usd", ""},
+		{"eur", ticker(10*time.Minute, 0.0237), "eur", "0.0213 EUR"},
+		{"btc", ticker(0, 1), "btc", "0.000000321 BTC"},
+		{"jpy", ticker(0, 1), "jpy", "3.50 JPY"},
+		{"missing currency", ticker(0, 1), "chf", ""},
+		{"stale eur", ticker(3*time.Hour, 0.0237), "eur", ""},
+		{"zero", ticker(0, 0), "usd", ""},
+		{"cents", ticker(0, 0.5), "usd", "$0.50"},
+		{"dollars", ticker(0, 1.5), "usd", "$1.50"},
+		{"thousands", ticker(0, 64123.45), "usd", "$64,123.45"},
+		{"tiny", ticker(0, 0.000012345), "usd", "$0.0000123"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := homePrice(tt.ticker, now); got != tt.want {
+			if got := homePrice(tt.ticker, tt.currency, now); got != tt.want {
 				t.Errorf("homePrice() = %q, want %q", got, tt.want)
 			}
 		})

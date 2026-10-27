@@ -90,11 +90,18 @@ type PublicServer struct {
 	mempool             bchain.Mempool
 	api                 *api.Worker
 	explorerURL         string
+	publicURL           string
 	internalExplorer    bool
 	is                  *common.InternalState
 	fiatRates           *fiat.FiatRates
 	useSatsAmountFormat bool
 	isFullInterface     bool
+}
+
+// SetPublicURL sets the public base URL of the explorer (blockchaincfg "public_url"); a trailing
+// slash is removed. An empty value means canonical links and absolute sitemap URLs are not known.
+func (s *PublicServer) SetPublicURL(publicURL string) {
+	s.publicURL = strings.TrimRight(strings.TrimSpace(publicURL), "/")
 }
 
 // NewPublicServer creates new public server http interface to blockbook and returns its handle
@@ -139,8 +146,9 @@ func NewPublicServer(binding string, certFiles string, db *db.RocksDB, chain bch
 
 	s := &PublicServer{
 		htmlTemplates: htmlTemplates[TemplateData]{
-			metrics: metrics,
-			debug:   debugMode,
+			metrics:        metrics,
+			debug:          debugMode,
+			errorTplStatus: http.StatusNotFound,
 		},
 		binding:             binding,
 		certFiles:           certFiles,
@@ -164,10 +172,14 @@ func NewPublicServer(binding string, certFiles string, db *db.RocksDB, chain bch
 	s.htmlTemplates.newTemplateDataWithError = s.newTemplateDataWithError
 	s.htmlTemplates.parseTemplates = s.parseTemplates
 	s.htmlTemplates.postHtmlTemplateHandler = s.postHtmlTemplateHandler
+	s.htmlTemplates.prepareTemplateData = s.setPageHead
 	s.templates = s.parseTemplates()
 
 	// map only basic functions, the rest is enabled by method MapFullPublicInterface
-	serveMux.Handle(publicPath(path, "favicon.ico"), prefixedStaticFileServer(publicPath(path, "")))
+	serveMux.HandleFunc(publicPath(path, "favicon.ico"), s.faviconHandler(prefixedStaticFileServer(publicPath(path, ""))))
+	serveMux.HandleFunc(publicPath(path, "robots.txt"), s.robotsTxtHandler)
+	serveMux.HandleFunc(publicPath(path, "sitemap.xml"), s.sitemapHandler)
+	serveMux.HandleFunc(publicPath(path, "llms.txt"), s.llmsTxtHandler)
 	staticPath := publicPath(path, "static") + "/"
 	serveMux.Handle(staticPath, prefixedStaticFileServer(staticPath))
 	apiDocsPath := publicPath(path, "api-docs")
@@ -356,7 +368,7 @@ func (s *PublicServer) apiDocsHandler(basePath string) http.HandlerFunc {
 			}
 			http.Redirect(w, r, docsPath+"/", http.StatusMovedPermanently)
 		case docsPath + "/":
-			s.serveAPIDocs(w, r)
+			s.serveAPIDocs(w, r, basePath)
 		case specPath:
 			s.openAPISpecHandler(w, r)
 		default:
@@ -366,14 +378,31 @@ func (s *PublicServer) apiDocsHandler(basePath string) http.HandlerFunc {
 	}
 }
 
-func (s *PublicServer) serveAPIDocs(w http.ResponseWriter, r *http.Request) {
+func (s *PublicServer) serveAPIDocs(w http.ResponseWriter, r *http.Request, basePath string) {
 	if !allowGetOrHead(w, r) {
 		return
 	}
 	if s.metrics != nil {
 		s.metrics.ExplorerViews.With(common.Labels{"action": "api-docs"}).Inc()
 	}
-	serveStaticContent(w, r, apiDocsIndexFile, "text/html; charset=utf-8", true)
+	label := strings.TrimSpace(s.is.CoinLabel)
+	if label == "" {
+		label = s.is.Coin
+	}
+	color := s.content.Snapshot(time.Now()).ThemeColor()
+	serveStaticContent(w, r, apiDocsIndexFile, "text/html; charset=utf-8", true, func(body []byte) []byte {
+		return renderAPIDocsPage(body, label, publicPath(basePath, ""), color)
+	})
+}
+
+// renderAPIDocsPage fills the coin label, the explorer home link and the band colour into the
+// static Swagger page, so its "back to the explorer" bar follows the configured coin.
+func renderAPIDocsPage(body []byte, coinLabel, homeURL, bandColor string) []byte {
+	return []byte(strings.NewReplacer(
+		"__COIN_LABEL__", html.EscapeString(coinLabel),
+		"__HOME_URL__", html.EscapeString(homeURL),
+		"__BAND_COLOR__", html.EscapeString(bandColor),
+	).Replace(string(body)))
 }
 
 func (s *PublicServer) openAPISpecHandler(w http.ResponseWriter, r *http.Request) {
@@ -383,16 +412,19 @@ func (s *PublicServer) openAPISpecHandler(w http.ResponseWriter, r *http.Request
 	if s.metrics != nil {
 		s.metrics.ExplorerViews.With(common.Labels{"action": "openapi-spec"}).Inc()
 	}
-	serveStaticContent(w, r, openAPIFile, "application/yaml; charset=utf-8", false)
+	serveStaticContent(w, r, openAPIFile, "application/yaml; charset=utf-8", false, nil)
 }
 
-func serveStaticContent(w http.ResponseWriter, r *http.Request, filename string, contentType string, allowSwaggerAssets bool) {
+func serveStaticContent(w http.ResponseWriter, r *http.Request, filename string, contentType string, allowSwaggerAssets bool, transform func([]byte) []byte) {
 	body, err := os.ReadFile(filename)
 	if err != nil {
 		glog.Errorf("serve %s: %v", filename, err)
 		setOpenAPISecurityHeaders(w, "text/plain; charset=utf-8", allowSwaggerAssets)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
+	}
+	if transform != nil {
+		body = transform(body)
 	}
 
 	setOpenAPISecurityHeaders(w, contentType, allowSwaggerAssets)
@@ -487,6 +519,7 @@ func (s *PublicServer) newTemplateData(r *http.Request) *TemplateData {
 		t.Minified = ".min.8"
 	}
 	if s.is.HasFiatRates {
+		t.RatesSource = s.fiatRates.RatesSource()
 		// get the secondary coin and if it should be shown either from query parameters "secondary" and "use_secondary"
 		// or from the cookie "secondary_coin" in the format secondary=use_secondary, for example EUR=true
 		// the query parameters take precedence over the cookie
@@ -534,6 +567,13 @@ func (s *PublicServer) newTemplateData(r *http.Request) *TemplateData {
 func (s *PublicServer) newTemplateDataWithError(error *api.APIError, r *http.Request) *TemplateData {
 	td := s.newTemplateData(r)
 	td.Error = error
+	// error pages are never indexed: not found ids, unknown routes and backend errors alike;
+	// a search page also lets crawlers follow its links
+	td.Robots = errorPageRobots(r)
+	if error != nil && error.Public {
+		td.ErrorTitle = "Not found"
+		td.ErrorHint = errorHintCheckID
+	}
 	return td
 }
 
@@ -557,7 +597,7 @@ type TemplateData struct {
 	ExplorerContent          explorercontent.Snapshot
 	HomePage                 bool   // index page: base.html renders the home band and skips the hubPage layout
 	HomeTab                  string // index page tab: "blocks" or "txs"
-	HomePrice                string // index page: formatted USD price, empty when the current ticker is missing or stale
+	HomePrice                string // index page: formatted price in the secondary currency (USD by default), empty when the current ticker is missing or stale
 	CoinName                 string
 	CoinShortcut             string
 	CoinLabel                string
@@ -570,6 +610,10 @@ type TemplateData struct {
 	AddrStr                  string
 	Tx                       *api.Tx
 	Error                    *api.APIError
+	ErrorTitle               string // error page heading; "" renders "Error"
+	ErrorHint                string // error page: a line under the message saying what to try
+	SearchQuery              string // error page: prefills its search box (a search without results)
+	Robots                   string // content of <meta name="robots">, omitted when ""
 	Blocks                   *api.Blocks
 	Block                    *api.Block
 	Info                     *api.SystemInfo
@@ -594,11 +638,18 @@ type TemplateData struct {
 	CurrentSecondaryCoinRate float64
 	CurrentTicker            *common.CurrencyRatesTicker
 	SecondaryCurrencies      []string
+	RatesSource              string // who to credit for the exchange rates (the fiat_rates_params attribution, default "Coingecko"), empty without fiat rates
 	TxDate                   string
 	TxSecondaryCoinRate      float64
 	TxTicker                 *common.CurrencyRatesTicker
 	TxIOCollapseThreshold    int
-	contractRates            map[contractRateKey]contractRate
+	// per-page <head>, filled by setPageHead just before the page is rendered
+	PageTitle       string
+	PageDescription string
+	Canonical       string      // absolute canonical URL, empty without public_url
+	OGImage         string      // social preview image URL
+	JSONLD          template.JS // schema.org JSON-LD, already JSON-encoded
+	contractRates   map[contractRateKey]contractRate
 }
 
 type contractRateKey struct {
@@ -759,8 +810,10 @@ func (s *PublicServer) parseTemplates() []*template.Template {
 }
 
 func (s *PublicServer) postHtmlTemplateHandler(data *TemplateData, w http.ResponseWriter, r *http.Request) {
-	// // if SecondaryCoin is specified, set secondary_coin cookie
-	if data != nil && data.SecondaryCoin != "" {
+	// remember the visitor's secondary currency in the secondary_coin cookie once they chose one
+	// (query parameters) or already have the cookie. A request without either gets the default
+	// and no Set-Cookie, so the page stays cacheable; main.js then creates the default cookie.
+	if data != nil && data.SecondaryCoin != "" && !defaultSecondaryRequest(r) {
 		http.SetCookie(w, &http.Cookie{Name: secondaryCoinCookieName, Value: data.SecondaryCoin + "=" + strconv.FormatBool(data.UseSecondaryCoin), Path: "/"})
 	}
 
@@ -1044,6 +1097,9 @@ func (s *PublicServer) explorerTx(w http.ResponseWriter, r *http.Request) (tpl, 
 	data := s.newTemplateData(r)
 	data.Tx = tx
 	data.TxIOCollapseThreshold = txIOCollapseThresholdTx
+	if tx != nil {
+		setDeepPageCacheControl(w, r, data, int64(tx.Confirmations), deepTxCacheControl)
+	}
 	return txTpl, data, nil
 }
 
@@ -1297,18 +1353,26 @@ func (s *PublicServer) explorerBlock(w http.ResponseWriter, r *http.Request) (tp
 			return errorTpl, nil, err
 		}
 	}
+	if block == nil {
+		return errorTpl, nil, api.NewAPIError("Block not found", true)
+	}
 	data := s.newTemplateData(r)
 	data.Block = block
+	setDeepPageCacheControl(w, r, data, int64(block.Confirmations), deepBlockCacheControl)
 	data.Page = block.Page
 	data.PagingRange, data.PrevPage, data.NextPage = getPagingRange(block.Page, block.TotalPages)
 	return blockTpl, data, nil
 }
 
 func (s *PublicServer) explorerIndex(w http.ResponseWriter, r *http.Request) (tpl, *TemplateData, error) {
-	if !s.isFullInterface && r.URL.Path != "/" {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("Service unavailable"))
-		return noTpl, nil, nil
+	if _, path := splitBinding(s.binding); r.URL.Path != path {
+		if !s.isFullInterface {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("Service unavailable"))
+			return noTpl, nil, nil
+		}
+		// "/" is the mux's catch-all: any other unregistered path is a real 404, not the home page
+		return s.notFoundPage(r)
 	}
 	var si *api.SystemInfo
 	var err error
@@ -1324,7 +1388,11 @@ func (s *PublicServer) explorerIndex(w http.ResponseWriter, r *http.Request) (tp
 	if r.URL.Query().Get("tab") == "txs" {
 		data.HomeTab = "txs"
 	}
-	data.HomePrice = homePrice(s.fiatRates.GetCurrentTicker("usd", ""), timeNow())
+	priceCurrency := "usd"
+	if data.SecondaryCoin != "" {
+		priceCurrency = strings.ToLower(data.SecondaryCoin)
+	}
+	data.HomePrice = homePrice(s.fiatRates.GetCurrentTicker(priceCurrency, ""), priceCurrency, timeNow())
 	// The lists are best effort: the home page still renders when one of them is unavailable.
 	// Each tab loads only its own list; the mempool figure in the band comes from Info.
 	if data.HomeTab == "blocks" {
@@ -1359,18 +1427,35 @@ const homeItemsOnPage = 8
 // homePriceMaxAge is how old the current fiat ticker may be for the home page to show a price.
 const homePriceMaxAge = 2 * time.Hour
 
-// homePrice returns the USD price for the home page, or "" when the ticker is missing,
-// has no USD rate, or is older than homePriceMaxAge.
-func homePrice(ticker *common.CurrencyRatesTicker, now time.Time) string {
+// homePrice returns the home page price in the given lower-case currency (the visitor's secondary
+// currency), or "" when the ticker is missing, has no rate for it, or is older than homePriceMaxAge.
+// USD keeps the "$" form; other currencies are written like the explorer's secondary amounts, with
+// the upper-case code after the number ("0.0219 EUR").
+func homePrice(ticker *common.CurrencyRatesTicker, currency string, now time.Time) string {
 	if ticker == nil || now.Sub(ticker.Timestamp) > homePriceMaxAge {
 		return ""
 	}
-	return formatUSDPrice(float64(ticker.Rates["usd"]))
+	rate := float64(ticker.Rates[currency])
+	if currency == "usd" {
+		return formatUSDPrice(rate)
+	}
+	if n := formatPriceNumber(rate); n != "" {
+		return n + " " + strings.ToUpper(currency)
+	}
+	return ""
 }
 
 // formatUSDPrice formats a USD price with two decimals, or with three significant digits
 // for prices below one cent ($0.0237), and with thousands separators ($64,123.45).
 func formatUSDPrice(rate float64) string {
+	if n := formatPriceNumber(rate); n != "" {
+		return "$" + n
+	}
+	return ""
+}
+
+// formatPriceNumber formats a price like formatUSDPrice, without the currency sign.
+func formatPriceNumber(rate float64) string {
 	if !(rate > 0) || math.IsInf(rate, 0) {
 		return ""
 	}
@@ -1390,7 +1475,6 @@ func formatUSDPrice(rate float64) string {
 		}
 	}
 	var b strings.Builder
-	b.WriteByte('$')
 	for i, c := range intPart {
 		if i > 0 && (len(intPart)-i)%3 == 0 {
 			b.WriteByte(',')
@@ -1459,7 +1543,10 @@ func (s *PublicServer) explorerSearch(w http.ResponseWriter, r *http.Request) (t
 			return noTpl, nil, nil
 		}
 	}
-	return errorTpl, nil, api.NewAPIError(fmt.Sprintf("No matching records found for '%v'", q), true)
+	data := s.newTemplateDataWithError(&api.APIError{Text: fmt.Sprintf("No matching records found for '%v'", q), Public: true}, r)
+	data.ErrorTitle = "No results"
+	data.SearchQuery = q
+	return errorTpl, data, nil
 }
 
 func (s *PublicServer) explorerSendTx(w http.ResponseWriter, r *http.Request) (tpl, *TemplateData, error) {

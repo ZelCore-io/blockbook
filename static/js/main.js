@@ -27,11 +27,25 @@ function syntaxHighlight(json) {
   );
 }
 
+function readCoinCookie() {
+  return document.cookie
+    .split("; ")
+    .find((row) => row.startsWith("secondary_coin="))
+    ?.split("=");
+}
+
+// The server sets secondary_coin only once the visitor picked a currency, so pages without it
+// stay cacheable. Without the cookie the page shows the default currency: create the cookie
+// here, in the server's format ("secondary_coin=USD=false", session cookie, Path=/).
 function getCoinCookie() {
-  if(hasSecondary) return document.cookie
-  .split("; ")
-  .find((row) => row.startsWith("secondary_coin="))
-  ?.split("=");
+  if (!hasSecondary) return undefined;
+  let a = readCoinCookie();
+  if (!a && typeof secondaryCoinDefault === "string") {
+    document.cookie = `secondary_coin=${secondaryCoinDefault}; Path=/`;
+    // cookies blocked: still use the default, so the tooltips and the switch work on this page
+    a = readCoinCookie() || ["secondary_coin", ...secondaryCoinDefault.split("=")];
+  }
+  return a;
 }
 
 function changeCSSStyle(selector, cssProp, cssVal) {
@@ -202,8 +216,26 @@ function hubProductCarousel(strip) {
   };
   const prev = button("hub-products-prev", "Previous products", "‹", -1);
   const next = button("hub-products-next", "Next products", "›", 1);
-  view.insertBefore(prev, strip);
-  view.appendChild(next);
+  // On touch / coarse pointers the buttons live in .hub-products-nav-pair, in the title row of the
+  // card, so they never sit on a tile (hub.css). Otherwise they flank the strip. The pair comes
+  // before the strip in the DOM, so Tab order follows the visual order.
+  const grid = view.parentNode;
+  const pair = document.createElement("div");
+  pair.className = "hub-products-nav-pair";
+  const touch = window.matchMedia("(hover: none), (pointer: coarse)");
+  const place = () => {
+    if (touch.matches) {
+      pair.append(prev, next);
+      if (pair.parentNode !== grid) grid.insertBefore(pair, view);
+    } else {
+      view.insertBefore(prev, strip);
+      view.appendChild(next);
+      pair.remove();
+    }
+  };
+  place();
+  if (touch.addEventListener) touch.addEventListener("change", place);
+  else if (touch.addListener) touch.addListener(place);
 
   let active = false;
   let clones = [];
@@ -281,6 +313,7 @@ function hubProductCarousel(strip) {
       jump(0);
     }
     prev.hidden = next.hidden = !active;
+    grid.classList.toggle("hub-products-nav-on", active);
     update();
   };
 
@@ -374,7 +407,7 @@ function hubProductCarousel(strip) {
     }
   });
   // keyboard focus only: a mouse click also focuses the region or a tile link
-  view.addEventListener("focusin", (e) => {
+  const onFocusIn = (e) => {
     let visible = true;
     try {
       visible = e.target.matches(":focus-visible");
@@ -383,12 +416,16 @@ function hubProductCarousel(strip) {
       keyFocus = true;
       update();
     }
-  });
-  view.addEventListener("focusout", (e) => {
-    if (!view.contains(e.relatedTarget)) {
+  };
+  const onFocusOut = (e) => {
+    if (!view.contains(e.relatedTarget) && !pair.contains(e.relatedTarget)) {
       keyFocus = false;
       touched();
     }
+  };
+  [view, pair].forEach((el) => {
+    el.addEventListener("focusin", onFocusIn);
+    el.addEventListener("focusout", onFocusOut);
   });
   view.addEventListener("wheel", touched, { passive: true });
   view.addEventListener(
@@ -608,7 +645,7 @@ window.addEventListener("DOMContentLoaded", () => {
         const text = b.getAttribute("data-copy");
         const done = (ok) => {
           if (!ok) {
-            const id = b.closest(".hub-summary")?.querySelector(".hub-summary-id");
+            const id = b.closest(".hub-summary")?.querySelector(".hub-summary-id") || b.previousElementSibling;
             if (id) {
               const range = document.createRange();
               range.selectNodeContents(id);

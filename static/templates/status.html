@@ -1,19 +1,16 @@
 {{define "specific"}}{{$cs := .CoinShortcut}}{{$bb := .Info.Blockbook}}{{$be := .Info.Backend}}
-<h1>Application status</h1>
+<section class="hub-card"><h1>Application status</h1></section>
 {{if $bb.InitialSync}}
-<h3><span class="badge bg-danger text-white p-3 w-100" style="white-space: break-spaces;">Application is now in initial synchronization and does not provide any data.</span></h3>
+<div class="hub-card hub-muted" role="status">Application is now in initial synchronization and does not provide any data.</div>
 {{end}}
 {{if not $bb.SyncMode}}
-<h3><span class="badge bg-warning text-white p-3 w-100" style="white-space: break-spaces;">Synchronization with backend is disabled, the state of index is not up to date.</span></h3>
+<div class="hub-card hub-muted" role="status">Synchronization with backend is disabled, the state of index is not up to date.</div>
 {{end}}
-<div class="row">
-    <div class="col-lg-6">
+<div class="hub-status-grid">
+    <section class="hub-card">
+        <h2>Blockbook</h2>
         <table class="table data-table info-table">
             <tbody>
-                <tr>
-                    <td style="white-space: nowrap;"><h3>Blockbook</h3></td>
-                    <td></td>
-                </tr>
                 <tr>
                     <td>Coin</td>
                     <td>{{$bb.Coin}}</td>
@@ -74,14 +71,11 @@
                 {{end}}
             </tbody>
         </table>
-    </div>
-    <div class="col-lg-6">
+    </section>
+    <section class="hub-card">
+        <h2>Backend</h2>
         <table class="table data-table info-table">
             <tbody>
-                <tr>
-                    <td style="white-space: nowrap;"><h3>Backend</h3></td>
-                    <td></td>
-                </tr>
                 {{if $be.BackendError}}
                 <tr>
                     <td>Backend Error</td>
@@ -148,7 +142,7 @@
                 {{end}}
             </tbody>
         </table>
-    </div>
+    </section>
 </div>
-{{if .SecondaryCoin}}<span class="text-muted">Exchange rates provided by Coingecko.</span>{{end}}
+{{if and .SecondaryCoin .RatesSource}}<span class="text-muted">Exchange rates provided by {{.RatesSource}}.</span>{{end}}
 {{end}}

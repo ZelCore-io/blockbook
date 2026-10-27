@@ -20,6 +20,9 @@ type Config struct {
 	BlockGolombFilterP      uint8  `json:"block_golomb_filter_p"`
 	BlockFilterScripts      string `json:"block_filter_scripts"`
 	BlockFilterUseZeroedKey bool   `json:"block_filter_use_zeroed_key"`
+	// PublicURL is the public, load-balanced base URL of this coin's explorer (e.g.
+	// https://blockbook.btc.example.com), used for canonical links and the sitemap. Optional.
+	PublicURL string `json:"public_url"`
 }
 
 // GetConfig loads and parses the config file and returns Config struct
