@@ -538,8 +538,45 @@ func TestLongExplorerNameWraps(t *testing.T) {
 			t.Errorf("%s must wrap long words and be at least 44px tall", sel)
 		}
 	}
-	min, err := os.ReadFile("../static/css/hub.min.7.css")
+	min, err := os.ReadFile("../static/css/hub.min.8.css")
 	if err != nil || !strings.Contains(string(min), ".hub-explorer{") || !strings.Contains(string(min), ".hub-footer-explorers-inner{") {
-		t.Error("hub.min.7.css is not rebuilt")
+		t.Error("hub.min.8.css is not rebuilt")
+	}
+}
+
+// The carousel is script-only: the template ships the plain scrolling strip (no buttons, no
+// copies), hub.css turns snapping off only in carousel mode, and the minified assets that
+// production serves carry both halves.
+func TestHomeProductCarouselAssets(t *testing.T) {
+	html := renderHome(t, Snapshot{Products: sixProducts()}, nil)
+	for _, absent := range []string{"hub-products-nav", "hub-product-clone", "hub-products-carousel", "hub-products-viewport", `aria-hidden="true" tabindex="-1"`} {
+		if strings.Contains(html, absent) {
+			t.Errorf("template renders script-only %q", absent)
+		}
+	}
+	css, err := os.ReadFile("../static/css/hub.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	strip := regexp.MustCompile(`(?s)\n\.hub-products-strip \{([^}]*)\}`).FindStringSubmatch(string(css))
+	if strip == nil || !strings.Contains(strip[1], "scroll-snap-type: x mandatory") || !strings.Contains(strip[1], "overflow-x: auto") {
+		t.Error("without script the strip must keep native scrolling with snap")
+	}
+	carousel := regexp.MustCompile(`(?s)\n\.hub-products-strip\.hub-products-carousel \{([^}]*)\}`).FindStringSubmatch(string(css))
+	if carousel == nil || !strings.Contains(carousel[1], "scroll-snap-type: none") || !strings.Contains(carousel[1], "scroll-behavior: auto") {
+		t.Error("carousel mode must turn off snapping and CSS smooth scrolling")
+	}
+	min, err := os.ReadFile("../static/css/hub.min.8.css")
+	if err != nil || !strings.Contains(string(min), ".hub-products-strip.hub-products-carousel{") || !strings.Contains(string(min), ".hub-products-nav{") {
+		t.Error("hub.min.8.css is not rebuilt with the carousel rules")
+	}
+	js, err := os.ReadFile("../static/js/main.min.8.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Previous products", "Next products", "hub-product-clone", "prefers-reduced-motion: reduce", `"aria-hidden","true"`} {
+		if !strings.Contains(string(js), want) {
+			t.Errorf("main.min.8.js is not rebuilt with the carousel: missing %q", want)
+		}
 	}
 }
