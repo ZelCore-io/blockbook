@@ -74,6 +74,9 @@ type htmlTemplates[TD any] struct {
 	newTemplateDataWithError func(error *api.APIError, r *http.Request) *TD
 	parseTemplates           func() []*template.Template
 	postHtmlTemplateHandler  func(data *TD, w http.ResponseWriter, r *http.Request)
+	// errorTplStatus is the HTTP status sent with errorTpl (a public error: not found, invalid id);
+	// 0 keeps the upstream 200. The public explorer sets 404 so crawlers see no soft-404 pages.
+	errorTplStatus int
 }
 
 // debugErrorText renders an error for a debug-mode response with its URLs reduced to scheme and
@@ -170,6 +173,8 @@ func (s *htmlTemplates[TD]) htmlTemplateHandler(handler func(w http.ResponseWrit
 				// return 500 Internal Server Error with errorInternalTpl
 				if t == errorInternalTpl {
 					w.WriteHeader(http.StatusInternalServerError)
+				} else if t == errorTpl && s.errorTplStatus != 0 {
+					w.WriteHeader(s.errorTplStatus)
 				}
 				if err := s.templates[t].ExecuteTemplate(w, "base.html", data); err != nil {
 					glog.Error(err)

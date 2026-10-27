@@ -146,8 +146,9 @@ func NewPublicServer(binding string, certFiles string, db *db.RocksDB, chain bch
 
 	s := &PublicServer{
 		htmlTemplates: htmlTemplates[TemplateData]{
-			metrics: metrics,
-			debug:   debugMode,
+			metrics:        metrics,
+			debug:          debugMode,
+			errorTplStatus: http.StatusNotFound,
 		},
 		binding:             binding,
 		certFiles:           certFiles,
@@ -174,7 +175,10 @@ func NewPublicServer(binding string, certFiles string, db *db.RocksDB, chain bch
 	s.templates = s.parseTemplates()
 
 	// map only basic functions, the rest is enabled by method MapFullPublicInterface
-	serveMux.Handle(publicPath(path, "favicon.ico"), prefixedStaticFileServer(publicPath(path, "")))
+	serveMux.HandleFunc(publicPath(path, "favicon.ico"), s.faviconHandler(prefixedStaticFileServer(publicPath(path, ""))))
+	serveMux.HandleFunc(publicPath(path, "robots.txt"), s.robotsTxtHandler)
+	serveMux.HandleFunc(publicPath(path, "sitemap.xml"), s.sitemapHandler)
+	serveMux.HandleFunc(publicPath(path, "llms.txt"), s.llmsTxtHandler)
 	staticPath := publicPath(path, "static") + "/"
 	serveMux.Handle(staticPath, prefixedStaticFileServer(staticPath))
 	apiDocsPath := publicPath(path, "api-docs")
@@ -541,6 +545,12 @@ func (s *PublicServer) newTemplateData(r *http.Request) *TemplateData {
 func (s *PublicServer) newTemplateDataWithError(error *api.APIError, r *http.Request) *TemplateData {
 	td := s.newTemplateData(r)
 	td.Error = error
+	// error pages are never indexed: not found ids, unknown routes and backend errors alike
+	td.Robots = "noindex"
+	if error != nil && error.Public {
+		td.ErrorTitle = "Not found"
+		td.ErrorHint = errorHintCheckID
+	}
 	return td
 }
 
@@ -577,6 +587,10 @@ type TemplateData struct {
 	AddrStr                  string
 	Tx                       *api.Tx
 	Error                    *api.APIError
+	ErrorTitle               string // error page heading; "" renders "Error"
+	ErrorHint                string // error page: a line under the message saying what to try
+	SearchQuery              string // error page: prefills its search box (a search without results)
+	Robots                   string // content of <meta name="robots">, omitted when ""
 	Blocks                   *api.Blocks
 	Block                    *api.Block
 	Info                     *api.SystemInfo
@@ -1051,6 +1065,9 @@ func (s *PublicServer) explorerTx(w http.ResponseWriter, r *http.Request) (tpl, 
 	data := s.newTemplateData(r)
 	data.Tx = tx
 	data.TxIOCollapseThreshold = txIOCollapseThresholdTx
+	if tx != nil {
+		setDeepPageCacheControl(w, r, data, int64(tx.Confirmations))
+	}
 	return txTpl, data, nil
 }
 
@@ -1304,18 +1321,26 @@ func (s *PublicServer) explorerBlock(w http.ResponseWriter, r *http.Request) (tp
 			return errorTpl, nil, err
 		}
 	}
+	if block == nil {
+		return errorTpl, nil, api.NewAPIError("Block not found", true)
+	}
 	data := s.newTemplateData(r)
 	data.Block = block
+	setDeepPageCacheControl(w, r, data, int64(block.Confirmations))
 	data.Page = block.Page
 	data.PagingRange, data.PrevPage, data.NextPage = getPagingRange(block.Page, block.TotalPages)
 	return blockTpl, data, nil
 }
 
 func (s *PublicServer) explorerIndex(w http.ResponseWriter, r *http.Request) (tpl, *TemplateData, error) {
-	if !s.isFullInterface && r.URL.Path != "/" {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("Service unavailable"))
-		return noTpl, nil, nil
+	if _, path := splitBinding(s.binding); r.URL.Path != path {
+		if !s.isFullInterface {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("Service unavailable"))
+			return noTpl, nil, nil
+		}
+		// "/" is the mux's catch-all: any other unregistered path is a real 404, not the home page
+		return s.notFoundPage(r)
 	}
 	var si *api.SystemInfo
 	var err error
@@ -1466,7 +1491,10 @@ func (s *PublicServer) explorerSearch(w http.ResponseWriter, r *http.Request) (t
 			return noTpl, nil, nil
 		}
 	}
-	return errorTpl, nil, api.NewAPIError(fmt.Sprintf("No matching records found for '%v'", q), true)
+	data := s.newTemplateDataWithError(&api.APIError{Text: fmt.Sprintf("No matching records found for '%v'", q), Public: true}, r)
+	data.ErrorTitle = "No results"
+	data.SearchQuery = q
+	return errorTpl, data, nil
 }
 
 func (s *PublicServer) explorerSendTx(w http.ResponseWriter, r *http.Request) (tpl, *TemplateData, error) {

@@ -1335,6 +1335,23 @@
     color: var(--hub-text-2);
 }
 
+/* a: error and no-results page - hint line and a search box on the white card, outlined with the
+   control border (4.8:1) so it reads as a field */
+.hub-error-hint {
+    margin: 8px 0 0;
+    color: var(--hub-muted);
+}
+
+.hub-error-search {
+    margin-top: 20px;
+    max-width: 560px;
+    border: 1px solid var(--hub-control-border);
+}
+
+.hub-error-search input {
+    height: 44px;
+}
+
 /* ---------- More explorers ---------- */
 
 /* Links to the other Zelcore explorers, from the feed's "explorers" list. Pill buttons at least
