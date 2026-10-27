@@ -812,8 +812,10 @@ func (s *PublicServer) parseTemplates() []*template.Template {
 }
 
 func (s *PublicServer) postHtmlTemplateHandler(data *TemplateData, w http.ResponseWriter, r *http.Request) {
-	// // if SecondaryCoin is specified, set secondary_coin cookie
-	if data != nil && data.SecondaryCoin != "" {
+	// remember the visitor's secondary currency in the secondary_coin cookie once they chose one
+	// (query parameters) or already have the cookie. A request without either gets the default
+	// and no Set-Cookie, so the page stays cacheable; main.js then creates the default cookie.
+	if data != nil && data.SecondaryCoin != "" && !defaultSecondaryRequest(r) {
 		http.SetCookie(w, &http.Cookie{Name: secondaryCoinCookieName, Value: data.SecondaryCoin + "=" + strconv.FormatBool(data.UseSecondaryCoin), Path: "/"})
 	}
 

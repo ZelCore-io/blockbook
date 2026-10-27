@@ -12,6 +12,8 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/trezor/blockbook/bchain/coins/eth"
+	"github.com/trezor/blockbook/common"
+	"github.com/trezor/blockbook/db"
 	"github.com/trezor/blockbook/explorercontent"
 	"github.com/trezor/blockbook/tests/dbtestdata"
 )
@@ -324,7 +326,9 @@ func Test_setDeepPageCacheControl(t *testing.T) {
 		{"use_secondary param", 1000, "/tx/x?use_secondary=true", false, plain, ""},
 		{"empty secondary param", 1000, "/tx/x?secondary=", false, plain, ""},
 		{"secondary cookie", 1000, "/tx/x", true, plain, ""},
-		{"response sets the cookie", 1000, "/tx/x", false, withFiat, ""},
+		{"fiat rates, default currency", 1000, "/tx/x", false, withFiat, public},
+		{"fiat rates, chosen currency", 1000, "/tx/x", true, withFiat, ""},
+		{"fiat rates, currency param", 1000, "/tx/x?secondary=eur", false, withFiat, ""},
 		{"no data", 1000, "/tx/x", false, nil, ""},
 	} {
 		r := httptest.NewRequest("GET", c.url, nil)
@@ -346,18 +350,82 @@ func Test_setDeepPageCacheControl(t *testing.T) {
 	}
 }
 
-// The fiat-rates path end to end: a deep page whose response sets secondary_coin is never public.
+// A deep page is public exactly when its response sets no cookie: without a secondary_coin cookie
+// and without currency parameters the server sends the default page and leaves the cookie to
+// main.js; once the visitor chose a currency the cookie is (re)set and the page stays private.
 func Test_setDeepPageCacheControl_PostHandlerCookie(t *testing.T) {
 	s := &PublicServer{}
-	for _, data := range []*TemplateData{{}, {SecondaryCoin: "USD"}} {
-		w := httptest.NewRecorder()
-		setDeepPageCacheControl(w, httptest.NewRequest("GET", "/tx/x", nil), data, 1000)
-		s.postHtmlTemplateHandler(data, w, httptest.NewRequest("GET", "/tx/x", nil))
-		public := strings.HasPrefix(w.Header().Get("Cache-Control"), "public")
-		if setCookie := w.Header().Get("Set-Cookie") != ""; public && setCookie {
-			t.Errorf("SecondaryCoin %q: public Cache-Control together with Set-Cookie", data.SecondaryCoin)
-		} else if !public && !setCookie {
-			t.Errorf("SecondaryCoin %q: an identical-for-everyone deep page should be public", data.SecondaryCoin)
+	for _, c := range []struct {
+		name          string
+		url, cookie   string
+		data          *TemplateData
+		public, isSet bool
+	}{
+		{"no fiat rates", "/tx/x", "", &TemplateData{}, true, false},
+		{"fiat rates, first visit", "/tx/x", "", &TemplateData{SecondaryCoin: "USD"}, true, false},
+		{"fiat rates, cookie", "/tx/x", "EUR=true", &TemplateData{SecondaryCoin: "EUR", UseSecondaryCoin: true}, false, true},
+		{"fiat rates, secondary param", "/tx/x?secondary=eur", "", &TemplateData{SecondaryCoin: "EUR"}, false, true},
+		{"fiat rates, use_secondary param", "/tx/x?use_secondary=true", "", &TemplateData{SecondaryCoin: "USD", UseSecondaryCoin: true}, false, true},
+	} {
+		r := httptest.NewRequest("GET", c.url, nil)
+		if c.cookie != "" {
+			r.AddCookie(&http.Cookie{Name: secondaryCoinCookieName, Value: c.cookie})
 		}
+		w := httptest.NewRecorder()
+		setDeepPageCacheControl(w, r, c.data, 1000)
+		s.postHtmlTemplateHandler(c.data, w, r)
+		public := strings.HasPrefix(w.Header().Get("Cache-Control"), "public")
+		setCookie := w.Header().Get("Set-Cookie")
+		if public != c.public || (setCookie != "") != c.isSet {
+			t.Errorf("%s: public %v, Set-Cookie %q; want public %v, cookie set %v", c.name, public, setCookie, c.public, c.isSet)
+		}
+		if c.isSet {
+			want := secondaryCoinCookieName + "=" + c.data.SecondaryCoin + "=" + map[bool]string{true: "true", false: "false"}[c.data.UseSecondaryCoin] + "; Path=/"
+			if setCookie != want {
+				t.Errorf("%s: Set-Cookie %q, want %q", c.name, setCookie, want)
+			}
+		}
+	}
+}
+
+// The same through the real template handler of a server with fiat rates: a deep page requested
+// without cookie or currency parameters is public, has no Set-Cookie and tells main.js the
+// default cookie value; with the visitor's cookie it is private and the cookie is refreshed.
+func Test_PublicServer_DeepPageFiatCookie(t *testing.T) {
+	parser, chain := setupChain(t)
+	s, dbpath := setupPublicHTTPServerWithFiatFixture(parser, chain, t, false, func(d *db.RocksDB) error {
+		ticker := []common.CurrencyRatesTicker{{Timestamp: fixedTimeNow(), Rates: map[string]float32{"usd": 0.0237, "eur": 0.0219}}}
+		return d.FiatRatesStoreSpecialTickers("CurrentTickers", &ticker)
+	})
+	defer closeAndDestroyPublicServer(t, s, dbpath)
+	// a settled page: any template will do, the headers are what is tested
+	deep := s.htmlTemplateHandler(func(w http.ResponseWriter, r *http.Request) (tpl, *TemplateData, error) {
+		data := s.newTemplateData(r)
+		setDeepPageCacheControl(w, r, data, 1000)
+		return sendTransactionTpl, data, nil
+	})
+	for _, c := range []struct {
+		name, url, cookie, wantCache, wantSetCookie, wantScript string
+	}{
+		{"first visit", "/x", "", "public, max-age=86400", "", `var hasSecondary=true;var secondaryCoinDefault="USD=false";`},
+		{"cookie", "/x", "EUR=true", "", "secondary_coin=EUR=true; Path=/", `var secondaryCoinDefault="EUR=true";`},
+		{"param", "/x?secondary=eur", "", "", "secondary_coin=EUR=false; Path=/", `var secondaryCoinDefault="EUR=false";`},
+	} {
+		r := httptest.NewRequest("GET", c.url, nil)
+		if c.cookie != "" {
+			r.AddCookie(&http.Cookie{Name: secondaryCoinCookieName, Value: c.cookie})
+		}
+		w := httptest.NewRecorder()
+		deep(w, r)
+		if got := w.Header().Get("Cache-Control"); got != c.wantCache {
+			t.Errorf("%s: Cache-Control %q, want %q", c.name, got, c.wantCache)
+		}
+		if got := w.Header().Get("Set-Cookie"); got != c.wantSetCookie {
+			t.Errorf("%s: Set-Cookie %q, want %q", c.name, got, c.wantSetCookie)
+		}
+		if c.wantCache != "" && w.Header().Get("Vary") != "Cookie" {
+			t.Errorf("%s: Vary %q, want Cookie", c.name, w.Header().Get("Vary"))
+		}
+		checkHTML(t, c.name, w.Body.String(), []string{c.wantScript}, nil)
 	}
 }

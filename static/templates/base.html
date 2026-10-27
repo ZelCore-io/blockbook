@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="/static/css/bootstrap.5.2.2.min.css">
     <link rel="stylesheet" href="/static/css/main{{.Minified}}.css">
     <link rel="stylesheet" href="/static/css/hub{{.Minified}}.css">
-    <script>var hasSecondary={{if .SecondaryCoin}}true{{else}}false{{end}};</script>
+    <script>var hasSecondary={{if .SecondaryCoin}}true;var secondaryCoinDefault="{{.SecondaryCoin}}={{.UseSecondaryCoin}}"{{else}}false{{end}};</script>
     <script src="/static/js/bootstrap.bundle.5.2.2.min.js"></script>
     <script src="/static/js/main{{.Minified}}.js"></script>
     <meta http-equiv="X-UA-Compatible" content="IE=edge">

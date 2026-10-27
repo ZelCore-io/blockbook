@@ -39,26 +39,32 @@ var aiCrawlers = []string{
 
 // setDeepPageCacheControl lets shared caches keep a block or tx page for a day once it has more
 // than deepPageConfirmations confirmations, but only when the response is the same for every
-// visitor: no secondary/use_secondary query parameters, no secondary_coin cookie on the request
-// and no Set-Cookie on the response. postHtmlTemplateHandler sets that cookie whenever the page
-// has a secondary currency (fiat rates on), and main.js needs it for the amount tooltips and
-// the currency switch, so pages with fiat rates keep the default (no Cache-Control header).
+// visitor: the request carries no secondary_coin cookie and no secondary/use_secondary query
+// parameters, so the page shows the default currency and postHtmlTemplateHandler sends no
+// Set-Cookie (main.js creates the default cookie in the browser). Vary: Cookie keeps a visitor's
+// own currency choice out of the shared copy.
 func setDeepPageCacheControl(w http.ResponseWriter, r *http.Request, data *TemplateData, confirmations int64) {
-	if confirmations <= deepPageConfirmations || data == nil || data.SecondaryCoin != "" {
-		return
-	}
-	q := r.URL.Query()
-	if _, ok := q["secondary"]; ok {
-		return
-	}
-	if _, ok := q["use_secondary"]; ok {
-		return
-	}
-	if _, err := r.Cookie(secondaryCoinCookieName); err == nil {
+	if confirmations <= deepPageConfirmations || data == nil || !defaultSecondaryRequest(r) {
 		return
 	}
 	w.Header().Set("Cache-Control", deepPageCacheControl)
 	w.Header().Add("Vary", "Cookie")
+}
+
+// defaultSecondaryRequest reports whether the request leaves the secondary currency at its
+// default: no secondary_coin cookie and no secondary or use_secondary query parameter.
+func defaultSecondaryRequest(r *http.Request) bool {
+	q := r.URL.Query()
+	if _, ok := q["secondary"]; ok {
+		return false
+	}
+	if _, ok := q["use_secondary"]; ok {
+		return false
+	}
+	if _, err := r.Cookie(secondaryCoinCookieName); err == nil {
+		return false
+	}
+	return true
 }
 
 // notFoundPage renders the hub error page for a path no route serves; the error template is

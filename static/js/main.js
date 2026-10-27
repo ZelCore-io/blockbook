@@ -27,11 +27,25 @@ function syntaxHighlight(json) {
   );
 }
 
+function readCoinCookie() {
+  return document.cookie
+    .split("; ")
+    .find((row) => row.startsWith("secondary_coin="))
+    ?.split("=");
+}
+
+// The server sets secondary_coin only once the visitor picked a currency, so pages without it
+// stay cacheable. Without the cookie the page shows the default currency: create the cookie
+// here, in the server's format ("secondary_coin=USD=false", session cookie, Path=/).
 function getCoinCookie() {
-  if(hasSecondary) return document.cookie
-  .split("; ")
-  .find((row) => row.startsWith("secondary_coin="))
-  ?.split("=");
+  if (!hasSecondary) return undefined;
+  let a = readCoinCookie();
+  if (!a && typeof secondaryCoinDefault === "string") {
+    document.cookie = `secondary_coin=${secondaryCoinDefault}; Path=/`;
+    // cookies blocked: still use the default, so the tooltips and the switch work on this page
+    a = readCoinCookie() || ["secondary_coin", ...secondaryCoinDefault.split("=")];
+  }
+  return a;
 }
 
 function changeCSSStyle(selector, cssProp, cssVal) {
