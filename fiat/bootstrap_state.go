@@ -4,6 +4,9 @@ import "github.com/trezor/blockbook/db"
 
 const maxHistoricalBootstrapAttempts = 3
 
+// maxHistoricalBackfillAttempts caps failed runs of the opt-in full-history backfill.
+const maxHistoricalBackfillAttempts = 5
+
 // historicalBootstrapInProgress returns whether historical fiat bootstrap is in progress.
 // stateFound indicates if the persisted bootstrap marker already exists.
 func historicalBootstrapInProgress(database *db.RocksDB) (inProgress bool, stateFound bool, err error) {
@@ -63,4 +66,24 @@ func registerHistoricalBootstrapAttemptFailure(database *db.RocksDB) (attempts i
 
 func resetHistoricalBootstrapAttempts(database *db.RocksDB) error {
 	return database.FiatRatesSetHistoricalBootstrapAttempts(0)
+}
+
+// registerHistoricalBackfillAttemptFailure increases the failed full-history backfill attempt
+// count. Once the limit is reached, the backfill is marked done so it is not retried again.
+func registerHistoricalBackfillAttemptFailure(database *db.RocksDB) (attempts int, exhausted bool, err error) {
+	attempts, err = database.FiatRatesGetHistoricalBackfillAttempts()
+	if err != nil {
+		return 0, false, err
+	}
+	attempts++
+	if err := database.FiatRatesSetHistoricalBackfillAttempts(attempts); err != nil {
+		return 0, false, err
+	}
+	if attempts < maxHistoricalBackfillAttempts {
+		return attempts, false, nil
+	}
+	if err := database.FiatRatesSetHistoricalBackfillDone(true); err != nil {
+		return attempts, false, err
+	}
+	return attempts, true, nil
 }
