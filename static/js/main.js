@@ -158,7 +158,364 @@ function handleTxPage(rawData, txId) {
   });
 }
 
+// Home page product strip (.hub-products-strip). Without this script it is a plain sideways
+// scrolling row. Only while its real tiles do not fit (re-checked on resize), it becomes a slow
+// carousel:
+// - the tiles drift left at DRIFT px/s by advancing scrollLeft, so drift, swipe, wheel, drag,
+//   keys and buttons all move one scroll position. One copy of the tiles follows the real ones
+//   (aria-hidden, links out of the tab order), and scrollLeft jumps by exactly one set width
+//   near the ends, which shows the same picture.
+// - the drift pauses while the mouse is over the strip, keyboard focus is inside it, a pointer
+//   or touch is down, the tab is hidden or the strip is off-screen, and resumes RESUME ms after
+//   the last interaction. prefers-reduced-motion: reduce stops it and smooth scrolling.
+// - a mouse can drag the row (a drag never opens a tile link); the ‹ › buttons and
+//   ArrowLeft/ArrowRight move one tile; Home/End go to the first/last real tile.
+// Scroll snapping is switched off in carousel mode (hub.css): it would fight the drift.
+function hubProductCarousel(strip) {
+  const DRIFT = 25;
+  const RESUME = 4000;
+  const DRAG = 5;
+  const real = Array.from(strip.children).filter((e) => e.classList.contains("hub-product"));
+  if (real.length < 2) return;
+  const n = real.length;
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  const view = document.createElement("div");
+  view.className = "hub-products-viewport";
+  strip.parentNode.insertBefore(view, strip);
+  view.appendChild(strip);
+  const button = (cls, label, glyph, dir) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `hub-products-nav ${cls}`;
+    b.setAttribute("aria-label", label);
+    b.hidden = true;
+    const g = document.createElement("span");
+    g.setAttribute("aria-hidden", "true");
+    g.textContent = glyph;
+    b.appendChild(g);
+    b.addEventListener("click", () => {
+      touched();
+      step(dir);
+    });
+    return b;
+  };
+  const prev = button("hub-products-prev", "Previous products", "‹", -1);
+  const next = button("hub-products-next", "Next products", "›", 1);
+  view.insertBefore(prev, strip);
+  view.appendChild(next);
+
+  let active = false;
+  let clones = [];
+  let setW = 0; // one tile set including its trailing gap
+  let tileW = 0; // from one tile to the next
+  let pos = 0; // sub-pixel scroll position while drifting
+  let raf = 0;
+  let last = 0;
+  let resumeAt = 0;
+  let resumeTimer = 0;
+  let settleTimer = 0;
+  let selfX = NaN; // scrollLeft this script set without animation
+  let hover = false;
+  let keyFocus = false;
+  let mouseDown = false;
+  let touchDown = false;
+  let onScreen = true;
+
+  const maxScroll = () => strip.scrollWidth - strip.clientWidth;
+  // x and x - setW show the same picture; wrap() moves x into [0, setW)
+  const wrap = (x) => {
+    if (setW <= 0) return x;
+    while (x >= setW) x -= setW;
+    while (x < 0) x += setW;
+    return x;
+  };
+  const jump = (x) => {
+    if (Math.abs(strip.scrollLeft - x) >= 1) selfX = x;
+    strip.scrollLeft = x;
+  };
+  const glide = (x) => {
+    strip.scrollTo({ left: Math.min(x, maxScroll()), behavior: reduce.matches ? "auto" : "smooth" });
+  };
+  const measure = () => {
+    setW = clones[0].getBoundingClientRect().left - real[0].getBoundingClientRect().left;
+    tileW = setW / n;
+  };
+  const overflows = () => {
+    const cs = getComputedStyle(strip);
+    const box = strip.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    return real[n - 1].getBoundingClientRect().right - real[0].getBoundingClientRect().left > box + 1;
+  };
+
+  const evaluate = () => {
+    const want = overflows();
+    if (want === active) {
+      if (active) {
+        const at = strip.scrollLeft / (setW || 1);
+        measure();
+        jump(at * setW);
+      }
+      return;
+    }
+    active = want;
+    if (active) {
+      const frag = document.createDocumentFragment();
+      clones = real.map((t) => {
+        const c = t.cloneNode(true);
+        c.classList.add("hub-product-clone");
+        c.setAttribute("aria-hidden", "true");
+        c.setAttribute("tabindex", "-1");
+        c.querySelectorAll("a, button, [tabindex]").forEach((e) => e.setAttribute("tabindex", "-1"));
+        frag.appendChild(c);
+        return c;
+      });
+      strip.appendChild(frag);
+      strip.classList.add("hub-products-carousel");
+      measure();
+      // start on the copy's first tile (same picture as 0) so a swipe back works at once
+      jump(setW);
+    } else {
+      clones.forEach((c) => c.remove());
+      clones = [];
+      strip.classList.remove("hub-products-carousel", "hub-products-dragging");
+      jump(0);
+    }
+    prev.hidden = next.hidden = !active;
+    update();
+  };
+
+  const canRun = () =>
+    active && !reduce.matches && !hover && !keyFocus && !mouseDown && !touchDown && onScreen && !document.hidden && Date.now() >= resumeAt;
+  const frame = (now) => {
+    raf = 0;
+    if (!canRun()) return;
+    const dt = last ? Math.min(now - last, 100) : 0;
+    last = now;
+    pos = wrap(pos + (DRIFT * dt) / 1000);
+    strip.scrollLeft = pos;
+    raf = requestAnimationFrame(frame);
+  };
+  function update() {
+    clearTimeout(resumeTimer);
+    if (canRun()) {
+      if (!raf) {
+        pos = wrap(strip.scrollLeft);
+        last = 0;
+        raf = requestAnimationFrame(frame);
+      }
+      return;
+    }
+    if (raf) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+    }
+    const wait = resumeAt - Date.now();
+    if (active && wait > 0) resumeTimer = setTimeout(update, wait + 20);
+  }
+  // an interaction happened or ended: drift resumes RESUME ms from now
+  function touched() {
+    resumeAt = Date.now() + RESUME;
+    update();
+  }
+
+  // one tile forward or back from the tile at the left edge
+  function step(dir) {
+    if (!active) return;
+    let x = wrap(strip.scrollLeft);
+    if (dir < 0 && x < tileW / 2) x += setW;
+    jump(x);
+    const i = dir > 0 ? Math.floor(x / tileW + 0.02) + 1 : Math.ceil(x / tileW - 0.02) - 1;
+    glide(i * tileW);
+  }
+  // to real tile i (0..n-1); n is the copy of tile 0 and settles back onto it
+  const goTo = (i, back) => {
+    let x = wrap(strip.scrollLeft);
+    if (back && i === n - 1 && x < tileW) x += setW;
+    jump(x);
+    glide(i * tileW);
+  };
+
+  // Near the ends of the scroll range jump one set width so scrolling can go on either way.
+  // When scrolling stops past the copy's first tile (or on it, with keyboard focus inside, so
+  // the focused real tile is the one in view), move back onto the real tiles.
+  strip.addEventListener(
+    "scroll",
+    () => {
+      if (!active || raf) return;
+      const x = strip.scrollLeft;
+      if (Math.abs(x - selfX) < 1) {
+        selfX = NaN;
+        return;
+      }
+      if (!mouseDown) {
+        if (x <= 0 && !keyFocus) jump(setW);
+        else if (x >= maxScroll() - 1) jump(x - setW);
+      }
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        selfX = NaN;
+        const at = strip.scrollLeft;
+        if (active && !raf && !mouseDown && !touchDown && (at > setW + 0.5 || (keyFocus && at > setW - 0.5))) jump(at - setW);
+      }, 250);
+    },
+    { passive: true }
+  );
+
+  view.addEventListener("pointerenter", (e) => {
+    if (e.pointerType === "mouse") {
+      hover = true;
+      update();
+    }
+  });
+  view.addEventListener("pointerleave", (e) => {
+    if (e.pointerType === "mouse") {
+      hover = false;
+      touched();
+    }
+  });
+  // keyboard focus only: a mouse click also focuses the region or a tile link
+  view.addEventListener("focusin", (e) => {
+    let visible = true;
+    try {
+      visible = e.target.matches(":focus-visible");
+    } catch (err) {}
+    if (visible) {
+      keyFocus = true;
+      update();
+    }
+  });
+  view.addEventListener("focusout", (e) => {
+    if (!view.contains(e.relatedTarget)) {
+      keyFocus = false;
+      touched();
+    }
+  });
+  view.addEventListener("wheel", touched, { passive: true });
+  view.addEventListener(
+    "touchstart",
+    () => {
+      touchDown = true;
+      update();
+    },
+    { passive: true }
+  );
+  const touchEnd = (e) => {
+    if (e.touches.length) return;
+    touchDown = false;
+    touched();
+  };
+  view.addEventListener("touchend", touchEnd, { passive: true });
+  view.addEventListener("touchcancel", touchEnd, { passive: true });
+
+  // mouse drag; touch and pen keep native panning
+  let drag = null;
+  let suppressClick = false;
+  strip.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "mouse" || e.button !== 0 || !active) return;
+    mouseDown = true;
+    update();
+    drag = { id: e.pointerId, x: e.clientX, left: strip.scrollLeft, moved: false };
+  });
+  strip.addEventListener("pointermove", (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dx = e.clientX - drag.x;
+    if (!drag.moved) {
+      if (Math.abs(dx) <= DRAG) return;
+      drag.moved = true;
+      strip.classList.add("hub-products-dragging");
+      try {
+        strip.setPointerCapture(e.pointerId);
+      } catch (err) {}
+    }
+    let x = drag.left - dx;
+    if (x <= 0) {
+      drag.left += setW;
+      x += setW;
+    } else if (x >= maxScroll() - 1) {
+      drag.left -= setW;
+      x -= setW;
+    }
+    jump(x);
+  });
+  const endPointer = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    if (drag.moved) {
+      suppressClick = true;
+      setTimeout(() => (suppressClick = false), 0);
+      strip.classList.remove("hub-products-dragging");
+    }
+    drag = null;
+    mouseDown = false;
+    touched();
+  };
+  window.addEventListener("pointerup", endPointer);
+  window.addEventListener("pointercancel", endPointer);
+  // a drag must not open the tile it started on
+  strip.addEventListener(
+    "click",
+    (e) => {
+      if (suppressClick) {
+        suppressClick = false;
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    },
+    true
+  );
+  // links and images are natively draggable, which would end the mouse drag
+  strip.addEventListener("dragstart", (e) => {
+    if (active) e.preventDefault();
+  });
+
+  strip.addEventListener("keydown", (e) => {
+    if (!active || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const k = e.key;
+    if (k !== "ArrowLeft" && k !== "ArrowRight" && k !== "Home" && k !== "End") return;
+    e.preventDefault();
+    keyFocus = true;
+    touched();
+    const tile = e.target.closest(".hub-product");
+    const at = real.indexOf(tile);
+    if (at < 0) {
+      if (k === "Home" || k === "End") goTo(k === "Home" ? 0 : n - 1, false);
+      else step(k === "ArrowRight" ? 1 : -1);
+      return;
+    }
+    let i;
+    if (k === "Home") i = 0;
+    else if (k === "End") i = n - 1;
+    else i = (at + (k === "ArrowRight" ? 1 : n - 1)) % n;
+    real[i].focus({ preventScroll: true });
+    if (k === "ArrowRight" && i === 0) glide(setW);
+    else goTo(i, k === "ArrowLeft");
+  });
+
+  document.addEventListener("visibilitychange", update);
+  if (reduce.addEventListener) reduce.addEventListener("change", update);
+  else if (reduce.addListener) reduce.addListener(update);
+  if ("IntersectionObserver" in window) {
+    new IntersectionObserver((entries) => {
+      onScreen = entries[entries.length - 1].isIntersecting;
+      update();
+    }).observe(strip);
+  }
+  if ("ResizeObserver" in window) {
+    let width = -1;
+    new ResizeObserver(() => {
+      if (strip.clientWidth !== width) {
+        width = strip.clientWidth;
+        evaluate();
+      }
+    }).observe(strip);
+  } else {
+    window.addEventListener("resize", evaluate);
+    evaluate();
+  }
+}
+
 window.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll(".hub-products-strip").forEach(hubProductCarousel);
+
   const a = getCoinCookie();
   if (a?.length === 3) {
     if (a[2] === "true") {

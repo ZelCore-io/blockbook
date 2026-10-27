@@ -30,10 +30,10 @@
  * minifies without merging or reordering rules. Build commands (run from the repo root;
  * the perl step restores the \XXXX escapes that csso decodes to UTF-8):
  *   npx csso-cli@4.0.2 static/css/hub.css --no-restructure -o /tmp/hub.css
- *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/hub.css > static/css/hub.min.7.css
+ *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/hub.css > static/css/hub.min.8.css
  *   npx csso-cli@4.0.2 static/css/main.css -o /tmp/main.css
- *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/main.css > static/css/main.min.7.css
- *   npx terser@5.51.2 static/js/main.js -c -m -o static/js/main.min.7.js
+ *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/main.css > static/css/main.min.8.css
+ *   npx terser@5.51.2 static/js/main.js -c -m -o static/js/main.min.8.js
  *
  * Links: .hub-page colors plain anchors only. Bootstrap .btn and .nav-link anchors on
  * upstream pages keep their own colors.
@@ -521,6 +521,106 @@
 
     .hub-products-strip.hub-products-scroll {
         --strip-tile: calc((100% - 4 * var(--strip-gap)) / 4.18);
+    }
+}
+
+/* Carousel (main.js). Without script none of this applies and the strip above is the whole
+   behaviour. main.js wraps the strip in .hub-products-viewport and, only while the tiles do
+   not fit, adds .hub-products-carousel, an aria-hidden copy of the tiles (.hub-product-clone)
+   for a seamless loop, and the ‹ › buttons (.hub-products-nav, hidden otherwise). The script
+   moves scrollLeft itself, so snapping and CSS smooth scrolling are off while it runs; manual
+   swipe and wheel scrolling stay native. .hub-products-dragging is set during a mouse drag. */
+.hub-products-viewport {
+    position: relative;
+}
+
+.hub-products-strip.hub-products-carousel {
+    position: relative;
+    scroll-snap-type: none;
+    scroll-behavior: auto;
+}
+
+.hub-products-carousel.hub-products-dragging {
+    cursor: grabbing;
+    user-select: none;
+}
+
+.hub-products-nav {
+    position: absolute;
+    top: calc(50% - 6px);
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    margin-top: -18px;
+    padding: 0 0 3px;
+    border: 1px solid var(--hub-line-strong);
+    border-radius: 50%;
+    background: var(--hub-surface);
+    color: var(--hub-text-2);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    font: inherit;
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+}
+
+.hub-products-nav[hidden] {
+    display: none;
+}
+
+.hub-products-nav:hover {
+    border-color: var(--hub-blue);
+    color: var(--hub-blue);
+}
+
+/* Half outside the strip, in the card's padding, so they cover little of a tile. */
+.hub-products-prev {
+    left: -18px;
+}
+
+.hub-products-next {
+    right: -18px;
+}
+
+/* With a mouse they show while the pointer is over the strip or focus is inside it. */
+@media (hover: hover) and (pointer: fine) {
+    .hub-products-nav {
+        opacity: 0;
+    }
+
+    .hub-products-viewport:hover .hub-products-nav,
+    .hub-products-viewport:focus-within .hub-products-nav {
+        opacity: 1;
+    }
+}
+
+/* On touch they stay visible, smaller and translucent. */
+@media (hover: none), (pointer: coarse) {
+    .hub-products-nav {
+        width: 32px;
+        height: 32px;
+        margin-top: -16px;
+        font-size: 22px;
+        opacity: 0.85;
+    }
+
+    .hub-products-prev {
+        left: -16px;
+    }
+
+    .hub-products-next {
+        right: -16px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .hub-products-nav {
+        transition: none;
     }
 }
 

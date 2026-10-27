@@ -484,7 +484,7 @@ func (s *PublicServer) newTemplateData(r *http.Request) *TemplateData {
 		t.MultiTokenName = bchain.EthereumTokenStandardMap[bchain.MultiToken]
 	}
 	if !s.debug {
-		t.Minified = ".min.7"
+		t.Minified = ".min.8"
 	}
 	if s.is.HasFiatRates {
 		// get the secondary coin and if it should be shown either from query parameters "secondary" and "use_secondary"

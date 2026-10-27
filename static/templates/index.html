@@ -12,7 +12,9 @@ fills the band figures and lays out everything below it. The status tables live 
 {{define "specific"}}{{$bb := .Info.Blockbook}}{{$be := .Info.Backend}}{{$link := .InternalExplorer}}
 {{- /* All products sit in one strip that scrolls sideways. hub-products-scroll (more than four
 tiles) sizes desktop tiles so the fifth peeks in; narrower screens always scroll. The strip is a
-focusable region so keyboard users can scroll it with the arrow keys; no script is needed. */ -}}
+focusable region so keyboard users can scroll it with the arrow keys; no script is needed. When
+the tiles do not fit, main.js (hubProductCarousel) adds a slow looping drift, mouse drag and
+previous/next buttons on top of the same scrolling row. */ -}}
 {{- with .ExplorerContent.ProductTiles}}
 <div class="hub-products">
     <section class="hub-products-grid" aria-labelledby="hub-products-title">

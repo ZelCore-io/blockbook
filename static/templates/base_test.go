@@ -165,12 +165,12 @@ func TestShellSecondaryCurrencySwitch(t *testing.T) {
 }
 
 func TestShellNoGoogleFonts(t *testing.T) {
-	html := renderShell(t, map[string]any{"Minified": ".min.7"})
+	html := renderShell(t, map[string]any{"Minified": ".min.8"})
 	if strings.Contains(html, "fonts.googleapis") || strings.Contains(html, "fonts.gstatic") {
 		t.Error("shell loads Google Fonts")
 	}
-	main := strings.Index(html, `href="/static/css/main.min.7.css"`)
-	hub := strings.Index(html, `href="/static/css/hub.min.7.css"`)
+	main := strings.Index(html, `href="/static/css/main.min.8.css"`)
+	hub := strings.Index(html, `href="/static/css/hub.min.8.css"`)
 	if main < 0 || hub < 0 || hub < main {
 		t.Error("hub stylesheet must load after main.css")
 	}
