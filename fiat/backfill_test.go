@@ -60,20 +60,23 @@ func TestNewFiatRates_ParsesBackfillHistory(t *testing.T) {
 
 // backfillMock serves supported_vs_currencies and market_chart. days=max returns the full daily
 // series (one point per day in fullDays, plus a non-whole-day "current" point that must be
-// ignored); any other range returns no points. failMax makes days=max fail for that currency.
+// ignored); any other range returns no points. failMax makes days=max answer 502 for that
+// currency (as the rates-api mirror does for vef). currencies defaults to usd and eur.
 type backfillMock struct {
 	server      *httptest.Server
 	maxRequests atomic.Int32
 	failMax     atomic.Value // string
+	currencies  atomic.Value // string, JSON array
 }
 
 func newBackfillMock(t *testing.T, fullDays []time.Time, rate func(currency string, day time.Time) float64) *backfillMock {
 	m := &backfillMock{}
 	m.failMax.Store("")
+	m.currencies.Store(`["usd","eur"]`)
 	m.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/simple/supported_vs_currencies":
-			_, _ = w.Write([]byte(`["usd","eur"]`))
+			_, _ = w.Write([]byte(m.currencies.Load().(string)))
 		case "/coins/ethereum/market_chart":
 			currency := r.URL.Query().Get("vs_currency")
 			if r.URL.Query().Get("days") != "max" {
@@ -86,7 +89,7 @@ func newBackfillMock(t *testing.T, fullDays []time.Time, rate func(currency stri
 			}
 			m.maxRequests.Add(1)
 			if currency == m.failMax.Load().(string) {
-				http.Error(w, "upstream error", http.StatusInternalServerError)
+				http.Error(w, "bad gateway", http.StatusBadGateway)
 				return
 			}
 			points := make([]string, 0, len(fullDays)+1)
@@ -144,9 +147,9 @@ func TestBackfillHistoricalTickers_FillsOnlyMissingDays(t *testing.T) {
 	mock := newBackfillMock(t, fullDays, backfillRate)
 	defer mock.server.Close()
 
-	filled, err := newBackfillCoingecko(d, mock.server.URL).BackfillHistoricalTickers()
-	if err != nil {
-		t.Fatalf("BackfillHistoricalTickers failed: %v", err)
+	filled, failed, err := newBackfillCoingecko(d, mock.server.URL).BackfillHistoricalTickers()
+	if err != nil || len(failed) != 0 {
+		t.Fatalf("BackfillHistoricalTickers failed: %v, failed currencies %v", err, failed)
 	}
 	if filled["usd"] != 7 || filled["eur"] != 7 {
 		t.Fatalf("unexpected filled counts: %v, want 7 per currency", filled)
@@ -234,12 +237,15 @@ func TestRunHistoricalCycle_NoBackfillParamMakesNoMaxRequest(t *testing.T) {
 	}
 }
 
-func TestRunHistoricalCycle_BackfillFailureCountsAttemptsAndGivesUp(t *testing.T) {
+// A currency that always fails (the mirror answers 502 for vef) must not block the others: their
+// days are stored, the marker stays unset, attempts are counted, and after the limit it gives up.
+func TestRunHistoricalCycle_PermanentlyFailingCurrencyStoresOthers(t *testing.T) {
 	d, tmp, fullDays := setupBackfillDB(t)
 	defer closeAndDestroyRocksDB(t, d, tmp)
 	mock := newBackfillMock(t, fullDays, backfillRate)
 	defer mock.server.Close()
-	mock.failMax.Store("eur")
+	mock.currencies.Store(`["usd","eur","vef"]`)
+	mock.failMax.Store("vef")
 	fr := newBackfillFiatRates(d, newBackfillCoingecko(d, mock.server.URL), true)
 
 	for attempt := 1; attempt <= maxHistoricalBackfillAttempts; attempt++ {
@@ -252,20 +258,85 @@ func TestRunHistoricalCycle_BackfillFailureCountsAttemptsAndGivesUp(t *testing.T
 		}
 		done, _ := d.FiatRatesGetHistoricalBackfillDone()
 		if attempt < maxHistoricalBackfillAttempts && done {
-			t.Fatalf("attempt %d: marker set after a failed backfill", attempt)
+			t.Fatalf("attempt %d: marker set while vef keeps failing", attempt)
 		}
 		if attempt == maxHistoricalBackfillAttempts && !done {
 			t.Fatal("marker not set after exhausting backfill attempts")
 		}
-		// all-or-nothing: the usd series that did succeed must not be persisted
 		day := midnightDaysAgo(10)
-		if ticker, _ := d.FiatRatesGetTicker(&day); ticker != nil {
-			t.Fatalf("attempt %d: partial backfill was persisted: %+v", attempt, ticker)
+		ticker, _ := d.FiatRatesGetTicker(&day)
+		if ticker == nil || ticker.Rates["usd"] != float32(backfillRate("usd", day)) || ticker.Rates["eur"] != float32(backfillRate("eur", day)) {
+			t.Fatalf("attempt %d: successful currencies not stored: %+v", attempt, ticker)
+		}
+		if _, ok := ticker.Rates["vef"]; ok {
+			t.Fatalf("attempt %d: unexpected vef rate: %+v", attempt, ticker)
 		}
 	}
 	requests := mock.maxRequests.Load()
 	fr.runHistoricalCycle(nil)
 	if got := mock.maxRequests.Load(); got != requests {
 		t.Fatalf("backfill retried after giving up: %d -> %d days=max requests", requests, got)
+	}
+}
+
+// A day that already has a record is merged: the stored rates and token rates survive, only the
+// missing currency is added. A re-run then finds nothing left to fill.
+func TestBackfillHistoricalTickers_MergesIntoExistingDayAndRerunFillsNothing(t *testing.T) {
+	d, tmp, fullDays := setupBackfillDB(t)
+	defer closeAndDestroyRocksDB(t, d, tmp)
+	d5 := midnightDaysAgo(5)
+	seedDailyTicker(t, d, d5, map[string]float32{"usd": 555}, map[string]float32{"0xabc": 0.25})
+	mock := newBackfillMock(t, fullDays, backfillRate)
+	defer mock.server.Close()
+	cg := newBackfillCoingecko(d, mock.server.URL)
+
+	filled, failed, err := cg.BackfillHistoricalTickers()
+	if err != nil || len(failed) != 0 {
+		t.Fatalf("BackfillHistoricalTickers failed: %v, failed currencies %v", err, failed)
+	}
+	// days 10..4: usd missing on 6 of them (d5 has usd), eur missing on all 7
+	if filled["usd"] != 6 || filled["eur"] != 7 {
+		t.Fatalf("unexpected filled counts: %v, want usd=6 eur=7", filled)
+	}
+	ticker, err := d.FiatRatesGetTicker(&d5)
+	if err != nil {
+		t.Fatalf("FiatRatesGetTicker failed: %v", err)
+	}
+	if ticker == nil || ticker.Rates["usd"] != 555 || ticker.Rates["eur"] != float32(backfillRate("eur", d5)) || ticker.TokenRates["0xabc"] != 0.25 {
+		t.Fatalf("merge lost or rewrote existing rates on %v: %+v", d5, ticker)
+	}
+
+	filled, failed, err = cg.BackfillHistoricalTickers()
+	if err != nil || len(failed) != 0 {
+		t.Fatalf("second BackfillHistoricalTickers failed: %v, failed currencies %v", err, failed)
+	}
+	if filled["usd"] != 0 || filled["eur"] != 0 {
+		t.Fatalf("re-run filled already present days: %v", filled)
+	}
+}
+
+// A partially failed run stores the successful currency; the next run fills only the currency
+// that was still missing.
+func TestBackfillHistoricalTickers_RerunFillsOnlyStillMissingCurrency(t *testing.T) {
+	d, tmp, fullDays := setupBackfillDB(t)
+	defer closeAndDestroyRocksDB(t, d, tmp)
+	mock := newBackfillMock(t, fullDays, backfillRate)
+	defer mock.server.Close()
+	mock.failMax.Store("eur")
+	cg := newBackfillCoingecko(d, mock.server.URL)
+
+	filled, failed, err := cg.BackfillHistoricalTickers()
+	if err != nil || len(failed) != 1 || failed[0] != "eur" || filled["usd"] != 7 {
+		t.Fatalf("unexpected first run: filled %v failed %v err %v", filled, failed, err)
+	}
+	mock.failMax.Store("")
+	filled, failed, err = cg.BackfillHistoricalTickers()
+	if err != nil || len(failed) != 0 || filled["usd"] != 0 || filled["eur"] != 7 {
+		t.Fatalf("unexpected second run: filled %v failed %v err %v", filled, failed, err)
+	}
+	day := midnightDaysAgo(10)
+	ticker, _ := d.FiatRatesGetTicker(&day)
+	if ticker == nil || ticker.Rates["usd"] != float32(backfillRate("usd", day)) || ticker.Rates["eur"] != float32(backfillRate("eur", day)) {
+		t.Fatalf("day %v incomplete after re-run: %+v", day, ticker)
 	}
 }
