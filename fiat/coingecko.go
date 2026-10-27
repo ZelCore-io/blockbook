@@ -201,7 +201,7 @@ func resolveCoinGeckoBootstrapURL(bootstrapURL string) string {
 }
 
 // NewCoinGeckoDownloader creates a coingecko structure that implements the RatesDownloaderInterface
-func NewCoinGeckoDownloader(db *db.RocksDB, network string, coinShortcut string, bootstrapURL string, coin string, platformIdentifier string, platformVsCurrency string, allowedVsCurrencies string, timeFormat string, plan string, metrics *common.Metrics, throttleDown bool) RatesDownloaderInterface {
+func NewCoinGeckoDownloader(db *db.RocksDB, network string, coinShortcut string, bootstrapURL string, coin string, platformIdentifier string, platformVsCurrency string, allowedVsCurrencies string, timeFormat string, plan string, tipURLOverride string, metrics *common.Metrics, throttleDown bool) RatesDownloaderInterface {
 	allowedVsCurrenciesMap := getAllowedVsCurrenciesMap(allowedVsCurrencies)
 
 	apiKey := resolveCoinGeckoAPIKey(network, coinShortcut)
@@ -221,6 +221,9 @@ func NewCoinGeckoDownloader(db *db.RocksDB, network string, coinShortcut string,
 	tipURL := coingeckoFreeURL
 	if normalizedPlan == coingeckoPlanPro {
 		tipURL = coingeckoProURL
+	}
+	if override := strings.TrimSpace(tipURLOverride); override != "" {
+		tipURL = override
 	}
 	glog.Infof("Coingecko downloader bootstrap url %s, tip url %s", resolvedBootstrapURL, tipURL)
 

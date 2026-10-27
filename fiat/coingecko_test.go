@@ -195,6 +195,35 @@ func TestNormalizeCoinGeckoPlan(t *testing.T) {
 	}
 }
 
+func TestNewCoinGeckoDownloader_TipURL(t *testing.T) {
+	const override = "https://viprates.zelcore.io/v2/blockbook/api/v3"
+	tests := []struct {
+		name string
+		plan string
+		tip  string
+		want string
+	}{
+		{name: "empty free plan keeps free url", plan: "free", tip: "", want: coingeckoFreeURL},
+		{name: "empty pro plan keeps pro url", plan: "pro", tip: "", want: coingeckoProURL},
+		{name: "blank override keeps default", plan: "free", tip: "   ", want: coingeckoFreeURL},
+		{name: "override replaces free url", plan: "free", tip: override, want: override},
+		{name: "override replaces pro url", plan: "pro", tip: override, want: override},
+		{name: "override is trimmed", plan: "free", tip: "  " + override + " ", want: override},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewCoinGeckoDownloader(nil, "", "", "", "bitcoin", "", "", "", "02-01-2006", tt.plan, tt.tip, nil, false)
+			cg, ok := d.(*Coingecko)
+			if !ok {
+				t.Fatalf("unexpected downloader type: %T", d)
+			}
+			if cg.tipURL != tt.want {
+				t.Fatalf("unexpected tip url: got %q, want %q", cg.tipURL, tt.want)
+			}
+		})
+	}
+}
+
 func TestCoingeckoPlanRequiresAPIKey(t *testing.T) {
 	tests := []struct {
 		name string
