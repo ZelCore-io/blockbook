@@ -27,9 +27,17 @@ func readTemplateFile(t *testing.T, name string) string {
 	return string(source)
 }
 
+// testInitials stands in for server.initials, which base.html calls for icon placeholders.
+func testInitials(name string) string {
+	for _, r := range strings.TrimSpace(name) {
+		return strings.ToUpper(string(r))
+	}
+	return ""
+}
+
 func renderShell(t *testing.T, data map[string]any) string {
 	t.Helper()
-	tmpl, err := template.New("base").Parse(readTemplateFile(t, "base.html") + `{{define "specific"}}Test page{{end}}`)
+	tmpl, err := template.New("base").Funcs(template.FuncMap{"initials": testInitials}).Parse(readTemplateFile(t, "base.html") + `{{define "specific"}}Test page{{end}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,12 +173,12 @@ func TestShellSecondaryCurrencySwitch(t *testing.T) {
 }
 
 func TestShellNoGoogleFonts(t *testing.T) {
-	html := renderShell(t, map[string]any{"Minified": ".min.10"})
+	html := renderShell(t, map[string]any{"Minified": ".min.11"})
 	if strings.Contains(html, "fonts.googleapis") || strings.Contains(html, "fonts.gstatic") {
 		t.Error("shell loads Google Fonts")
 	}
-	main := strings.Index(html, `href="/static/css/main.min.10.css"`)
-	hub := strings.Index(html, `href="/static/css/hub.min.10.css"`)
+	main := strings.Index(html, `href="/static/css/main.min.11.css"`)
+	hub := strings.Index(html, `href="/static/css/hub.min.11.css"`)
 	if main < 0 || hub < 0 || hub < main {
 		t.Error("hub stylesheet must load after main.css")
 	}
@@ -198,6 +206,84 @@ func TestShellFooterMoreExplorers(t *testing.T) {
 		}
 		if html = renderShell(t, map[string]any{"HomePage": home}); strings.Contains(html, "More explorers") {
 			t.Errorf("home=%v: empty list renders the footer row", home)
+		}
+	}
+}
+
+func TestShellExplorersMenu(t *testing.T) {
+	content := explorercontent.Snapshot{Explorers: explorercontent.ExplorerList{
+		{Coin: "bitcoin", Name: "Bitcoin", URL: "https://blockbook.btc.zelcore.io/", IconURL: "https://cdn.example.com/btc.svg"},
+		{Coin: "litecoin", Name: "litecoin", URL: "https://blockbook.ltc.zelcore.io/"},
+	}}
+	currency := map[string]any{"SecondaryCoin": "usd", "SecondaryCurrencies": []string{"usd", "eur"}}
+	cases := []struct {
+		name     string
+		data     map[string]any
+		currency bool
+	}{
+		{"testnet without fiat", map[string]any{}, false},
+		{"not the internal explorer", map[string]any{"InternalExplorer": false, "SecondaryCoin": "usd"}, false},
+		{"with the currency switch", currency, true},
+		{"home page", map[string]any{"HomePage": true}, false},
+	}
+	for _, c := range cases {
+		data := map[string]any{"ExplorerContent": content}
+		for k, v := range c.data {
+			data[k] = v
+		}
+		html := renderShell(t, data)
+		header := strings.Split(strings.Split(html, "<header")[1], "</header>")[0]
+		for _, want := range []string{
+			`<div class="hub-nav-end">`, `<div class="dropdown hub-xmenu">`,
+			`<button type="button" class="hub-xmenu-toggle" id="hub-xmenu-toggle" data-bs-toggle="dropdown" aria-expanded="false">Explorers<svg aria-hidden="true" focusable="false"`,
+			`<ul class="dropdown-menu dropdown-menu-end hub-xmenu-list" aria-labelledby="hub-xmenu-toggle">`,
+			`<li><a class="dropdown-item hub-xmenu-item" href="https://blockbook.btc.zelcore.io/" target="_blank" rel="noopener noreferrer"><span class="hub-xmenu-icon" aria-hidden="true"><img src="https://cdn.example.com/btc.svg" alt="" width="20" height="20" loading="lazy" referrerpolicy="no-referrer"></span><span class="hub-xmenu-name">Bitcoin</span></a></li>`,
+			`<li><a class="dropdown-item hub-xmenu-item" href="https://blockbook.ltc.zelcore.io/" target="_blank" rel="noopener noreferrer"><span class="hub-xmenu-icon" aria-hidden="true">L</span><span class="hub-xmenu-name">litecoin</span></a></li>`,
+		} {
+			if !strings.Contains(header, want) {
+				t.Errorf("%s: header missing %q", c.name, want)
+			}
+		}
+		if got := strings.Contains(header, `id="header"`); got != c.currency {
+			t.Errorf("%s: currency switch rendered=%v, want %v", c.name, got, c.currency)
+		}
+		// the menu comes first, beside the switch, inside one .hub-nav-end
+		if c.currency && (strings.Count(header, "hub-nav-end") != 1 || strings.Index(header, "hub-xmenu") > strings.Index(header, `id="header"`)) {
+			t.Errorf("%s: menu and switch must share .hub-nav-end, menu first", c.name)
+		}
+		if !strings.Contains(strings.Split(html, "<footer")[1], `<a href="https://blockbook.ltc.zelcore.io/" target="_blank" rel="noopener noreferrer">litecoin</a>`) {
+			t.Errorf("%s: footer explorer row missing", c.name)
+		}
+	}
+
+	for _, c := range cases {
+		html := renderShell(t, c.data)
+		if strings.Contains(html, "hub-xmenu") || strings.Contains(html, "Explorers<") {
+			t.Errorf("%s: empty list renders the explorers menu", c.name)
+		}
+		if got := strings.Contains(html, "hub-nav-end"); got != c.currency {
+			t.Errorf("%s: empty list: .hub-nav-end rendered=%v, want %v", c.name, got, c.currency)
+		}
+	}
+}
+
+// Without a theme icon the mark shows the ticker; 4, 5 and 6+ characters get smaller type so the
+// ticker stays on one line inside the 36px circle.
+func TestShellBrandMarkFallback(t *testing.T) {
+	for ticker, class := range map[string]string{"BTC": "hub-mark", "GR": "hub-mark", "DOGE": "hub-mark hub-mark-4", "MATIC": "hub-mark hub-mark-5", "TFLUXX": "hub-mark hub-mark-6"} {
+		html := renderShell(t, map[string]any{"CoinShortcut": ticker})
+		if want := `<span class="` + class + `" aria-hidden="true">` + ticker + `</span>`; !strings.Contains(html, want) {
+			t.Errorf("%s: missing %q", ticker, want)
+		}
+	}
+	icon := explorercontent.Snapshot{Theme: &explorercontent.Theme{Color: "#1B6E3A", IconURL: "https://cdn.example.com/doge.svg"}}
+	if html := renderShell(t, map[string]any{"CoinShortcut": "DOGE", "ExplorerContent": icon}); strings.Contains(html, "hub-mark-4") || !strings.Contains(html, `<span class="hub-mark"><img src="https://cdn.example.com/doge.svg"`) {
+		t.Error("theme icon must replace the ticker fallback")
+	}
+	css := readTemplateFile(t, "../css/hub.css")
+	for _, want := range []string{"white-space: nowrap;", ".hub-mark-4 {", ".hub-mark-5 {", ".hub-mark-6 {"} {
+		if !strings.Contains(css, want) {
+			t.Errorf("hub.css misses %q", want)
 		}
 	}
 }

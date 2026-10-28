@@ -11,7 +11,7 @@ import (
 
 func renderErrorPage(t *testing.T, data map[string]any) string {
 	t.Helper()
-	tmpl, err := template.New("base").Parse(readTemplateFile(t, "base.html") + readTemplateFile(t, "error.html"))
+	tmpl, err := template.New("base").Funcs(template.FuncMap{"initials": testInitials}).Parse(readTemplateFile(t, "base.html") + readTemplateFile(t, "error.html"))
 	if err != nil {
 		t.Fatal(err)
 	}
