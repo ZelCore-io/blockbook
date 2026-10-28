@@ -17,7 +17,7 @@ The dashboard and consumer PRs are independently deployable. This feature is dis
 
 ## Operator configuration
 
-Packages built from this repository already carry the feed: `explorer_content_url` in *configs/environ.json* makes the generated service add `-explorercontenturl=<explorer_content_url>?coin=<coin alias>` for every coin, and the cache uses its default path. Leave `explorer_content_url` empty to build packages without the feed. A host whose unit in */etc/systemd/system*, or a drop-in that sets `ExecStart`, replaces the package's command line does not get the flag; `deploy-blockbook.sh` warns about both.
+Packages built from this repository already carry the feed: `explorer_content_url` in *configs/environ.json* makes the generated service add `-explorercontenturl=<explorer_content_url>?coin=<coin alias>` for every coin, and the cache uses its default path. Leave `explorer_content_url` empty to build packages without the feed. `blockbook_service_params` (`-dbcache=0 -workers=1`, the flags every ZelCore host ran from a hand-made unit) is appended after the coin's `additional_params`, so it wins over a coin's own `-dbcache`. Run `deploy-blockbook.sh COIN --use-package-unit` once per host to retire such a unit. A host whose unit in */etc/systemd/system*, or a drop-in that sets `ExecStart`, replaces the package's command line does not get the flag; `deploy-blockbook.sh` warns about both.
 
 For a hand-written service command, add these flags (example hostname must be replaced with the actual dashboard origin):
 
