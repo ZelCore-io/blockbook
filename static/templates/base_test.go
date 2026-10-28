@@ -27,15 +27,17 @@ func readTemplateFile(t *testing.T, name string) string {
 	return string(source)
 }
 
+// testInitials stands in for server.initials, which base.html calls for icon placeholders.
+func testInitials(name string) string {
+	for _, r := range strings.TrimSpace(name) {
+		return strings.ToUpper(string(r))
+	}
+	return ""
+}
+
 func renderShell(t *testing.T, data map[string]any) string {
 	t.Helper()
-	initials := func(name string) string {
-		for _, r := range strings.TrimSpace(name) {
-			return strings.ToUpper(string(r))
-		}
-		return ""
-	}
-	tmpl, err := template.New("base").Funcs(template.FuncMap{"initials": initials}).Parse(readTemplateFile(t, "base.html") + `{{define "specific"}}Test page{{end}}`)
+	tmpl, err := template.New("base").Funcs(template.FuncMap{"initials": testInitials}).Parse(readTemplateFile(t, "base.html") + `{{define "specific"}}Test page{{end}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
