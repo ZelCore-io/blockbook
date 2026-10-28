@@ -91,5 +91,7 @@
 | Qtum Testnet                     | 19188            | 19088              | 18088       | 48388                                               |
 | Omotenashicoin Testnet           | 19189            | 19089              | 18089       | 48389                                               |
 | Tron Nile                        | 19190            | 19090              | 8545        | 18888 p2p, 5555                                     |
+| Clore.AI                         | 19190            | 19090              | 18090       | 48390                                               |
+| Telestai                         | 19191            | 19091              | 18091       | 48391                                               |
 
 > NOTE: This document is generated from coin definitions in `configs/coins` using command `go run contrib/scripts/check-and-generate-port-registry.go -w`.
