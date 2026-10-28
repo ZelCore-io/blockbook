@@ -150,5 +150,12 @@ rc=0; cfg_merge "$live" "$dist" added "$case_dir/blocker/sub" 2>/dev/null || rc=
 check 'backup failure: fails' [ "$rc" = 1 ]
 check 'backup failure: live unchanged' [ "$(cat "$live")" = "$before" ]
 
+# unit_redact: secret-looking Environment= values are masked, others pass through
+red=$(printf '%s\n' '+Environment=INFURA_API_KEY=abc' 'Environment="RPC_PASS=x"' 'Environment=MALLOC_CONF=narenas:8' | unit_redact)
+check 'unit_redact: masks a key' grep -qx '+Environment=INFURA_API_KEY=<redacted>' <<< "$red"
+check 'unit_redact: masks a quoted password' grep -qx 'Environment="RPC_PASS=<redacted>' <<< "$red"
+check 'unit_redact: keeps other values' grep -qx 'Environment=MALLOC_CONF=narenas:8' <<< "$red"
+check 'unit_redact: no secret left' bash -c '! grep -q "abc\|RPC_PASS=x" <<< "$1"' _ "$red"
+
 echo "$passed passed, $failed failed"
 [[ $failed == 0 ]]

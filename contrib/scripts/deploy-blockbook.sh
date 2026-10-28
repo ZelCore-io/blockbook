@@ -69,6 +69,9 @@ usage() {
 # Key names whose values are never printed (case-insensitive).
 cfg_secret_re='rpc_pass|rpc_user|password|secret|key|token'
 
+# unit_redact: mask the value of Environment= lines whose name looks secret (stdin to stdout).
+unit_redact() { sed -E "s/^([-+ ]?Environment=\"?[A-Za-z0-9_]*($cfg_secret_re)[A-Za-z0-9_]*=).*/\1<redacted>/I"; }
+
 # cfg_validate FILE: succeed when FILE holds one JSON object.
 cfg_validate() { jq -e 'type == "object"' "$1" >/dev/null 2>&1; }
 
@@ -376,7 +379,7 @@ fi
 systemctl daemon-reload
 if [[ -f $backup/unit.service ]] && ! diff -q "$backup/unit.service" "$unit_file" >/dev/null; then
     log 'Service unit changed:'
-    diff -u "$backup/unit.service" "$unit_file" || true
+    diff -u "$backup/unit.service" "$unit_file" | unit_redact || true
 fi
 # A unit in /etc/systemd/system or a drop-in that sets ExecStart replaces the package's command
 # line, so new flags from the package (such as -explorercontenturl) do not reach the service.
@@ -385,7 +388,7 @@ live_unit=$(systemctl show -p FragmentPath --value "$service")
 if [[ -n $live_unit && $live_unit != "$pkg_unit" && -f $pkg_unit ]]; then
     if (( use_package_unit )); then
         log "--use-package-unit: moving $live_unit into the backup; differences from $pkg_unit:"
-        diff -u "$live_unit" "$pkg_unit" || true
+        diff -u "$live_unit" "$pkg_unit" | unit_redact || true
         rm -f -- "$live_unit"
     else
         log "Warning: $live_unit overrides $pkg_unit; the package's ExecStart is not used (see --use-package-unit)."
@@ -399,7 +402,7 @@ for dropin in $(systemctl show -p DropInPaths --value "$service"); do
         cp -a "$dropin" "$backup/dropins/"
         printf '%s\n' "$dropin" >> "$backup/dropins.list"
         log "--use-package-unit: moving drop-in $dropin into the backup:"
-        sed 's/^/    /' "$dropin"
+        unit_redact < "$dropin" | sed 's/^/    /'
         rm -f -- "$dropin"
     else
         log "Warning: drop-in $dropin sets ExecStart; the package's ExecStart is not used (see --use-package-unit)."
