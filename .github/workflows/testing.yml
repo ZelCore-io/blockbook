@@ -39,7 +39,8 @@ jobs:
 
       # Building the image compiles RocksDB (~8 of the job's ~10 minutes). Its layers are
       # cached in the GitHub Actions cache, so the image is only rebuilt when
-      # build/docker/bin changes; make test then finds blockbook-build up to date.
+      # build/docker/bin changes. make test is told to use it (SKIP_BIN_IMAGE=1): its own
+      # freshness check compares against the last commit, which a shallow checkout misreads.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -61,7 +62,7 @@ jobs:
       - name: Run unit tests
         env:
           BB_BUILD_ENV: dev
-        run: make test BASE_IMAGE=ubuntu:24.04 PORTABLE=1
+        run: make test BASE_IMAGE=ubuntu:24.04 PORTABLE=1 SKIP_BIN_IMAGE=1
 
   connectivity-tests:
     name: Connectivity Tests
