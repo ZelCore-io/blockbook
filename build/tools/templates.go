@@ -116,16 +116,22 @@ type Config struct {
 		PackageMaintainerEmail string `json:"package_maintainer_email"`
 	} `json:"meta"`
 	Env struct {
-		Version               string `json:"version"`
-		BackendInstallPath    string `json:"backend_install_path"`
-		BackendDataPath       string `json:"backend_data_path"`
-		BlockbookInstallPath  string `json:"blockbook_install_path"`
-		BlockbookDataPath     string `json:"blockbook_data_path"`
-		Architecture          string `json:"architecture"`
-		RPCBindHost           string `json:"-"` // Derived from BB_RPC_BIND_HOST_* to keep default RPC exposure local.
-		RPCAllowIP            string `json:"-"` // Derived to align rpcallowip with RPC bind host intent.
-		BlockbookPprofBinding string `json:"-"` // Derived for dev builds so deployed Blockbooks expose pprof on a per-coin port.
-		WantsBackendService   bool   `json:"-"` // Derived from the effective RPC URL so systemd only wants a local backend.
+		Version              string `json:"version"`
+		BackendInstallPath   string `json:"backend_install_path"`
+		BackendDataPath      string `json:"backend_data_path"`
+		BlockbookInstallPath string `json:"blockbook_install_path"`
+		BlockbookDataPath    string `json:"blockbook_data_path"`
+		// Dashboard explorer feed (products, theme, campaigns); the service asks
+		// it with ?coin=<alias>. Empty leaves the feed off.
+		ExplorerContentURL string `json:"explorer_content_url"`
+		// Flags appended after every coin's additional_params in the service
+		// command line (a repeated flag takes the last value).
+		BlockbookServiceParams string `json:"blockbook_service_params"`
+		Architecture           string `json:"architecture"`
+		RPCBindHost            string `json:"-"` // Derived from BB_RPC_BIND_HOST_* to keep default RPC exposure local.
+		RPCAllowIP             string `json:"-"` // Derived to align rpcallowip with RPC bind host intent.
+		BlockbookPprofBinding  string `json:"-"` // Derived for dev builds so deployed Blockbooks expose pprof on a per-coin port.
+		WantsBackendService    bool   `json:"-"` // Derived from the effective RPC URL so systemd only wants a local backend.
 	} `json:"-"`
 }
 

@@ -20,6 +20,12 @@
 # .dpkg-dist.applied-<timestamp>. A failed merge keeps the original file and counts as a
 # failed check.
 #
+# Service unit: a unit in /etc/systemd/system, or a drop-in that sets ExecStart, replaces the
+# package's command line, so service changes from the package (such as the explorer feed flag)
+# never reach the host; the script warns about both. --use-package-unit moves them into the
+# backup directory after printing their diff against the package unit, so the package unit runs;
+# a rollback puts them back.
+#
 # Only the blockbook-<coin> package is built and installed. The backend package is never
 # built, installed or restarted, and the index database is never touched.
 #
@@ -30,6 +36,8 @@
 #   --sync-timeout SEC   how long to wait for inSync and the previous height (default 1800)
 #   --api-timeout SEC    how long to wait for the API after the restart (default 900)
 #   --no-rollback        leave the new version in place when a check fails
+#   --use-package-unit   move a host unit in /etc/systemd/system and ExecStart drop-ins into the
+#                        backup so the package's unit runs (see Service unit above)
 #   --config-merge=MODE  what to do with the package's blockchaincfg.json (default added)
 #                          added           merge keys missing on the host (live values win)
 #                          none            report the differences only
@@ -139,6 +147,7 @@ coin=''
 check_only=0
 skip_build=0
 rollback=1
+use_package_unit=0
 config_merge=added
 sync_timeout=1800
 api_timeout=900
@@ -147,6 +156,7 @@ while [[ $# -gt 0 ]]; do
         --check) check_only=1 ;;
         --skip-build) skip_build=1 ;;
         --no-rollback) rollback=0 ;;
+        --use-package-unit) use_package_unit=1 ;;
         --config-merge=*) config_merge=${1#--config-merge=} ;;
         --sync-timeout) sync_timeout=${2:-}; shift ;;
         --api-timeout) api_timeout=${2:-}; shift ;;
@@ -310,6 +320,11 @@ restore_backup() {
         fi
     done
     [[ -f $backup/unit.service ]] && cp -a "$backup/unit.service" "$unit_file"
+    if [[ -f $backup/dropins.list ]]; then
+        while IFS= read -r dropin; do
+            [[ -f $backup/dropins/$(basename "$dropin") ]] && cp -a "$backup/dropins/$(basename "$dropin")" "$dropin"
+        done < "$backup/dropins.list"
+    fi
     systemctl daemon-reload
     systemctl start "$service"
     sleep 10
@@ -362,6 +377,37 @@ systemctl daemon-reload
 if [[ -f $backup/unit.service ]] && ! diff -q "$backup/unit.service" "$unit_file" >/dev/null; then
     log 'Service unit changed:'
     diff -u "$backup/unit.service" "$unit_file" || true
+fi
+# A unit in /etc/systemd/system or a drop-in that sets ExecStart replaces the package's command
+# line, so new flags from the package (such as -explorercontenturl) do not reach the service.
+pkg_unit=/lib/systemd/system/$service.service
+live_unit=$(systemctl show -p FragmentPath --value "$service")
+if [[ -n $live_unit && $live_unit != "$pkg_unit" && -f $pkg_unit ]]; then
+    if (( use_package_unit )); then
+        log "--use-package-unit: moving $live_unit into the backup; differences from $pkg_unit:"
+        diff -u "$live_unit" "$pkg_unit" || true
+        rm -f -- "$live_unit"
+    else
+        log "Warning: $live_unit overrides $pkg_unit; the package's ExecStart is not used (see --use-package-unit)."
+    fi
+fi
+for dropin in $(systemctl show -p DropInPaths --value "$service"); do
+    grep -q '^ExecStart=' "$dropin" 2>/dev/null || continue
+    if (( use_package_unit )); then
+        mkdir -p "$backup/dropins"
+        [[ -e $backup/dropins/$(basename "$dropin") ]] && verify_failed "two drop-ins named $(basename "$dropin")"
+        cp -a "$dropin" "$backup/dropins/"
+        printf '%s\n' "$dropin" >> "$backup/dropins.list"
+        log "--use-package-unit: moving drop-in $dropin into the backup:"
+        sed 's/^/    /' "$dropin"
+        rm -f -- "$dropin"
+    else
+        log "Warning: drop-in $dropin sets ExecStart; the package's ExecStart is not used (see --use-package-unit)."
+    fi
+done
+if (( use_package_unit )); then
+    systemctl daemon-reload
+    log "Service unit now: $(systemctl show -p FragmentPath --value "$service")"
 fi
 systemctl start "$service"
 
