@@ -385,7 +385,8 @@ fi
 # line, so new flags from the package (such as -explorercontenturl) do not reach the service.
 pkg_unit=/lib/systemd/system/$service.service
 live_unit=$(systemctl show -p FragmentPath --value "$service")
-if [[ -n $live_unit && $live_unit != "$pkg_unit" && -f $pkg_unit ]]; then
+# /lib is a link to /usr/lib on current Debian and Ubuntu, and systemd reports either path.
+if [[ -n $live_unit && -f $pkg_unit && $(readlink -f -- "$live_unit") != "$(readlink -f -- "$pkg_unit")" ]]; then
     if (( use_package_unit )); then
         log "--use-package-unit: moving $live_unit into the backup; differences from $pkg_unit:"
         diff -u "$live_unit" "$pkg_unit" | unit_redact || true
