@@ -14,7 +14,7 @@ import (
 
 func renderShell(t *testing.T, s Snapshot, extra map[string]interface{}) string {
 	t.Helper()
-	tmpl, err := template.ParseFiles("../static/templates/base.html")
+	tmpl, err := template.New("base.html").Funcs(template.FuncMap{"initials": testInitials}).ParseFiles("../static/templates/base.html")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,18 +169,20 @@ func TestLongValuesRender(t *testing.T) {
 	}
 }
 
+// testInitials stands in for the server's initials template function.
+func testInitials(name string) string {
+	for _, r := range strings.TrimSpace(name) {
+		return strings.ToUpper(string(r))
+	}
+	return ""
+}
+
 // renderHome renders base.html with index.html as the home page. The template functions are
 // stand-ins for the server's formatters, which live in a package that needs RocksDB.
 func renderHome(t *testing.T, s Snapshot, extra map[string]interface{}) string {
 	t.Helper()
 	format := func(v interface{}) string { return fmt.Sprint(v) }
-	initials := func(name string) string {
-		for _, r := range strings.TrimSpace(name) {
-			return strings.ToUpper(string(r))
-		}
-		return ""
-	}
-	funcs := template.FuncMap{"formatUint32": format, "formatInt": format, "unixTimeSpan": format, "timeSpan": format, "initials": initials}
+	funcs := template.FuncMap{"formatUint32": format, "formatInt": format, "unixTimeSpan": format, "timeSpan": format, "initials": testInitials}
 	tmpl, err := template.New("base.html").Funcs(funcs).ParseFiles("../static/templates/base.html", "../static/templates/index.html")
 	if err != nil {
 		t.Fatal(err)
@@ -459,41 +461,43 @@ func fixtureExplorers() ExplorerList {
 	}
 }
 
-func TestHomeMoreExplorers(t *testing.T) {
-	html := renderHome(t, Snapshot{Explorers: fixtureExplorers()}, nil)
-	for _, want := range []string{
-		`<section class="hub-explorers" aria-labelledby="hub-explorers-title">`, `<h2 id="hub-explorers-title">More explorers</h2>`,
-		`<a class="hub-explorer" href="https://blockbook.btc.zelcore.io/" target="_blank" rel="noopener noreferrer">`,
-		`<span class="hub-explorer-icon" aria-hidden="true"><img src="https://cdn.example.com/btc.svg" alt="" width="32" height="32" loading="lazy" referrerpolicy="no-referrer"></span>`,
-		`<span class="hub-explorer-icon" aria-hidden="true">L</span>`, `<span class="hub-explorer-name">Litecoin</span>`,
-		"&lt;script&gt;alert(4)", `href="https://example.com/x?a=1%22onmouseover=alert%285%29"`, `src="https://cdn.example.com/i.svg%22onerror=alert%286%29"`,
-	} {
-		if !strings.Contains(html, want) {
-			t.Errorf("missing %s", want)
+// The feed's explorers sit in the header menu on every page; the home page has no chip section.
+func TestHeaderExplorersMenu(t *testing.T) {
+	for _, home := range []bool{false, true} {
+		var html string
+		if home {
+			html = renderHome(t, Snapshot{Explorers: fixtureExplorers()}, nil)
+		} else {
+			html = renderShell(t, Snapshot{Explorers: fixtureExplorers()}, nil)
 		}
-	}
-	for _, leak := range []string{"<script>alert", `"onmouseover`, `"onerror`, "Sponsored"} {
-		if strings.Contains(html, leak) {
-			t.Errorf("rendered %q", leak)
+		header := strings.Split(strings.Split(html, "<header")[1], "</header>")[0]
+		for _, want := range []string{
+			`<div class="hub-nav-end">`, `<div class="dropdown hub-xmenu">`,
+			`<button type="button" class="hub-xmenu-toggle" id="hub-xmenu-toggle" data-bs-toggle="dropdown" aria-expanded="false">Explorers<svg`,
+			`<ul class="dropdown-menu dropdown-menu-end hub-xmenu-list" aria-labelledby="hub-xmenu-toggle">`,
+			`<li><a class="dropdown-item hub-xmenu-item" href="https://blockbook.btc.zelcore.io/" target="_blank" rel="noopener noreferrer"><span class="hub-xmenu-icon" aria-hidden="true"><img src="https://cdn.example.com/btc.svg" alt="" width="20" height="20" loading="lazy" referrerpolicy="no-referrer"></span><span class="hub-xmenu-name">Bitcoin</span></a></li>`,
+			`<span class="hub-xmenu-icon" aria-hidden="true">L</span><span class="hub-xmenu-name">Litecoin</span>`,
+			"&lt;script&gt;alert(4)", `href="https://example.com/x?a=1%22onmouseover=alert%285%29"`, `src="https://cdn.example.com/i.svg%22onerror=alert%286%29"`,
+		} {
+			if !strings.Contains(header, want) {
+				t.Errorf("home=%v: header missing %s", home, want)
+			}
 		}
-	}
-	if !within(html, "hub-explorers\"", "</section>", "Bitcoin") || !within(html, "hub-footer-explorers\"", "</div>", ">Litecoin</a>") {
-		t.Error("explorers missing from the home section or the footer row")
-	}
-	section, news, blocks := strings.Index(html, `class="hub-explorers"`), strings.Index(html, "News from Zelcore and SSP"), strings.Index(html, `class="hub-tabs"`)
-	if section < 0 || blocks < 0 || section < blocks {
-		t.Errorf("More explorers (at %d) must come after the Blocks/Transactions panel (at %d)", section, blocks)
-	}
-	withNews := renderHome(t, Snapshot{Explorers: fixtureExplorers(), Articles: sample(time.Now()).Articles}, nil)
-	if section, news = strings.Index(withNews, `class="hub-explorers"`), strings.Index(withNews, "News from Zelcore and SSP"); section < 0 || news < 0 || section > news {
-		t.Error("More explorers must come before the news")
+		for _, leak := range []string{"<script>alert", `"onmouseover`, `"onerror`, "Sponsored", "hub-explorers", `class="hub-explorer`} {
+			if strings.Contains(html, leak) {
+				t.Errorf("home=%v: rendered %q", home, leak)
+			}
+		}
+		if !within(html, "hub-footer-explorers\"", "</div>", ">Litecoin</a>") {
+			t.Errorf("home=%v: explorers missing from the footer row", home)
+		}
 	}
 
 	empty := renderHome(t, Snapshot{}, nil)
 	invalidOnly := renderHome(t, Snapshot{Explorers: ExplorerList{{Coin: "x", Name: "X", URL: "javascript:alert(1)"}}}, nil)
 	for name, html := range map[string]string{"empty": empty, "invalid only": invalidOnly} {
-		if strings.Contains(html, "More explorers") || strings.Contains(html, "hub-explorer") {
-			t.Errorf("%s: renders the More explorers section or footer row", name)
+		if strings.Contains(html, "More explorers") || strings.Contains(html, "hub-xmenu") || strings.Contains(html, "hub-nav-end") {
+			t.Errorf("%s: renders the explorers menu or footer row", name)
 		}
 	}
 }
@@ -525,22 +529,27 @@ func TestFooterMoreExplorers(t *testing.T) {
 func TestLongExplorerNameWraps(t *testing.T) {
 	name := strings.Repeat("W", 40)
 	html := renderHome(t, Snapshot{Explorers: ExplorerList{{Coin: "w", Name: name, URL: "https://example.com/w"}}}, nil)
-	if !within(html, "hub-explorer\"", "</a>", name) || !within(html, "hub-footer-explorers\"", "</div>", name) {
+	if !within(html, "dropdown-item hub-xmenu-item\"", "</a>", name) || !within(html, "hub-footer-explorers\"", "</div>", name) {
 		t.Fatal("long name missing")
 	}
 	css, err := os.ReadFile("../static/css/hub.css")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, sel := range []string{".hub-explorer", ".hub-footer a"} {
-		rule := regexp.MustCompile(`(?s)\n` + regexp.QuoteMeta(sel) + ` \{([^}]*)\}`).FindStringSubmatch(string(css))
-		if rule == nil || !strings.Contains(rule[1], "overflow-wrap: anywhere") || !strings.Contains(rule[1], "min-height: 44px") {
-			t.Errorf("%s must wrap long words and be at least 44px tall", sel)
-		}
+	rule := regexp.MustCompile(`(?s)\n\.hub-footer a \{([^}]*)\}`).FindStringSubmatch(string(css))
+	if rule == nil || !strings.Contains(rule[1], "overflow-wrap: anywhere") || !strings.Contains(rule[1], "min-height: 44px") {
+		t.Error(".hub-footer a must wrap long words and be at least 44px tall")
 	}
-	min, err := os.ReadFile("../static/css/hub.min.10.css")
-	if err != nil || !strings.Contains(string(min), ".hub-explorer{") || !strings.Contains(string(min), ".hub-footer-explorers-inner{") {
-		t.Error("hub.min.10.css is not rebuilt")
+	item := regexp.MustCompile(`(?s)\n\.hub-band \.hub-xmenu a\.hub-xmenu-item,\n[^{]*\{([^}]*)\}`).FindStringSubmatch(string(css))
+	if item == nil || !strings.Contains(item[1], "overflow-wrap: anywhere") || !strings.Contains(item[1], "white-space: normal") {
+		t.Error("explorer menu items must wrap long names")
+	}
+	if !strings.Contains(string(css), "max-width: min(20rem, calc(100vw - 32px));") || strings.Contains(string(css), ".hub-explorers") {
+		t.Error("explorer menu must stay within the viewport and the home chip rules must be gone")
+	}
+	min, err := os.ReadFile("../static/css/hub.min.11.css")
+	if err != nil || !strings.Contains(string(min), ".hub-xmenu-list{") || !strings.Contains(string(min), ".hub-footer-explorers-inner{") || strings.Contains(string(min), ".hub-explorer{") {
+		t.Error("hub.min.11.css is not rebuilt")
 	}
 }
 
@@ -583,25 +592,25 @@ func TestHomeProductCarouselAssets(t *testing.T) {
 	if regexp.MustCompile(`(?m)^\.hub-products-nav:hover`).MatchString(string(css)) {
 		t.Error("a top-level .hub-products-nav:hover sticks after a tap on touch screens")
 	}
-	min, err := os.ReadFile("../static/css/hub.min.10.css")
+	min, err := os.ReadFile("../static/css/hub.min.11.css")
 	if err != nil || !strings.Contains(string(min), ".hub-products-strip.hub-products-carousel{") || !strings.Contains(string(min), ".hub-products-nav{") {
-		t.Error("hub.min.10.css is not rebuilt with the carousel rules")
+		t.Error("hub.min.11.css is not rebuilt with the carousel rules")
 	}
-	js, err := os.ReadFile("../static/js/main.min.10.js")
+	js, err := os.ReadFile("../static/js/main.min.11.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"Previous products", "Next products", "prefers-reduced-motion: reduce", `"aria-hidden","true"`, "passive:!1"} {
 		if !strings.Contains(string(js), want) {
-			t.Errorf("main.min.10.js is not rebuilt with the carousel: missing %q", want)
+			t.Errorf("main.min.11.js is not rebuilt with the carousel: missing %q", want)
 		}
 	}
 	// every product shows once: the carousel no longer appends copies of the tiles
 	if strings.Contains(string(js), "hub-product-clone") || strings.Contains(string(js), "cloneNode") {
-		t.Error("main.min.10.js still copies the product tiles")
+		t.Error("main.min.11.js still copies the product tiles")
 	}
 	if !strings.Contains(string(min), ".hub-products-strip::-webkit-scrollbar{display:none}") || !strings.Contains(string(min), "scrollbar-width:none") {
-		t.Error("hub.min.10.css must hide the product strip scrollbar")
+		t.Error("hub.min.11.css must hide the product strip scrollbar")
 	}
 }
 
@@ -610,20 +619,20 @@ func TestHomeProductCarouselAssets(t *testing.T) {
 // minifier merges .sec-amt into a ".base-amt,.cbase-amt,.csec-amt,.sec-amt" rule, and the switch
 // then hides every amount. It also needs the default secondary_coin cookie code.
 func TestMainAssetsCurrencySwitch(t *testing.T) {
-	css, err := os.ReadFile("../static/css/main.min.10.css")
+	css, err := os.ReadFile("../static/css/main.min.11.css")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, rule := range []string{"}.prim-amt{display:initial}", "}.sec-amt{display:none}"} {
 		if !strings.Contains(string(css), rule) {
-			t.Errorf("main.min.10.css must keep the stand-alone rule %q (build it with csso --no-restructure)", rule[1:])
+			t.Errorf("main.min.11.css must keep the stand-alone rule %q (build it with csso --no-restructure)", rule[1:])
 		}
 	}
-	js, err := os.ReadFile("../static/js/main.min.10.js")
+	js, err := os.ReadFile("../static/js/main.min.11.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(js), "secondaryCoinDefault") {
-		t.Error("main.min.10.js is not rebuilt with the default secondary_coin cookie")
+		t.Error("main.min.11.js is not rebuilt with the default secondary_coin cookie")
 	}
 }
