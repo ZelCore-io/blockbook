@@ -17,7 +17,9 @@ The dashboard and consumer PRs are independently deployable. This feature is dis
 
 ## Operator configuration
 
-After the dashboard PR is deployed, add these flags to the existing Blockbook service command (example hostname must be replaced with the actual dashboard origin):
+Packages built from this repository already carry the feed: `explorer_content_url` in *configs/environ.json* makes the generated service add `-explorercontenturl=<explorer_content_url>?coin=<coin alias>` for every coin, and the cache uses its default path. Leave `explorer_content_url` empty to build packages without the feed. A host whose unit in */etc/systemd/system*, or a drop-in that sets `ExecStart`, replaces the package's command line does not get the flag; `deploy-blockbook.sh` warns about both.
+
+For a hand-written service command, add these flags (example hostname must be replaced with the actual dashboard origin):
 
 ```
 -explorercontenturl=https://dashboard.example/api/public/explorer/v1/config?coin=groestlcoin

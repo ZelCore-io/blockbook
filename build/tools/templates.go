@@ -116,11 +116,14 @@ type Config struct {
 		PackageMaintainerEmail string `json:"package_maintainer_email"`
 	} `json:"meta"`
 	Env struct {
-		Version               string `json:"version"`
-		BackendInstallPath    string `json:"backend_install_path"`
-		BackendDataPath       string `json:"backend_data_path"`
-		BlockbookInstallPath  string `json:"blockbook_install_path"`
-		BlockbookDataPath     string `json:"blockbook_data_path"`
+		Version              string `json:"version"`
+		BackendInstallPath   string `json:"backend_install_path"`
+		BackendDataPath      string `json:"backend_data_path"`
+		BlockbookInstallPath string `json:"blockbook_install_path"`
+		BlockbookDataPath    string `json:"blockbook_data_path"`
+		// Dashboard explorer feed (products, theme, campaigns); the service asks
+		// it with ?coin=<alias>. Empty leaves the feed off.
+		ExplorerContentURL    string `json:"explorer_content_url"`
 		Architecture          string `json:"architecture"`
 		RPCBindHost           string `json:"-"` // Derived from BB_RPC_BIND_HOST_* to keep default RPC exposure local.
 		RPCAllowIP            string `json:"-"` // Derived to align rpcallowip with RPC bind host intent.

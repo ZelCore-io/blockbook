@@ -791,3 +791,34 @@ func TestInsightServiceConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestBlockbookServiceTemplateAddsExplorerFeedPerCoin(t *testing.T) {
+	config := &Config{}
+	config.Coin.Name = "Bcash"
+	config.Coin.Alias = "bcash"
+	config.Blockbook.SystemUser = "blockbook"
+	config.Env.BlockbookInstallPath = "/opt/coins/blockbook"
+	config.Env.BlockbookDataPath = "/opt/coins/data"
+	config.Blockbook.InternalBindingTemplate = "127.0.0.1:9031"
+	config.Blockbook.PublicBindingTemplate = "127.0.0.1:9131"
+
+	render := func(t *testing.T) string {
+		t.Helper()
+		templ := config.ParseTemplate()
+		templ = template.Must(templ.ParseFiles(filepath.Join("..", "templates", "blockbook", "debian", "service")))
+		var out bytes.Buffer
+		if err := templ.ExecuteTemplate(&out, "main", config); err != nil {
+			t.Fatalf("ExecuteTemplate() error = %v", err)
+		}
+		return out.String()
+	}
+
+	if rendered := render(t); strings.Contains(rendered, "-explorercontenturl") {
+		t.Fatalf("did not expect the feed flag without explorer_content_url:\n%s", rendered)
+	}
+	config.Env.ExplorerContentURL = "https://dashboard.example/api/public/explorer/v1/config"
+	want := " -explorercontenturl=https://dashboard.example/api/public/explorer/v1/config?coin=bcash "
+	if rendered := render(t); !strings.Contains(rendered, want) {
+		t.Fatalf("expected %q in rendered service:\n%s", want, rendered)
+	}
+}

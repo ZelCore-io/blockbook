@@ -363,6 +363,16 @@ if [[ -f $backup/unit.service ]] && ! diff -q "$backup/unit.service" "$unit_file
     log 'Service unit changed:'
     diff -u "$backup/unit.service" "$unit_file" || true
 fi
+# A unit in /etc/systemd/system or a drop-in that sets ExecStart replaces the package's command
+# line, so new flags from the package (such as -explorercontenturl) do not reach the service.
+pkg_unit=/lib/systemd/system/$service.service
+live_unit=$(systemctl show -p FragmentPath --value "$service")
+if [[ -n $live_unit && $live_unit != "$pkg_unit" ]]; then
+    log "Warning: $live_unit overrides $pkg_unit; the package's ExecStart is not used."
+fi
+for dropin in $(systemctl show -p DropInPaths --value "$service"); do
+    grep -q '^ExecStart=' "$dropin" 2>/dev/null && log "Warning: drop-in $dropin sets ExecStart; the package's ExecStart is not used."
+done
 systemctl start "$service"
 
 # 6. Verify
