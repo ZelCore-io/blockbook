@@ -85,7 +85,7 @@ func httpTestsEthereumType(t *testing.T, ts *httptest.Server) {
 			status:      http.StatusOK,
 			contentType: "application/json; charset=utf-8",
 			body: []string{
-				`{"address":"0x4Bda106325C335dF99eab7fE363cAC8A0ba2a24D","balance":"123450075","unconfirmedTxs":0,"txs":1,"nonTokenTxs":1,"internalTxs":1,"nonce":"75"}`,
+				`{"address":"0x4Bda106325C335dF99eab7fE363cAC8A0ba2a24D","balance":"123450075","unconfirmedBalance":"0","unconfirmedTxs":0,"txs":1,"nonTokenTxs":1,"internalTxs":1,"nonce":"75"}`,
 			},
 		},
 		{
@@ -280,7 +280,7 @@ var websocketTestsEthereumType = []websocketTest{
 				"privatePending": map[string]interface{}{"nonces": []uint64{75, 76}, "txids": []string{"0xdead"}},
 			},
 		},
-		want: `{"id":"8","data":{"address":"0x4Bda106325C335dF99eab7fE363cAC8A0ba2a24D","balance":"123450075","unconfirmedTxs":0,"txs":1,"nonTokenTxs":1,"internalTxs":1,"nonce":"77"}}`,
+		want: `{"id":"8","data":{"address":"0x4Bda106325C335dF99eab7fE363cAC8A0ba2a24D","balance":"123450075","unconfirmedBalance":"0","unconfirmedTxs":0,"txs":1,"nonTokenTxs":1,"internalTxs":1,"nonce":"77"}}`,
 	},
 }
 
