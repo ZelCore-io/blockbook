@@ -413,6 +413,9 @@ if (( use_package_unit )); then
     systemctl daemon-reload
     log "Service unit now: $(systemctl show -p FragmentPath --value "$service")"
 fi
+# Count restarts from here: a unit switch or daemon-reload resets NRestarts, and only automatic
+# restarts after this start count as a failed check.
+pre_restarts=$(num "$(systemctl show -p NRestarts --value "$service")")
 systemctl start "$service"
 
 # 6. Verify

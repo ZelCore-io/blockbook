@@ -94,8 +94,11 @@ all: clean-deb build-images $(addprefix deb-, $(TARGETS))
 build-images: clean-images
 	$(MAKE) .bin-image .deb-image
 
+# SKIP_BIN_IMAGE=1: the caller already built $(BIN_IMAGE) from build/docker/bin (CI does, from its build cache).
 .bin-image:
-	@if [ $$(build/tools/image_status.sh $(BIN_IMAGE):latest build/docker) != "ok" ]; then \
+	@if [ "$(SKIP_BIN_IMAGE)" = 1 ] && docker image inspect $(BIN_IMAGE):latest >/dev/null 2>&1; then \
+		echo "Image $(BIN_IMAGE) provided by the caller"; \
+	elif [ $$(build/tools/image_status.sh $(BIN_IMAGE):latest build/docker) != "ok" ]; then \
 		echo "Building image $(BIN_IMAGE) from $(BASE_IMAGE)"; \
 		docker build --no-cache=$(NO_CACHE) --build-arg TCMALLOC=$(TCMALLOC) --build-arg JEMALLOC=$(JEMALLOC) --build-arg BASE_IMAGE=$(BASE_IMAGE) --build-arg PORTABLE_ROCKSDB=$(PORTABLE) -t $(BIN_IMAGE) build/docker/bin; \
 	else \
