@@ -3,7 +3,9 @@
 package db
 
 import (
+	"bytes"
 	"encoding/hex"
+	"fmt"
 	"math/big"
 	"reflect"
 	"testing"
@@ -20,6 +22,24 @@ type testEthereumParser struct {
 	*eth.EthereumParser
 }
 
+type tokenTransferTestParser struct {
+	*eth.EthereumParser
+	transfers bchain.TokenTransfers
+}
+
+func (p *tokenTransferTestParser) EthereumTypeGetTokenTransfersFromTx(*bchain.Tx) (bchain.TokenTransfers, error) {
+	return p.transfers, nil
+}
+
+type txTokenTransferTestParser struct {
+	*eth.EthereumParser
+	transfers map[string]bchain.TokenTransfers
+}
+
+func (p *txTokenTransferTestParser) EthereumTypeGetTokenTransfersFromTx(tx *bchain.Tx) (bchain.TokenTransfers, error) {
+	return p.transfers[tx.Txid], nil
+}
+
 func ethereumTestnetParser() *eth.EthereumParser {
 	return eth.NewEthereumParser(1, true)
 }
@@ -28,6 +48,525 @@ func bigintFromStringToHex(s string) string {
 	var b big.Int
 	b.SetString(s, 0)
 	return bigintToHex(&b)
+}
+
+func makeTestAddrDesc(seed int) bchain.AddressDescriptor {
+	b := make([]byte, eth.EthereumTypeAddressDescriptorLen)
+	b[0] = byte(seed >> 8)
+	if len(b) > 1 {
+		b[1] = byte(seed)
+	}
+	for i := 2; i < len(b); i++ {
+		b[i] = byte(seed)
+	}
+	return b
+}
+
+func TestIdsInsertDoesNotDuplicate(t *testing.T) {
+	ids := Ids{*big.NewInt(1), *big.NewInt(2), *big.NewInt(3)}
+	for _, id := range []int64{1, 2, 3} {
+		ids.insert(*big.NewInt(id))
+	}
+	want := Ids{*big.NewInt(1), *big.NewInt(2), *big.NewInt(3)}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("Ids = %v, want %v", ids, want)
+	}
+
+	unpacked := unpackedIds{
+		{Value: big.NewInt(1)},
+		{Value: big.NewInt(2)},
+		{Value: big.NewInt(3)},
+	}
+	for _, id := range []int64{1, 2, 3} {
+		unpacked.insert(*big.NewInt(id))
+	}
+	if len(unpacked) != 3 {
+		t.Fatalf("unpackedIds length = %d, want 3", len(unpacked))
+	}
+	for i, id := range []int64{1, 2, 3} {
+		if unpacked[i].get().Cmp(big.NewInt(id)) != 0 {
+			t.Fatalf("unpackedIds[%d] = %v, want %d", i, unpacked[i].get(), id)
+		}
+	}
+}
+
+func TestERC721RepeatedTransferDoesNotLeaveStaleDuplicate(t *testing.T) {
+	contract := makeTestAddrDesc(0x7210)
+	c := &unpackedAddrContract{
+		Standard: bchain.NonFungibleToken,
+		Contract: contract,
+	}
+	transfer := &bchain.TokenTransfer{
+		Standard: bchain.NonFungibleToken,
+		Value:    *big.NewInt(42),
+	}
+
+	addToContract(c, 0, transferTo, contract, transfer, false, true)
+	addToContract(c, 0, transferTo, contract, transfer, false, true)
+	if len(c.Ids) != 1 || c.Ids[0].get().Cmp(&transfer.Value) != 0 {
+		t.Fatalf("Ids after repeated transfer-in = %v, want [42]", c.Ids)
+	}
+
+	addToContract(c, 0, transferFrom, contract, transfer, false, true)
+	if len(c.Ids) != 0 {
+		t.Fatalf("Ids after transfer-out = %v, want empty", c.Ids)
+	}
+}
+
+func TestERC721SelfTransferDoesNotMutateHoldings(t *testing.T) {
+	parser := ethereumTestnetParser()
+	address := dbtestdata.EthAddr83
+	contractAddress := dbtestdata.EthAddrContractCd
+	addrDesc := addressToAddrDesc(address, parser)
+	contractDesc := addressToAddrDesc(contractAddress, parser)
+	transfer := &bchain.TokenTransfer{
+		Standard: bchain.NonFungibleToken,
+		Contract: contractAddress,
+		From:     address,
+		To:       address,
+		Value:    *big.NewInt(42),
+	}
+	d := &RocksDB{chainParser: &tokenTransferTestParser{
+		EthereumParser: parser,
+		transfers:      bchain.TokenTransfers{transfer},
+	}}
+	acs := &unpackedAddrContracts{
+		TotalTxs: 3,
+		Contracts: []unpackedAddrContract{{
+			Standard: bchain.NonFungibleToken,
+			Contract: contractDesc,
+			Txs:      3,
+			Ids:      unpackedIds{{Value: big.NewInt(42)}},
+		}},
+	}
+	addresses := addressesMap{}
+	addressContracts := map[string]*unpackedAddrContracts{string(addrDesc): acs}
+	blockTx := &ethBlockTx{btxID: []byte{0x01}}
+
+	if err := d.processContractTransfers(blockTx, &bchain.Tx{}, addresses, addressContracts); err != nil {
+		t.Fatal(err)
+	}
+	if acs.TotalTxs != 4 || acs.Contracts[0].Txs != 4 {
+		t.Fatalf("transaction counts = (%d, %d), want (4, 4)", acs.TotalTxs, acs.Contracts[0].Txs)
+	}
+	if len(acs.Contracts[0].Ids) != 1 || acs.Contracts[0].Ids[0].get().Cmp(big.NewInt(42)) != 0 {
+		t.Fatalf("Ids = %v, want [42]", acs.Contracts[0].Ids)
+	}
+	txIndexes := addresses[string(addrDesc)]
+	wantIndexes := []int32{ContractIndexOffset, ^int32(ContractIndexOffset)}
+	if len(txIndexes) != 1 || !reflect.DeepEqual(txIndexes[0].indexes, wantIndexes) {
+		t.Fatalf("address indexes = %+v, want %v for one transaction", txIndexes, wantIndexes)
+	}
+}
+
+// TestERC721SelfTransferConnectDisconnectRoundTrip verifies the connect/disconnect symmetry
+// of an ERC721 self-transfer: the holdings are untouched on both sides and the transaction
+// counts stay balanced after the block with the self-transfer is rolled back.
+func TestERC721SelfTransferConnectDisconnectRoundTrip(t *testing.T) {
+	parser := ethereumTestnetParser()
+	owner := dbtestdata.EthAddr83
+	contractAddress := dbtestdata.EthAddrContractCd
+	tokenID := big.NewInt(42)
+	txidTransferIn := "80a0533b0f66e9d29aa4dbbdc8c4b90326b073e0d6b864e02c9598032ed05201"
+	txidSelfTransfer := "80a0533b0f66e9d29aa4dbbdc8c4b90326b073e0d6b864e02c9598032ed05202"
+	d := setupRocksDB(t, &txTokenTransferTestParser{
+		EthereumParser: parser,
+		transfers: map[string]bchain.TokenTransfers{
+			txidTransferIn: {{
+				Standard: bchain.NonFungibleToken,
+				Contract: contractAddress,
+				From:     dbtestdata.EthAddr7b,
+				To:       owner,
+				Value:    *tokenID,
+			}},
+			txidSelfTransfer: {{
+				Standard: bchain.NonFungibleToken,
+				Contract: contractAddress,
+				From:     owner,
+				To:       owner,
+				Value:    *tokenID,
+			}},
+		},
+	})
+	defer closeAndDestroyRocksDB(t, d)
+	ownerDesc := addressToAddrDesc(owner, parser)
+	contractDesc := addressToAddrDesc(contractAddress, parser)
+
+	makeBlock := func(height uint32, hash, txid, from string) *bchain.Block {
+		return &bchain.Block{
+			BlockHeader: bchain.BlockHeader{
+				Height: height,
+				Hash:   hash,
+				Time:   1534858022,
+			},
+			Txs: []bchain.Tx{{
+				Txid: txid,
+				Vin:  []bchain.Vin{{Addresses: []string{from}}},
+				Vout: []bchain.Vout{{ScriptPubKey: bchain.ScriptPubKey{Addresses: []string{contractAddress}}}},
+			}},
+		}
+	}
+
+	ownerContracts := func(stage string, wantTotalTxs uint, wantContractTxs uint) *unpackedAddrContracts {
+		t.Helper()
+		acs, err := d.getUnpackedAddrDescContracts(ownerDesc)
+		if err != nil {
+			t.Fatalf("%s: %v", stage, err)
+		}
+		if acs == nil {
+			t.Fatalf("%s: owner address contracts not found", stage)
+		}
+		if acs.TotalTxs != wantTotalTxs {
+			t.Fatalf("%s: TotalTxs = %d, want %d", stage, acs.TotalTxs, wantTotalTxs)
+		}
+		i, found := findContractInAddressContracts(contractDesc, acs.Contracts)
+		if !found {
+			t.Fatalf("%s: contract not found in owner address contracts", stage)
+		}
+		c := &acs.Contracts[i]
+		if c.Txs != wantContractTxs {
+			t.Fatalf("%s: contract Txs = %d, want %d", stage, c.Txs, wantContractTxs)
+		}
+		if len(c.Ids) != 1 || c.Ids[0].get().Cmp(tokenID) != 0 {
+			t.Fatalf("%s: Ids = %v, want [42]", stage, c.Ids)
+		}
+		return acs
+	}
+
+	// connect a block transferring the token to the owner
+	if err := d.ConnectBlock(makeBlock(4321000, "0xc7b98df95acfd11c51ba25611a39e004fe56c8fdfc1582af99354fcd09c17b11", txidTransferIn, dbtestdata.EthAddr7b)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := packUnpackedAddrContracts(ownerContracts("after connect of transfer in", 1, 1))
+
+	// connect a block with a self-transfer of the token: holdings must stay [42], tx counts must increase
+	if err := d.ConnectBlock(makeBlock(4321001, "0x2b57e15e93a0ed197417a34c2498b7187df79099572c04a6b6e6ff418f74e6ee", txidSelfTransfer, owner)); err != nil {
+		t.Fatal(err)
+	}
+	ownerContracts("after connect of self-transfer", 2, 2)
+
+	// disconnect the self-transfer block: holdings must stay [42], tx counts must return to the previous state
+	if err := d.DisconnectBlockRangeEthereumType(4321001, 4321001); err != nil {
+		t.Fatal(err)
+	}
+	restored := packUnpackedAddrContracts(ownerContracts("after disconnect of self-transfer", 1, 1))
+	if !bytes.Equal(snapshot, restored) {
+		t.Fatalf("owner address contracts after disconnect = %s, want %s", hex.EncodeToString(restored), hex.EncodeToString(snapshot))
+	}
+}
+
+// TestDisconnectBlockRange_MultiHopTransferRestoresHoldings verifies that a token moving
+// A->B->C inside one disconnected block is rolled back to A only. B already has history
+// with the collection, so its contract entry survives the disconnect and would keep a
+// phantom token if the transfers were undone in forward order.
+func TestDisconnectBlockRange_MultiHopTransferRestoresHoldings(t *testing.T) {
+	parser := ethereumTestnetParser()
+	funder, a, b, c := dbtestdata.EthAddr7b, dbtestdata.EthAddr83, dbtestdata.EthAddrA3, dbtestdata.EthAddr5d
+	txHistoryB := "80a0533b0f66e9d29aa4dbbdc8c4b90326b073e0d6b864e02c9598032ed05211"
+	txFundA := "80a0533b0f66e9d29aa4dbbdc8c4b90326b073e0d6b864e02c9598032ed05212"
+	txHop1 := "80a0533b0f66e9d29aa4dbbdc8c4b90326b073e0d6b864e02c9598032ed05213"
+	txHop2 := "80a0533b0f66e9d29aa4dbbdc8c4b90326b073e0d6b864e02c9598032ed05214"
+
+	nft := func(from, to string, id int64) *bchain.TokenTransfer {
+		return &bchain.TokenTransfer{Standard: bchain.NonFungibleToken, Contract: dbtestdata.EthAddrContractCd, From: from, To: to, Value: *big.NewInt(id)}
+	}
+	multi := func(from, to string, amount int64) *bchain.TokenTransfer {
+		return &bchain.TokenTransfer{Standard: bchain.MultiToken, Contract: dbtestdata.EthAddrContract6f, From: from, To: to,
+			MultiTokenValues: []bchain.MultiTokenValue{{Id: *big.NewInt(1), Value: *big.NewInt(amount)}}}
+	}
+	type txSpec struct{ txid, from string }
+
+	tests := []struct {
+		name      string
+		contract  string
+		transfers map[string]bchain.TokenTransfers
+		reorgTxs  []txSpec
+	}{
+		{
+			name:     "ERC721 across two transactions",
+			contract: dbtestdata.EthAddrContractCd,
+			transfers: map[string]bchain.TokenTransfers{
+				txHistoryB: {nft(funder, b, 7)},
+				txFundA:    {nft(funder, a, 42)},
+				txHop1:     {nft(a, b, 42)},
+				txHop2:     {nft(b, c, 42)},
+			},
+			reorgTxs: []txSpec{{txHop1, a}, {txHop2, b}},
+		},
+		{
+			name:     "ERC721 within one transaction",
+			contract: dbtestdata.EthAddrContractCd,
+			transfers: map[string]bchain.TokenTransfers{
+				txHistoryB: {nft(funder, b, 7)},
+				txFundA:    {nft(funder, a, 42)},
+				txHop1:     {nft(a, b, 42), nft(b, c, 42)},
+			},
+			reorgTxs: []txSpec{{txHop1, a}},
+		},
+		{
+			name:     "ERC1155 across two transactions",
+			contract: dbtestdata.EthAddrContract6f,
+			transfers: map[string]bchain.TokenTransfers{
+				txHistoryB: {multi(funder, b, 3)},
+				txFundA:    {multi(funder, a, 5)},
+				txHop1:     {multi(a, b, 5)},
+				txHop2:     {multi(b, c, 5)},
+			},
+			reorgTxs: []txSpec{{txHop1, a}, {txHop2, b}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := setupRocksDB(t, &txTokenTransferTestParser{EthereumParser: parser, transfers: tt.transfers})
+			defer closeAndDestroyRocksDB(t, d)
+
+			makeBlock := func(height uint32, hash string, txs []txSpec) *bchain.Block {
+				block := &bchain.Block{BlockHeader: bchain.BlockHeader{Height: height, Hash: hash, Time: 1534858022}}
+				for _, tx := range txs {
+					block.Txs = append(block.Txs, bchain.Tx{
+						Txid: tx.txid,
+						Vin:  []bchain.Vin{{Addresses: []string{tx.from}}},
+						Vout: []bchain.Vout{{ScriptPubKey: bchain.ScriptPubKey{Addresses: []string{tt.contract}}}},
+					})
+				}
+				return block
+			}
+			snapshot := func(stage string) map[string][]byte {
+				packed := make(map[string][]byte)
+				for _, addr := range []string{a, b, c} {
+					acs, err := d.getUnpackedAddrDescContracts(addressToAddrDesc(addr, parser))
+					if err != nil {
+						t.Fatalf("%s: %v", stage, err)
+					}
+					if acs != nil {
+						packed[addr] = packUnpackedAddrContracts(acs)
+					}
+				}
+				return packed
+			}
+
+			if err := d.ConnectBlock(makeBlock(4321000, "0xc7b98df95acfd11c51ba25611a39e004fe56c8fdfc1582af99354fcd09c17b11", []txSpec{{txHistoryB, funder}, {txFundA, funder}})); err != nil {
+				t.Fatal(err)
+			}
+			before := snapshot("before reorged block")
+			if err := d.ConnectBlock(makeBlock(4321001, "0x2b57e15e93a0ed197417a34c2498b7187df79099572c04a6b6e6ff418f74e6ee", tt.reorgTxs)); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.DisconnectBlockRangeEthereumType(4321001, 4321001); err != nil {
+				t.Fatal(err)
+			}
+			after := snapshot("after disconnect")
+			for _, addr := range []string{a, b, c} {
+				if !bytes.Equal(before[addr], after[addr]) {
+					t.Errorf("address %s contracts after disconnect = %s, want %s", addr, hex.EncodeToString(after[addr]), hex.EncodeToString(before[addr]))
+				}
+			}
+		})
+	}
+}
+
+func Test_unpackedAddrContracts_findContractIndex_LazyMap(t *testing.T) {
+	acs := &unpackedAddrContracts{}
+	minContracts := 192
+	for i := 0; i < minContracts+2; i++ {
+		acs.Contracts = append(acs.Contracts, unpackedAddrContract{
+			Contract: makeTestAddrDesc(i),
+		})
+	}
+	addrDesc := makeTestAddrDesc(9999)
+
+	target := acs.Contracts[minContracts].Contract
+	idx, found := acs.findContractIndex(addrDesc, target, nil)
+	if !found || idx != minContracts {
+		t.Fatalf("findContractIndex() = (%v, %v), want (%v, true)", idx, found, minContracts)
+	}
+	if acs.contractIndex != nil {
+		t.Fatal("did not expect contract index map to be built without hotness")
+	}
+
+	missing := makeTestAddrDesc(minContracts + 1024)
+	if _, found := findContractInAddressContracts(missing, acs.Contracts); found {
+		missing = makeTestAddrDesc(minContracts + 2048)
+		if _, found := findContractInAddressContracts(missing, acs.Contracts); found {
+			t.Fatal("failed to generate a missing contract for test")
+		}
+	}
+	if _, found := acs.findContractIndex(addrDesc, missing, nil); found {
+		t.Fatal("expected missing contract to be not found")
+	}
+}
+
+func Test_unpackedAddrContracts_findContractIndex_DirtyRebuild(t *testing.T) {
+	acs := &unpackedAddrContracts{}
+	minContracts := 192
+	for i := 0; i < minContracts+1; i++ {
+		acs.Contracts = append(acs.Contracts, unpackedAddrContract{
+			Contract: makeTestAddrDesc(i),
+		})
+	}
+	addrDesc := makeTestAddrDesc(9998)
+	hot := newAddressHotness(minContracts, 4, 1)
+	if hot == nil {
+		t.Fatal("expected hotness tracker to be initialized")
+	}
+	hot.BeginBlock()
+
+	_, _ = acs.findContractIndex(addrDesc, acs.Contracts[0].Contract, hot)
+	if acs.contractIndex == nil {
+		t.Fatal("expected contract index map to be built")
+	}
+
+	// Remove a contract and mark the index dirty to force rebuild.
+	removed := acs.Contracts[1].Contract
+	acs.Contracts = append(acs.Contracts[:1], acs.Contracts[2:]...)
+	acs.markContractIndexDirty()
+
+	if _, found := acs.findContractIndex(addrDesc, removed, hot); found {
+		t.Fatal("expected removed contract to be not found after rebuild")
+	}
+	if idx, found := acs.findContractIndex(addrDesc, acs.Contracts[1].Contract, hot); !found || idx != 1 {
+		t.Fatalf("findContractIndex() = (%v, %v), want (1, true)", idx, found)
+	}
+}
+
+func Test_unpackedAddrContracts_findContractIndex_InvalidLenFallback(t *testing.T) {
+	acs := &unpackedAddrContracts{}
+	minContracts := 192
+	for i := 0; i < minContracts; i++ {
+		acs.Contracts = append(acs.Contracts, unpackedAddrContract{
+			Contract: makeTestAddrDesc(i),
+		})
+	}
+	addrDesc := makeTestAddrDesc(9997)
+	hot := newAddressHotness(minContracts, 4, 1)
+	if hot == nil {
+		t.Fatal("expected hotness tracker to be initialized")
+	}
+	hot.BeginBlock()
+	invalid := bchain.AddressDescriptor([]byte{1, 2, 3})
+	acs.Contracts = append(acs.Contracts, unpackedAddrContract{Contract: invalid})
+
+	// Build index, which will skip the invalid entry.
+	_, _ = acs.findContractIndex(addrDesc, acs.Contracts[0].Contract, hot)
+	if acs.contractIndex == nil {
+		t.Fatal("expected contract index map to be built")
+	}
+
+	if idx, found := acs.findContractIndex(addrDesc, invalid, hot); !found || idx != len(acs.Contracts)-1 {
+		t.Fatalf("findContractIndex() = (%v, %v), want (%v, true)", idx, found, len(acs.Contracts)-1)
+	}
+}
+
+func Test_unpackedAddrContracts_findContractIndex_HotnessTriggers(t *testing.T) {
+	hotMinContracts := 192
+	hotMinHits := 3
+	hot := newAddressHotness(hotMinContracts, 4, hotMinHits)
+	if hot == nil {
+		t.Fatal("expected hotness tracker to be initialized")
+	}
+	hot.BeginBlock()
+
+	acs := &unpackedAddrContracts{}
+	for i := 0; i < hotMinContracts; i++ {
+		acs.Contracts = append(acs.Contracts, unpackedAddrContract{
+			Contract: makeTestAddrDesc(i),
+		})
+	}
+	addrDesc := makeTestAddrDesc(777)
+	target := acs.Contracts[hotMinContracts/2].Contract
+
+	for i := 0; i < hotMinHits-1; i++ {
+		_, _ = acs.findContractIndex(addrDesc, target, hot)
+		if acs.contractIndex != nil {
+			t.Fatalf("unexpected index build before min hits, hit %d", i+1)
+		}
+	}
+	_, _ = acs.findContractIndex(addrDesc, target, hot)
+	if acs.contractIndex == nil {
+		t.Fatal("expected index to be built after reaching min hits")
+	}
+}
+
+func Test_unpackedAddrContracts_findContractIndex_DropsIndexOnHotnessEviction(t *testing.T) {
+	parser := ethereumTestnetParser()
+	parser.HotAddressMinContracts = 1
+	parser.HotAddressLRUCacheSize = 1
+	parser.HotAddressMinHits = 1
+	d := setupRocksDB(t, &testEthereumParser{
+		EthereumParser: parser,
+	})
+	defer closeAndDestroyRocksDB(t, d)
+
+	addr1 := makeTestAddrDesc(1100)
+	addr2 := makeTestAddrDesc(1101)
+	acs1 := &unpackedAddrContracts{Contracts: []unpackedAddrContract{{Contract: makeTestAddrDesc(1200)}}}
+	acs2 := &unpackedAddrContracts{Contracts: []unpackedAddrContract{{Contract: makeTestAddrDesc(1201)}}}
+	d.addrContractsCache[string(addr1)] = acs1
+	d.addrContractsCache[string(addr2)] = acs2
+
+	if _, found := acs1.findContractIndex(addr1, acs1.Contracts[0].Contract, d.hotAddrTracker); !found {
+		t.Fatal("expected first contract to be found")
+	}
+	if acs1.contractIndex == nil {
+		t.Fatal("expected first contract index to be built")
+	}
+	if _, found := acs2.findContractIndex(addr2, acs2.Contracts[0].Contract, d.hotAddrTracker); !found {
+		t.Fatal("expected second contract to be found")
+	}
+	if acs1.contractIndex != nil {
+		t.Fatal("expected first contract index to be dropped after LRU eviction")
+	}
+	if acs2.contractIndex == nil {
+		t.Fatal("expected second contract index to remain hot")
+	}
+}
+
+func Test_addrContractsCache_FlushOnCap(t *testing.T) {
+	d := setupRocksDB(t, &testEthereumParser{
+		EthereumParser: ethereumTestnetParser(),
+	})
+	defer closeAndDestroyRocksDB(t, d)
+
+	d.addrContractsCacheMinSize = 1
+	d.addrContractsCacheMaxBytes = 10
+
+	addrDesc := makeTestAddrDesc(42)
+	acs := &unpackedAddrContracts{
+		TotalTxs: 1,
+		Contracts: []unpackedAddrContract{
+			{
+				Contract: makeTestAddrDesc(7),
+				Standard: bchain.FungibleToken,
+				Txs:      1,
+				Value:    unpackedBigInt{Value: big.NewInt(0)},
+			},
+		},
+	}
+	buf := packUnpackedAddrContracts(acs)
+	if int64(len(buf)) <= d.addrContractsCacheMaxBytes {
+		t.Fatalf("expected packed size to exceed cap, got %d", len(buf))
+	}
+	wb := grocksdb.NewWriteBatch()
+	wb.PutCF(d.cfh[cfAddressContracts], addrDesc, buf)
+	if err := d.WriteBatch(wb); err != nil {
+		wb.Destroy()
+		t.Fatal(err)
+	}
+	wb.Destroy()
+
+	got, err := d.getUnpackedAddrDescContracts(addrDesc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("expected cached address contracts to be returned")
+	}
+	if len(d.addrContractsCache) != 0 {
+		t.Fatalf("expected cache to be flushed, got %d entries", len(d.addrContractsCache))
+	}
+	if d.addrContractsCacheBytes != 0 {
+		t.Fatalf("expected cache bytes to be reset, got %d", d.addrContractsCacheBytes)
+	}
 }
 
 func verifyAfterEthereumTypeBlock1(t *testing.T, d *RocksDB, afterDisconnect bool) {
@@ -58,7 +597,7 @@ func verifyAfterEthereumTypeBlock1(t *testing.T, d *RocksDB, afterDisconnect boo
 		{dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddr3e, d.chainParser), "02010200", nil},
 		{
 			dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddr55, d.chainParser),
-			"02010001" + dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContract4a, d.chainParser) + varuintToHex(1<<2+uint(bchain.FungibleToken)) + bigintFromStringToHex("10000000000000000000000"), nil,
+			"02010001" + dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContract4a, d.chainParser) + varuintToHex(1<<2+uint(bchain.FungibleToken)) + bigintToHex(big.NewInt(0)), nil,
 		},
 		{
 			dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddr20, d.chainParser),
@@ -186,15 +725,15 @@ func verifyAfterEthereumTypeBlock2(t *testing.T, d *RocksDB, wantBlockInternalDa
 		{
 			dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddr4b, d.chainParser),
 			"01010102" +
-				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContract0d, d.chainParser) + varuintToHex(2<<2+uint(bchain.FungibleToken)) + bigintFromStringToHex("8086") +
-				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContract4a, d.chainParser) + varuintToHex(2<<2+uint(bchain.FungibleToken)) + bigintFromStringToHex("871180000950184"), nil,
+				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContract0d, d.chainParser) + varuintToHex(2<<2+uint(bchain.FungibleToken)) + bigintToHex(big.NewInt(0)) +
+				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContract4a, d.chainParser) + varuintToHex(2<<2+uint(bchain.FungibleToken)) + bigintToHex(big.NewInt(0)), nil,
 		},
 		{
 			dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddr55, d.chainParser),
 			"05030003" +
-				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContract4a, d.chainParser) + varuintToHex(2<<2+uint(bchain.FungibleToken)) + bigintFromStringToHex("10000000854307892726464") +
-				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContract0d, d.chainParser) + varuintToHex(1<<2+uint(bchain.FungibleToken)) + bigintFromStringToHex("0") +
-				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddr55, d.chainParser) + varuintToHex(1<<2+uint(bchain.FungibleToken)) + bigintFromStringToHex("0"), nil,
+				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContract4a, d.chainParser) + varuintToHex(2<<2+uint(bchain.FungibleToken)) + bigintToHex(big.NewInt(0)) +
+				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContract0d, d.chainParser) + varuintToHex(1<<2+uint(bchain.FungibleToken)) + bigintToHex(big.NewInt(0)) +
+				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddr55, d.chainParser) + varuintToHex(1<<2+uint(bchain.FungibleToken)) + bigintToHex(big.NewInt(0)), nil,
 		},
 		{
 			dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddr5d, d.chainParser),
@@ -203,8 +742,8 @@ func verifyAfterEthereumTypeBlock2(t *testing.T, d *RocksDB, wantBlockInternalDa
 		{
 			dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddr7b, d.chainParser),
 			"02000003" +
-				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContract4a, d.chainParser) + varuintToHex(1<<2+uint(bchain.FungibleToken)) + bigintFromStringToHex("0") +
-				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContract0d, d.chainParser) + varuintToHex(1<<2+uint(bchain.FungibleToken)) + bigintFromStringToHex("7674999999999991915") +
+				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContract4a, d.chainParser) + varuintToHex(1<<2+uint(bchain.FungibleToken)) + bigintToHex(big.NewInt(0)) +
+				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContract0d, d.chainParser) + varuintToHex(1<<2+uint(bchain.FungibleToken)) + bigintToHex(big.NewInt(0)) +
 				dbtestdata.AddressToPubKeyHex(dbtestdata.EthAddrContractCd, d.chainParser) + varuintToHex(1<<2+uint(bchain.NonFungibleToken)) + varuintToHex(1) + bigintFromStringToHex("1"), nil,
 		},
 		{
@@ -567,15 +1106,268 @@ func TestRocksDB_Index_EthereumType(t *testing.T) {
 
 }
 
-func Test_BulkConnect_EthereumType(t *testing.T) {
+// contract registry rows must roll back on disconnect - a stale row whose
+// creation was reorged away permanently disables GetBalanceHistory for that
+// address
+func TestDisconnectBlockRange_RollsBackContractRegistry(t *testing.T) {
 	d := setupRocksDB(t, &testEthereumParser{
 		EthereumParser: ethereumTestnetParser(),
 	})
 	defer closeAndDestroyRocksDB(t, d)
 
+	topLevel := "0x1111111111111111111111111111111111111111"
+	nested := "0x2222222222222222222222222222222222222222"
+	ephemeral := "0x3333333333333333333333333333333333333333"
+	longLived := "0x4444444444444444444444444444444444444444"
+
+	block1 := dbtestdata.GetTestEthereumTypeBlock1(d.chainParser)
+	block1.CoinSpecificData = &bchain.EthereumBlockSpecificData{
+		Contracts: []bchain.ContractInfo{
+			{Contract: longLived, Standard: bchain.UnhandledTokenStandard, CreatedInBlock: block1.Height},
+		},
+	}
+	if err := d.ConnectBlock(block1); err != nil {
+		t.Fatal(err)
+	}
+
+	block2 := dbtestdata.GetTestEthereumTypeBlock2(d.chainParser)
+	internal := &bchain.EthereumInternalData{
+		Type:     bchain.CREATE,
+		Contract: topLevel,
+		Transfers: []bchain.EthereumInternalTransfer{
+			{Type: bchain.CREATE, From: topLevel, To: nested},
+			{Type: bchain.CREATE, From: topLevel, To: ephemeral},
+			{Type: bchain.SELFDESTRUCT, From: ephemeral, To: topLevel},
+			{Type: bchain.SELFDESTRUCT, From: longLived, To: topLevel},
+		},
+	}
+	for i := range block2.Txs {
+		csd, _ := block2.Txs[i].CoinSpecificData.(bchain.EthereumSpecificData)
+		if i == 0 {
+			csd.InternalData = internal
+		} else {
+			csd.InternalData = nil
+		}
+		block2.Txs[i].CoinSpecificData = csd
+	}
+	block2.CoinSpecificData = &bchain.EthereumBlockSpecificData{
+		Contracts: []bchain.ContractInfo{
+			{Contract: topLevel, Standard: bchain.UnhandledTokenStandard, CreatedInBlock: block2.Height},
+			{Contract: nested, Standard: bchain.UnhandledTokenStandard, CreatedInBlock: block2.Height},
+			{Contract: ephemeral, Standard: bchain.UnhandledTokenStandard, CreatedInBlock: block2.Height},
+			{Contract: ephemeral, DestructedInBlock: block2.Height},
+			{Contract: longLived, DestructedInBlock: block2.Height},
+		},
+	}
+	if err := d.ConnectBlock(block2); err != nil {
+		t.Fatal(err)
+	}
+
+	assertRegistryRow := func(address string, want *bchain.ContractInfo) {
+		t.Helper()
+		got, err := d.GetContractInfoForAddress(address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want == nil {
+			if got != nil {
+				t.Errorf("contract %s = %+v, want no row", address, got)
+			}
+			return
+		}
+		if got == nil || got.CreatedInBlock != want.CreatedInBlock || got.DestructedInBlock != want.DestructedInBlock {
+			t.Errorf("contract %s = %+v, want CreatedInBlock %d, DestructedInBlock %d", address, got, want.CreatedInBlock, want.DestructedInBlock)
+		}
+	}
+
+	// connected state; the ephemeral row proves the same-batch merge
+	assertRegistryRow(topLevel, &bchain.ContractInfo{CreatedInBlock: block2.Height})
+	assertRegistryRow(nested, &bchain.ContractInfo{CreatedInBlock: block2.Height})
+	assertRegistryRow(ephemeral, &bchain.ContractInfo{CreatedInBlock: block2.Height, DestructedInBlock: block2.Height})
+	assertRegistryRow(longLived, &bchain.ContractInfo{CreatedInBlock: block1.Height, DestructedInBlock: block2.Height})
+
+	if err := d.DisconnectBlockRangeEthereumType(block2.Height, block2.Height); err != nil {
+		t.Fatal(err)
+	}
+
+	// creations of the disconnected block are gone, the destruction is reset
+	assertRegistryRow(topLevel, nil)
+	assertRegistryRow(nested, nil)
+	assertRegistryRow(ephemeral, nil)
+	assertRegistryRow(longLived, &bchain.ContractInfo{CreatedInBlock: block1.Height})
+}
+
+// a contract destroyed and re-deployed at the same address within one block must
+// keep its row - deleting it would drop a contract live on the canonical chain
+func TestDisconnectBlockRange_KeepsRowOfContractRecreatedInDisconnectedBlock(t *testing.T) {
+	d := setupRocksDB(t, &testEthereumParser{
+		EthereumParser: ethereumTestnetParser(),
+	})
+	defer closeAndDestroyRocksDB(t, d)
+
+	metamorphic := "0x5555555555555555555555555555555555555555"
+
+	block1 := dbtestdata.GetTestEthereumTypeBlock1(d.chainParser)
+	block1.CoinSpecificData = &bchain.EthereumBlockSpecificData{
+		Contracts: []bchain.ContractInfo{
+			{Contract: metamorphic, Standard: bchain.UnhandledTokenStandard, CreatedInBlock: block1.Height},
+		},
+	}
+	if err := d.ConnectBlock(block1); err != nil {
+		t.Fatal(err)
+	}
+
+	// destruction first, re-deployment second - the order the disconnect walk sees
+	block2 := dbtestdata.GetTestEthereumTypeBlock2(d.chainParser)
+	internal := &bchain.EthereumInternalData{
+		Type: bchain.CALL,
+		Transfers: []bchain.EthereumInternalTransfer{
+			{Type: bchain.SELFDESTRUCT, From: metamorphic, To: metamorphic},
+			{Type: bchain.CREATE, From: metamorphic, To: metamorphic},
+		},
+	}
+	for i := range block2.Txs {
+		csd, _ := block2.Txs[i].CoinSpecificData.(bchain.EthereumSpecificData)
+		if i == 0 {
+			csd.InternalData = internal
+		} else {
+			csd.InternalData = nil
+		}
+		block2.Txs[i].CoinSpecificData = csd
+	}
+	block2.CoinSpecificData = &bchain.EthereumBlockSpecificData{
+		Contracts: []bchain.ContractInfo{
+			{Contract: metamorphic, DestructedInBlock: block2.Height},
+			{Contract: metamorphic, Standard: bchain.UnhandledTokenStandard, CreatedInBlock: block2.Height},
+		},
+	}
+	if err := d.ConnectBlock(block2); err != nil {
+		t.Fatal(err)
+	}
+
+	// the sparse creation record already overwrote the pre-range CreatedInBlock
+	ci, err := d.GetContractInfoForAddress(metamorphic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ci == nil || ci.CreatedInBlock != block2.Height || ci.DestructedInBlock != 0 {
+		t.Fatalf("connected row = %+v, want CreatedInBlock %d, DestructedInBlock 0", ci, block2.Height)
+	}
+
+	if err := d.DisconnectBlockRangeEthereumType(block2.Height, block2.Height); err != nil {
+		t.Fatal(err)
+	}
+
+	// the row must survive; CreatedInBlock stays stale until a reindex
+	ci, err = d.GetContractInfoForAddress(metamorphic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ci == nil {
+		t.Fatal("row of a contract created before the disconnected range was deleted")
+	}
+	if ci.DestructedInBlock != 0 {
+		t.Errorf("row = %+v, want DestructedInBlock 0", ci)
+	}
+}
+
+// a later block's destruction reset must compose with an earlier block's creation
+// removal - unreachable within one block, where CREATE always precedes SELFDESTRUCT
+func TestDisconnectBlockRange_ComposesRegistryRollbackAcrossBlocks(t *testing.T) {
+	// BlockAddressesToKeep must cover the range, else cleanupBlockTxs prunes the
+	// older cfBlockTxs row and the disconnect aborts before any rollback
+	d := setupRocksDB(t, &testEthereumParser{
+		EthereumParser: eth.NewEthereumParser(2, true),
+	})
+	defer closeAndDestroyRocksDB(t, d)
+
+	crossBlock := "0x6666666666666666666666666666666666666666"
+
+	block1 := dbtestdata.GetTestEthereumTypeBlock1(d.chainParser)
+	block1.CoinSpecificData = &bchain.EthereumBlockSpecificData{
+		Contracts: []bchain.ContractInfo{
+			{Contract: crossBlock, Standard: bchain.UnhandledTokenStandard, CreatedInBlock: block1.Height},
+		},
+	}
+	internal1 := &bchain.EthereumInternalData{
+		Type:      bchain.CREATE,
+		Contract:  crossBlock,
+		Transfers: []bchain.EthereumInternalTransfer{},
+	}
+	for i := range block1.Txs {
+		csd, _ := block1.Txs[i].CoinSpecificData.(bchain.EthereumSpecificData)
+		if i == 0 {
+			csd.InternalData = internal1
+		} else {
+			csd.InternalData = nil
+		}
+		block1.Txs[i].CoinSpecificData = csd
+	}
+	if err := d.ConnectBlock(block1); err != nil {
+		t.Fatal(err)
+	}
+
+	block2 := dbtestdata.GetTestEthereumTypeBlock2(d.chainParser)
+	internal2 := &bchain.EthereumInternalData{
+		Type: bchain.CALL,
+		Transfers: []bchain.EthereumInternalTransfer{
+			{Type: bchain.SELFDESTRUCT, From: crossBlock, To: crossBlock},
+		},
+	}
+	for i := range block2.Txs {
+		csd, _ := block2.Txs[i].CoinSpecificData.(bchain.EthereumSpecificData)
+		if i == 0 {
+			csd.InternalData = internal2
+		} else {
+			csd.InternalData = nil
+		}
+		block2.Txs[i].CoinSpecificData = csd
+	}
+	block2.CoinSpecificData = &bchain.EthereumBlockSpecificData{
+		Contracts: []bchain.ContractInfo{
+			{Contract: crossBlock, DestructedInBlock: block2.Height},
+		},
+	}
+	if err := d.ConnectBlock(block2); err != nil {
+		t.Fatal(err)
+	}
+
+	ci, err := d.GetContractInfoForAddress(crossBlock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ci == nil || ci.CreatedInBlock != block1.Height || ci.DestructedInBlock != block2.Height {
+		t.Fatalf("connected row = %+v, want CreatedInBlock %d, DestructedInBlock %d", ci, block1.Height, block2.Height)
+	}
+
+	// block2 resets the destruction, block1 then replaces that same entry with a delete
+	if err := d.DisconnectBlockRangeEthereumType(block1.Height, block2.Height); err != nil {
+		t.Fatal(err)
+	}
+
+	ci, err = d.GetContractInfoForAddress(crossBlock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ci != nil {
+		t.Errorf("row = %+v, want no row - both the creation and the destruction were disconnected", ci)
+	}
+}
+
+func Test_BulkConnect_EthereumType(t *testing.T) {
+	d := setupRocksDB(t, &testEthereumParser{
+		EthereumParser: ethereumTestnetParser(),
+	})
+	defer closeAndDestroyRocksDB(t, d)
+	tipMaxBytes := d.addrContractsCacheMaxBytes
+	bulkMaxBytes := d.bulkAddrContractsCacheMaxBytes
+
 	bc, err := d.InitBulkConnect()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got, want := d.addrContractsCacheMaxBytes, bulkMaxBytes; got != want {
+		t.Fatalf("InitBulkConnect() addrContractsCacheMaxBytes = %d, want %d", got, want)
 	}
 
 	if d.is.DbState != common.DbStateInconsistent {
@@ -605,6 +1397,10 @@ func Test_BulkConnect_EthereumType(t *testing.T) {
 	if err := bc.Close(); err != nil {
 		t.Fatal(err)
 	}
+	assertBulkConnectReleased(t, bc)
+	if got := d.addrContractsCacheMaxBytes; got != tipMaxBytes {
+		t.Fatalf("Close() addrContractsCacheMaxBytes = %d, want %d", got, tipMaxBytes)
+	}
 
 	if d.is.DbState != common.DbStateOpen {
 		t.Fatal("DB not in DbStateOpen")
@@ -614,6 +1410,81 @@ func Test_BulkConnect_EthereumType(t *testing.T) {
 
 	if len(d.is.BlockTimes) != 4321002 {
 		t.Fatal("Expecting is.BlockTimes 4321002, got ", len(d.is.BlockTimes))
+	}
+}
+
+func Test_BulkConnect_EthereumType_UsesConfiguredAddrContractsCacheMaxBytes(t *testing.T) {
+	parser := ethereumTestnetParser()
+	parser.AddrContractsCacheMaxBytes = 10
+	parser.AddrContractsCacheBulkMaxBytes = 20
+	d := setupRocksDB(t, &testEthereumParser{
+		EthereumParser: parser,
+	})
+	defer closeAndDestroyRocksDB(t, d)
+	tipMaxBytes := d.tipAddrContractsCacheMaxBytes
+	bulkMaxBytes := d.bulkAddrContractsCacheMaxBytes
+
+	bc1, err := d.InitBulkConnect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.addrContractsCacheMaxBytes; got != bulkMaxBytes {
+		t.Fatalf("first InitBulkConnect() addrContractsCacheMaxBytes = %d, want %d", got, bulkMaxBytes)
+	}
+
+	bc2, err := d.InitBulkConnect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.addrContractsCacheMaxBytes; got != bulkMaxBytes {
+		t.Fatalf("second InitBulkConnect() addrContractsCacheMaxBytes = %d, want %d", got, bulkMaxBytes)
+	}
+
+	if err := bc2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.addrContractsCacheMaxBytes; got != tipMaxBytes {
+		t.Fatalf("second Close() addrContractsCacheMaxBytes = %d, want %d", got, tipMaxBytes)
+	}
+
+	if err := bc1.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.addrContractsCacheMaxBytes; got != tipMaxBytes {
+		t.Fatalf("first Close() addrContractsCacheMaxBytes = %d, want %d", got, tipMaxBytes)
+	}
+}
+
+func Test_BulkConnect_EthereumType_CloseFlushesAddrContractsCacheOverTipCap(t *testing.T) {
+	parser := ethereumTestnetParser()
+	parser.AddrContractsCacheMaxBytes = 10
+	parser.AddrContractsCacheBulkMaxBytes = 20
+	d := setupRocksDB(t, &testEthereumParser{
+		EthereumParser: parser,
+	})
+	defer closeAndDestroyRocksDB(t, d)
+
+	bc, err := d.InitBulkConnect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d.addrContractsCacheMux.Lock()
+	d.addrContractsCache[string(makeTestAddrDesc(99))] = &unpackedAddrContracts{TotalTxs: 1}
+	d.addrContractsCacheBytes = d.tipAddrContractsCacheMaxBytes + 1
+	d.addrContractsCacheMux.Unlock()
+
+	if err := bc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.addrContractsCacheMaxBytes; got != d.tipAddrContractsCacheMaxBytes {
+		t.Fatalf("Close() addrContractsCacheMaxBytes = %d, want %d", got, d.tipAddrContractsCacheMaxBytes)
+	}
+	if got := len(d.addrContractsCache); got != 0 {
+		t.Fatalf("Close() addrContractsCache entries = %d, want 0", got)
+	}
+	if got := d.addrContractsCacheBytes; got != 0 {
+		t.Fatalf("Close() addrContractsCacheBytes = %d, want 0", got)
 	}
 }
 
@@ -923,7 +1794,80 @@ func Test_packUnpackAddrContracts(t *testing.T) {
 			if !reflect.DeepEqual(got, &tt.data) {
 				t.Errorf("unpackAddrContracts() = %v, want %v", got, tt.data)
 			}
+			// the header-only decoder must agree on the counters and leave the array undecoded
+			header, err := unpackAddrContractsHeader(packed, nil)
+			if err != nil {
+				t.Errorf("unpackAddrContractsHeader() error = %v", err)
+				return
+			}
+			wantHeader := &AddrContracts{TotalTxs: tt.data.TotalTxs, NonContractTxs: tt.data.NonContractTxs, InternalTxs: tt.data.InternalTxs}
+			if !reflect.DeepEqual(header, wantHeader) {
+				t.Errorf("unpackAddrContractsHeader() = %v, want %v", header, wantHeader)
+			}
 		})
+	}
+}
+
+func Test_unpackAddrContractsHeader_Truncated(t *testing.T) {
+	packed := packAddrContracts(&AddrContracts{TotalTxs: 300, NonContractTxs: 200, InternalTxs: 100})
+	// the header is the three counters; the trailing contract count is not part of it
+	headerLen := 0
+	for i := 0; i < 3; i++ {
+		_, l := unpackVaruint(packed[headerLen:])
+		headerLen += l
+	}
+	for cut := 0; cut < headerLen; cut++ {
+		if _, err := unpackAddrContractsHeader(packed[:cut], nil); err == nil {
+			t.Errorf("unpackAddrContractsHeader(packed[:%d]) expected error", cut)
+		}
+	}
+}
+
+func Test_GetAddrDescContracts_HeaderOnly(t *testing.T) {
+	parser := ethereumTestnetParser()
+	d := setupRocksDB(t, parser)
+	defer closeAndDestroyRocksDB(t, d)
+	addrDesc := bchain.AddressDescriptor(addressToAddrDesc(dbtestdata.EthAddr4b, parser))
+
+	for _, headerOnly := range []bool{false, true} {
+		got, err := d.GetAddrDescContracts(addrDesc, headerOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != nil {
+			t.Fatalf("absent record, headerOnly=%v: got %v, want nil", headerOnly, got)
+		}
+	}
+
+	stored := &AddrContracts{
+		TotalTxs:       3333330,
+		NonContractTxs: 2222220,
+		InternalTxs:    1111110,
+		Contracts:      generateAddrContracts(10, 1, 3, 1, 3),
+	}
+	wb := grocksdb.NewWriteBatch()
+	defer wb.Destroy()
+	if err := d.storeAddressContracts(wb, map[string]*AddrContracts{string(addrDesc): stored}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.WriteBatch(wb); err != nil {
+		t.Fatal(err)
+	}
+
+	full, err := d.GetAddrDescContracts(addrDesc, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.GetAddrDescContracts(addrDesc, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &AddrContracts{TotalTxs: full.TotalTxs, NonContractTxs: full.NonContractTxs, InternalTxs: full.InternalTxs}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("GetAddrDescContracts(headerOnly) = %v, want %v", got, want)
+	}
+	if len(full.Contracts) != len(stored.Contracts) {
+		t.Errorf("GetAddrDescContracts() decoded %d contracts, want %d", len(full.Contracts), len(stored.Contracts))
 	}
 }
 
@@ -962,7 +1906,7 @@ func Test_addToContracts(t *testing.T) {
 						Standard: bchain.FungibleToken,
 						Contract: addressToAddrDesc(dbtestdata.EthAddrContract47, parser),
 						Txs:      1,
-						Value:    *big.NewInt(123456),
+						Value:    *big.NewInt(0),
 					},
 				},
 			},
@@ -984,7 +1928,7 @@ func Test_addToContracts(t *testing.T) {
 					{
 						Standard: bchain.FungibleToken,
 						Contract: addressToAddrDesc(dbtestdata.EthAddrContract47, parser),
-						Value:    *big.NewInt(100000),
+						Value:    *big.NewInt(0),
 						Txs:      2,
 					},
 				},
@@ -1007,7 +1951,7 @@ func Test_addToContracts(t *testing.T) {
 					{
 						Standard: bchain.FungibleToken,
 						Contract: addressToAddrDesc(dbtestdata.EthAddrContract47, parser),
-						Value:    *big.NewInt(100000),
+						Value:    *big.NewInt(0),
 						Txs:      2,
 					},
 					{
@@ -1036,7 +1980,7 @@ func Test_addToContracts(t *testing.T) {
 					{
 						Standard: bchain.FungibleToken,
 						Contract: addressToAddrDesc(dbtestdata.EthAddrContract47, parser),
-						Value:    *big.NewInt(100000),
+						Value:    *big.NewInt(0),
 						Txs:      2,
 					},
 					{
@@ -1065,7 +2009,7 @@ func Test_addToContracts(t *testing.T) {
 					{
 						Standard: bchain.FungibleToken,
 						Contract: addressToAddrDesc(dbtestdata.EthAddrContract47, parser),
-						Value:    *big.NewInt(100000),
+						Value:    *big.NewInt(0),
 						Txs:      2,
 					},
 					{
@@ -1099,7 +2043,7 @@ func Test_addToContracts(t *testing.T) {
 					{
 						Standard: bchain.FungibleToken,
 						Contract: addressToAddrDesc(dbtestdata.EthAddrContract47, parser),
-						Value:    *big.NewInt(100000),
+						Value:    *big.NewInt(0),
 						Txs:      2,
 					},
 					{
@@ -1148,7 +2092,7 @@ func Test_addToContracts(t *testing.T) {
 					{
 						Standard: bchain.FungibleToken,
 						Contract: addressToAddrDesc(dbtestdata.EthAddrContract47, parser),
-						Value:    *big.NewInt(100000),
+						Value:    *big.NewInt(0),
 						Txs:      2,
 					},
 					{
@@ -1201,7 +2145,7 @@ func Test_addToContracts(t *testing.T) {
 					{
 						Standard: bchain.FungibleToken,
 						Contract: addressToAddrDesc(dbtestdata.EthAddrContract47, parser),
-						Value:    *big.NewInt(100000),
+						Value:    *big.NewInt(0),
 						Txs:      2,
 					},
 					{
@@ -1239,7 +2183,7 @@ func Test_addToContracts(t *testing.T) {
 					Standard: tt.args.transfer.Standard,
 				})
 			}
-			if got := addToContract(&unpackedAddrContracts.Contracts[contractIndex], contractIndex, tt.args.index, tt.args.contract, tt.args.transfer, tt.args.addTxCount); got != tt.wantIndex {
+			if got := addToContract(&unpackedAddrContracts.Contracts[contractIndex], contractIndex, tt.args.index, tt.args.contract, tt.args.transfer, tt.args.addTxCount, true); got != tt.wantIndex {
 				t.Errorf("addToContracts() = %v, want %v", got, tt.wantIndex)
 			}
 			// convert from partially unpacked form to final form used by API
@@ -1249,6 +2193,140 @@ func Test_addToContracts(t *testing.T) {
 				t.Errorf("addToContracts() = %+v, want %+v", addrContracts, tt.wantAddrContracts)
 			}
 		})
+	}
+}
+
+func Test_addToContract_ERC20ZeroesExistingValue(t *testing.T) {
+	transfer := &bchain.TokenTransfer{
+		Standard: bchain.FungibleToken,
+		Value:    *big.NewInt(1),
+	}
+
+	c := &unpackedAddrContract{
+		Standard: bchain.FungibleToken,
+		Contract: makeTestAddrDesc(123),
+		Value:    unpackedBigInt{Value: big.NewInt(123456)},
+	}
+	addToContract(c, 0, 1, c.Contract, transfer, false, true)
+	if c.Value.Value == nil || c.Value.Value.Sign() != 0 {
+		t.Fatalf("expected ERC20 value to be zeroed, got %v", c.Value.Value)
+	}
+	if len(c.Value.Slice) != 0 {
+		t.Fatalf("expected ERC20 packed slice to be cleared, got %d bytes", len(c.Value.Slice))
+	}
+
+	c = &unpackedAddrContract{
+		Standard: bchain.FungibleToken,
+		Contract: makeTestAddrDesc(124),
+		Value:    unpackedBigInt{Slice: []byte{0x1, 0x2}},
+	}
+	addToContract(c, 0, 1, c.Contract, transfer, false, true)
+	if c.Value.Value == nil || c.Value.Value.Sign() != 0 {
+		t.Fatalf("expected ERC20 value to be zeroed after slice, got %v", c.Value.Value)
+	}
+	if len(c.Value.Slice) != 0 {
+		t.Fatalf("expected ERC20 packed slice to be cleared, got %d bytes", len(c.Value.Slice))
+	}
+}
+
+func Test_ERC721_SelfTransfer_ReorgTokenLoss(t *testing.T) {
+	addrDesc := makeTestAddrDesc(0x7101)
+	contract := makeTestAddrDesc(0x7102)
+	acs := &unpackedAddrContracts{
+		TotalTxs: 6,
+		Contracts: []unpackedAddrContract{
+			{
+				Standard: bchain.NonFungibleToken,
+				Contract: contract,
+				Txs:      6,
+				Ids: unpackedIds{
+					{Value: big.NewInt(1)},
+					{Value: big.NewInt(2)},
+					{Value: big.NewInt(3)},
+				},
+			},
+		},
+	}
+	btxContract := &ethBlockTxContract{
+		from:             addrDesc,
+		to:               addrDesc,
+		contract:         contract,
+		transferStandard: bchain.NonFungibleToken,
+		value:            *big.NewInt(2),
+	}
+
+	err := (&RocksDB{}).disconnectAddress([]byte{0x01}, false, addrDesc, btxContract, map[string]map[string]struct{}{}, map[string]*unpackedAddrContracts{
+		string(addrDesc): acs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := acs.TotalTxs, uint(5); got != want {
+		t.Fatalf("TotalTxs = %d, want %d", got, want)
+	}
+	if got, want := acs.Contracts[0].Txs, uint(5); got != want {
+		t.Fatalf("contract Txs = %d, want %d", got, want)
+	}
+
+	want := []*big.Int{big.NewInt(1), big.NewInt(2), big.NewInt(3)}
+	if got := acs.Contracts[0].Ids; len(got) != len(want) {
+		t.Fatalf("Ids length = %d, want %d: %v", len(got), len(want), got)
+	} else {
+		for i := range got {
+			if got[i].get().Cmp(want[i]) != 0 {
+				t.Fatalf("Ids[%d] = %v, want %v", i, got[i].get(), want[i])
+			}
+		}
+	}
+}
+
+func Test_ERC1155_SelfTransfer_ReorgValueLoss(t *testing.T) {
+	addrDesc := makeTestAddrDesc(0x1155)
+	contract := makeTestAddrDesc(0x1156)
+	acs := &unpackedAddrContracts{
+		TotalTxs: 6,
+		Contracts: []unpackedAddrContract{
+			{
+				Standard: bchain.MultiToken,
+				Contract: contract,
+				Txs:      6,
+				MultiTokenValues: unpackedMultiTokenValues{
+					{
+						Id:    unpackedBigInt{Value: big.NewInt(2)},
+						Value: unpackedBigInt{Value: big.NewInt(10)},
+					},
+				},
+			},
+		},
+	}
+	btxContract := &ethBlockTxContract{
+		from:             addrDesc,
+		to:               addrDesc,
+		contract:         contract,
+		transferStandard: bchain.MultiToken,
+		idValues: []bchain.MultiTokenValue{
+			{
+				Id:    *big.NewInt(2),
+				Value: *big.NewInt(3),
+			},
+		},
+	}
+
+	err := (&RocksDB{}).disconnectAddress([]byte{0x02}, false, addrDesc, btxContract, map[string]map[string]struct{}{}, map[string]*unpackedAddrContracts{
+		string(addrDesc): acs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := acs.Contracts[0].MultiTokenValues
+	if len(got) != 1 {
+		t.Fatalf("MultiTokenValues length = %d, want 1", len(got))
+	}
+	if got[0].Id.get().Cmp(big.NewInt(2)) != 0 {
+		t.Fatalf("MultiTokenValues[0].Id = %v, want 2", got[0].Id.get())
+	}
+	if got[0].Value.get().Cmp(big.NewInt(10)) != 0 {
+		t.Fatalf("MultiTokenValues[0].Value = %v, want 10", got[0].Value.get())
 	}
 }
 
@@ -1384,45 +2462,47 @@ func Test_packUnpackFourByteSignature(t *testing.T) {
 	}
 }
 
-func Test_packUnpackContractInfo(t *testing.T) {
-	tests := []struct {
-		name         string
-		contractInfo bchain.ContractInfo
-	}{
-		{
-			name:         "empty",
-			contractInfo: bchain.ContractInfo{},
-		},
-		{
-			name: "unknown",
-			contractInfo: bchain.ContractInfo{
-				Type:              bchain.UnknownTokenStandard,
-				Standard:          bchain.UnknownTokenStandard,
-				Name:              "Test contract",
-				Symbol:            "TCT",
-				Decimals:          18,
-				CreatedInBlock:    1234567,
-				DestructedInBlock: 234567890,
-			},
-		},
-		{
-			name: "ERC20",
-			contractInfo: bchain.ContractInfo{
-				Type:              bchain.ERC20TokenStandard,
-				Standard:          bchain.ERC20TokenStandard,
-				Name:              "GreenContract🟢",
-				Symbol:            "🟢",
-				Decimals:          0,
-				CreatedInBlock:    1,
-				DestructedInBlock: 2,
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			buf := packContractInfo(&tt.contractInfo)
-			if got, err := unpackContractInfo(buf); !reflect.DeepEqual(*got, tt.contractInfo) || err != nil {
-				t.Errorf("packUnpackContractInfo() = %v, want %v, error %v", *got, tt.contractInfo, err)
+func Benchmark_contractIndexLookup(b *testing.B) {
+	sizes := []int{192, 256}
+	for _, n := range sizes {
+		contracts := make([]unpackedAddrContract, n)
+		for i := 0; i < n; i++ {
+			contracts[i].Contract = makeTestAddrDesc(i)
+		}
+		addrDesc := makeTestAddrDesc(1234)
+		target := contracts[n/2].Contract
+		hot := newAddressHotness(192, 8, 1)
+		if hot != nil {
+			hot.BeginBlock()
+		}
+
+		b.Run(fmt.Sprintf("ScanHit_%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, _ = findContractInAddressContracts(target, contracts)
+			}
+		})
+
+		b.Run(fmt.Sprintf("MapHit_%d", n), func(b *testing.B) {
+			acs := &unpackedAddrContracts{Contracts: contracts}
+			// Build once to isolate lookup cost.
+			_, _ = acs.findContractIndex(addrDesc, target, hot)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, _ = acs.findContractIndex(addrDesc, target, hot)
+			}
+		})
+
+		b.Run(fmt.Sprintf("MapBuildHit_%d", n), func(b *testing.B) {
+			acs := &unpackedAddrContracts{Contracts: contracts}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				acs.contractIndex = nil
+				acs.contractIndexDirty = false
+				_, _ = acs.findContractIndex(addrDesc, target, hot)
 			}
 		})
 	}

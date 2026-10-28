@@ -16,3 +16,13 @@ build/*.deb
 .deb-image
 \.idea/
 __debug*
+.gocache/
+__pycache__/
+.dev/
+.spec/
+static/api-docs/swagger-ui/
+configs/grafana/grafana.json
+
+# Local Superpowers planning and agent scratch files
+superpowers/
+.superpowers/

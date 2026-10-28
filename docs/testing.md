@@ -7,7 +7,9 @@ distinguish which tests should be executed.
 There are several ways to run tests:
 
 * `make test` – run unit tests only (note that `make deb*` and `make all*` commands always run also *test* target)
-* `make test-integration` – run integration tests only
+* `make test-connectivity` – run connectivity checks only
+* `make test-integration` – run RPC and sync integration tests only
+* `make test-e2e` – run Blockbook API end-to-end tests only
 * `make test-all` – run all tests above
 
 You can use Go's flag *-run* to filter which tests should be executed. Use *ARGS* variable, e.g.
@@ -29,9 +31,10 @@ and try pack and unpack them. Specialities of particular coin are tested too. Se
 ## Integration tests
 
 Integration tests test interface between either Blockbook's components or back-end services. Integration tests are
-located in *tests* directory and every test suite has its own package. Because RPC and synchronization are crucial
-components of Blockbook, it is mandatory that coin implementations have these integration tests defined. They are
-implemented in packages `blockbook/tests/rpc` and `blockbook/tests/sync` and both of them are declarative. For each coin
+located in *tests* directory and every test suite has its own package. Because RPC, synchronization and Blockbook API
+surface are crucial components of Blockbook, it is mandatory that coin implementations have these integration tests
+defined. They are implemented in packages `blockbook/tests/rpc`, `blockbook/tests/sync` and `blockbook/tests/api`, and
+all of them are declarative. For each coin
 there are test definition that enables particular tests of test suite and *testdata* file that contains test fixtures.
 
 Not every coin implementation supports full set of back-end API so it is necessary to define which tests of test suite
@@ -39,10 +42,16 @@ are able to run. That is done in test definition file *blockbook/tests/tests.jso
 test implementations call each level as separate subtest. Go's *test* command allows filter tests to run by `-run` flag.
 It perfectly fits with layered test definitions. For example, you can:
 
+* run connectivity tests for all coins – `make test-connectivity`
+* run connectivity tests for a single coin – `make test-connectivity ARGS="-run=TestIntegration/bitcoin=main/connectivity"`
 * run tests for single coin – `make test-integration ARGS="-run=TestIntegration/bitcoin/"`
 * run single test suite – `make test-integration ARGS="-run=TestIntegration//sync/"`
 * run single test – `make test-integration ARGS="-run=TestIntegration//sync/HandleFork"`
 * run tests for set of coins – `make test-integration ARGS="-run='TestIntegration/(bcash|bgold|bitcoin|dash|dogecoin|litecoin|snowgem|vertcoin|zcash|zelcash)/'"`
+* run e2e tests for all coins – `make test-e2e`
+* run e2e tests for single coin – `make test-e2e ARGS="-run=TestIntegration/bitcoin=main/api"`
+
+Integration targets run with `go test -timeout 30m` inside Docker tooling.
 
 Test fixtures are defined in *testdata* directory in package of particular test suite. They are separate JSON files named
 by coin. File schemes are very similar with verbose results of CLI tools and are described below. Integration tests
@@ -52,9 +61,72 @@ For simplicity, URLs and credentials of back-end services, where are tests going
 from *blockbook/configs/coins*, the same place from where are production configuration files generated. There are general
 URLs that link to *localhost*. If you need run tests against remote servers, there are few options how to do it:
 
+* tests use `BB_BUILD_ENV=dev`
+* set `BB_DEV_RPC_URL_HTTP_<coin alias>` to override `rpc_url_template` during template generation (forwarded into Docker by the root `Makefile`)
+* set `BB_DEV_RPC_URL_WS_<coin alias>` to override `rpc_url_ws_template` for WebSocket subscriptions when needed
+* set `BB_DEV_MQ_URL_<coin alias>` to override `message_queue_binding_template` when tests need a non-local MQ binding
 * temporarily change config
 * SSH tunneling – `ssh -nNT -L 8030:localhost:8030 remote-server`
 * HTTP proxy
+
+### Connectivity integration tests
+
+Connectivity tests are lightweight checks that verify back-end availability before running heavier RPC or sync suites.
+They are configured per coin in *blockbook/tests/tests.json* using the `connectivity` list:
+
+* `["http"]` – verify HTTP RPC connectivity
+* `["http", "ws"]` – verify HTTP RPC plus WebSocket subscription connectivity
+
+Example:
+
+```
+"bitcoin": {
+    "connectivity": ["http"]
+},
+"ethereum": {
+    "connectivity": ["http", "ws"]
+}
+```
+
+HTTP connectivity verifies both back-end and Blockbook accessibility:
+
+* back-end: UTXO chains call `getblockchaininfo`, EVM chains call `web3_clientVersion`
+* Blockbook: calls `GET /api/status` (resolved from `BB_DEV_API_URL_HTTP_<test name>` or local `ports.blockbook_public`)
+
+WebSocket connectivity also verifies both surfaces:
+
+* back-end: validates `web3_clientVersion` and opens a `newHeads` subscription
+* Blockbook: connects to `/websocket` (or `BB_DEV_API_URL_WS_<test name>`) and calls `getInfo`
+
+### Blockbook API end-to-end tests
+
+Public Blockbook API checks are implemented in TypeScript in *blockbook/tests/openapi* and configured per coin by the
+`api` list in *blockbook/tests/tests.json*.
+Use `make test-e2e` to run this suite only.
+
+XPUB coverage for Bitcoin-type coins is fixture driven: `xpubFixtures` in *tests/openapi/fixtures/<coin>.json* lists
+xpubs or output descriptors (derived from the public Trezor test seed `all all all ...`) together with the confirmed
+transaction and used-address counts observed when the fixture was written. History only grows, so those counts act as
+floors and a lower value means the instance is missing indexed data. The tests (`GetXpub*`, `WsGetAccountInfoXpub`,
+`WsGetAccountUtxoXpub`) check that lifetime totals reconcile with the balance, that the `tokens` filters are consistent
+views of one derivation, that paging is exact, that confirmed UTXOs sum to the balance, that balance history covers every
+transaction, that a malformed xpub is a `400`, and that HTTP and WebSocket answers agree. Coins without a fixture file
+skip these tests.
+
+Phase 1 covers smoke checks for:
+
+* HTTP: `Status`, `GetBlockIndex`, `GetBlockByHeight`, `GetBlock`, `GetTransaction`, `GetTransactionSpecific`, `GetAddress`, `GetAddressTxids`, `GetAddressTxs`, `GetUtxo`, `GetUtxoConfirmedFilter`
+* WebSocket: `WsGetInfo`, `WsGetBlockHash`, `WsGetTransaction`, `WsGetAccountInfo`, `WsGetAccountUtxo`, `WsPing`
+
+Endpoint resolution uses the test name from `coin.test_name` in `configs/coins/<coin>.json`
+(or the config file name when `test_name` is omitted) and this precedence:
+
+1. `BB_DEV_API_URL_HTTP_<test name>` and `BB_DEV_API_URL_WS_<test name>`
+2. localhost fallback from coin config port `ports.blockbook_public`
+3. when WS env var is missing, WS URL is derived from HTTP URL with `/websocket` path
+
+`OPENAPI_USER_AGENT` overrides the User-Agent sent on HTTP and WebSocket requests, for local runs against public
+instances whose edge filters non-browser agents.
 
 ### Synchronization integration tests
 
@@ -90,8 +162,6 @@ fixture file. So data in fixture file must be related together.
    *txid* is key and *transaction object* is value of *txDetails* object in fixture file.
 * `GetTransactionForMempool` – Calls *BlockChain.GetTransactionForMempool* that should be version of
    *BlockChain.GetTransaction* optimized for mempool. Implementation of test is similar.
-* `GetMempoolEntry` – Calls *BlockChain.GetMempoolEntry* and checks result. Because mempool is living structure it
-   tries to load entry for random transaction in mempool repeatedly.
 * `EstimateSmartFee` – Calls *BlockChain.EstimateSmartFee* for few numbers of blocks and checks if returned fee is
    non-negative.
 * `EstimateFee` – Calls *BlockChain.EstimateFee*; implementation is same as *EstimateSmartFee*.
@@ -99,4 +169,6 @@ fixture file. So data in fixture file must be related together.
    block.
 * `GetBestBlockHeight` – Calls *BlockChain.GetBestBlockHeight* and verifies that returned height matches the really
    last block.
+* `GetTipBlockHeader` – Calls *BlockChain.GetBlockHash* for the best height and checks *BlockChain.GetBlockHeader*
+   returns that block. Needs no fixture data; catches block header changes from new forks that historical fixtures miss.
 * `MempoolSync` – Synchronize *BlockChain*'s mempool and verify if sync was successful.

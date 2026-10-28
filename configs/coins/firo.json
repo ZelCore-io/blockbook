@@ -13,6 +13,7 @@
   },
   "ipc": {
     "rpc_url_template": "http://127.0.0.1:{{.Ports.BackendRPC}}",
+    "rpc_url_ws_template": "ws://127.0.0.1:{{.Ports.BackendRPC}}",
     "rpc_user": "rpc",
     "rpc_pass": "rpc",
     "rpc_timeout": 25,
@@ -22,10 +23,10 @@
     "package_name": "backend-firo",
     "package_revision": "satoshilabs-1",
     "system_user": "firo",
-    "version": "0.14.14.0",
-    "binary_url": "https://github.com/firoorg/firo/releases/download/v0.14.14.0/firo-0.14.14.0-linux64.tar.gz",
+    "version": "0.14.18.0",
+    "binary_url": "https://github.com/firoorg/firo/releases/download/v0.14.18.0/firo-0.14.18.0-linux64.tar.gz",
     "verification_type": "sha256",
-    "verification_source": "0f8c914286031830d8c9eb1ab86b3e21f349917aea7bc2ab12229ab4c638cbe8",
+    "verification_source": "b4b57108b66ee3ff9ec1b03dd7c24fe79acecf1110fe132f347758ae99555276",
     "extract_command": "tar -C backend --strip 1 -xf",
     "exclude_files": [
       "bin/firo-qt",

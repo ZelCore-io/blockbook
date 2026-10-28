@@ -1,0 +1,287 @@
+//go:build unittest
+
+package common
+
+import (
+	"testing"
+	"time"
+)
+
+func TestWsIPBlocklistBlockAndExpire(t *testing.T) {
+	is := &InternalState{}
+	now := time.Unix(1_700_000_000, 0)
+	key := "192.0.2.10"
+
+	if blocked, _ := is.IsWsIPBlocked(key, now); blocked {
+		t.Fatal("key should not be blocked before any Block call")
+	}
+
+	is.BlockWsIP(key, now.Add(time.Hour), now)
+	if blocked, _ := is.IsWsIPBlocked(key, now); !blocked {
+		t.Fatal("key should be blocked immediately after Block")
+	}
+	if blocked, _ := is.IsWsIPBlocked(key, now.Add(59*time.Minute)); !blocked {
+		t.Fatal("key should still be blocked before expiry")
+	}
+	if blocked, _ := is.IsWsIPBlocked(key, now.Add(time.Hour+time.Second)); blocked {
+		t.Fatal("key should not be blocked after expiry")
+	}
+}
+
+func TestWsIPBlocklistExtendAndBreaches(t *testing.T) {
+	is := &InternalState{}
+	now := time.Unix(1_700_000_000, 0)
+	key := "192.0.2.10"
+
+	is.BlockWsIP(key, now.Add(time.Hour), now)
+	// Re-block before expiry with a later deadline: extends Until, bumps breaches,
+	// keeps the original BlockedAt.
+	is.BlockWsIP(key, now.Add(2*time.Hour), now.Add(time.Minute))
+
+	snap := is.WsBlockedIPsSnapshot(now.Add(time.Minute))
+	if len(snap) != 1 {
+		t.Fatalf("snapshot len = %d, want 1", len(snap))
+	}
+	e := snap[0]
+	if e.Breaches != 2 {
+		t.Fatalf("breaches = %d, want 2", e.Breaches)
+	}
+	if !e.Until.Equal(now.Add(2 * time.Hour)) {
+		t.Fatalf("until = %v, want %v", e.Until, now.Add(2*time.Hour))
+	}
+	if !e.BlockedAt.Equal(now) {
+		t.Fatalf("blockedAt = %v, want %v (original)", e.BlockedAt, now)
+	}
+}
+
+func TestWsIPBlocklistReblockAfterExpiryResetsWindow(t *testing.T) {
+	is := &InternalState{}
+	now := time.Unix(1_700_000_000, 0)
+	key := "192.0.2.10"
+
+	is.BlockWsIP(key, now.Add(time.Hour), now)
+	later := now.Add(2 * time.Hour) // after the first block expired
+	is.BlockWsIP(key, later.Add(time.Hour), later)
+
+	snap := is.WsBlockedIPsSnapshot(later)
+	if len(snap) != 1 {
+		t.Fatalf("snapshot len = %d, want 1", len(snap))
+	}
+	if !snap[0].BlockedAt.Equal(later) {
+		t.Fatalf("blockedAt = %v, want %v (window reset on re-block after expiry)", snap[0].BlockedAt, later)
+	}
+	if snap[0].Breaches != 1 {
+		t.Fatalf("breaches = %d, want 1 after window reset", snap[0].Breaches)
+	}
+}
+
+func TestWsIPBlocklistRejectedCount(t *testing.T) {
+	is := &InternalState{}
+	now := time.Unix(1_700_000_000, 0)
+	key := "192.0.2.10"
+
+	is.BlockWsIP(key, now.Add(time.Hour), now)
+	for i := 0; i < 3; i++ {
+		blocked, rejected := is.IsWsIPBlocked(key, now)
+		if !blocked || rejected != i+1 {
+			t.Fatalf("attempt %d: blocked=%v rejected=%d, want true, %d", i, blocked, rejected, i+1)
+		}
+	}
+	// A non-blocking probe of an unblocked key must not record a rejection.
+	is.IsWsIPBlocked("198.51.100.1", now)
+
+	snap := is.WsBlockedIPsSnapshot(now)
+	if len(snap) != 1 || snap[0].Rejected != 3 {
+		t.Fatalf("rejected = %v, want 3", snap)
+	}
+}
+
+func TestWsIPBlocklistSweep(t *testing.T) {
+	is := &InternalState{}
+	now := time.Unix(1_700_000_000, 0)
+
+	is.BlockWsIP("192.0.2.1", now.Add(time.Hour), now)
+	is.BlockWsIP("192.0.2.2", now.Add(2*time.Hour), now)
+
+	if got := is.SweepWsBlockedIPs(now); got != 2 {
+		t.Fatalf("sweep before expiry returned %d, want 2", got)
+	}
+	// After the first entry expires, sweep drops it and returns the live count.
+	if got := is.SweepWsBlockedIPs(now.Add(time.Hour + time.Minute)); got != 1 {
+		t.Fatalf("sweep after one expiry returned %d, want 1", got)
+	}
+	snap := is.WsBlockedIPsSnapshot(now.Add(time.Hour + time.Minute))
+	if len(snap) != 1 || snap[0].Key != "192.0.2.2" {
+		t.Fatalf("snapshot after sweep = %v, want only 192.0.2.2", snap)
+	}
+}
+
+func TestWsIPBlocklistSnapshotOrderAndReset(t *testing.T) {
+	is := &InternalState{}
+	now := time.Unix(1_700_000_000, 0)
+
+	is.BlockWsIP("192.0.2.1", now.Add(time.Hour), now)
+	is.BlockWsIP("192.0.2.2", now.Add(3*time.Hour), now)
+	is.BlockWsIP("192.0.2.3", now.Add(2*time.Hour), now)
+
+	snap := is.WsBlockedIPsSnapshot(now)
+	if len(snap) != 3 {
+		t.Fatalf("snapshot len = %d, want 3", len(snap))
+	}
+	// Sorted by Until descending.
+	if snap[0].Key != "192.0.2.2" || snap[1].Key != "192.0.2.3" || snap[2].Key != "192.0.2.1" {
+		t.Fatalf("snapshot order = %v, want [.2 .3 .1] by expiry desc", []string{snap[0].Key, snap[1].Key, snap[2].Key})
+	}
+
+	is.ResetWsBlockedIPs()
+	if got := len(is.WsBlockedIPsSnapshot(now)); got != 0 {
+		t.Fatalf("after reset snapshot len = %d, want 0", got)
+	}
+}
+
+// TestSetBackendInfoKeepsLastGoodOnError covers the guard that stops a failed
+// GetChainInfo from zeroing the backend height: publishing 0 makes the "backend stuck"
+// alerts read "no blocks produced", and the recovery jump back to the real height then
+// blinds their delta() window and resets the tip-advance timestamp.
+func TestSetBackendInfoKeepsLastGoodOnError(t *testing.T) {
+	is := &InternalState{}
+	is.SetBackendInfo(&BackendInfo{Blocks: 100, Version: "v1", Subversion: "sub"})
+	advance := is.GetBackendTipLastAdvance()
+
+	is.SetBackendInfo(&BackendInfo{BackendError: "GetChainInfo: connection refused"})
+
+	bi := is.GetBackendInfo()
+	if bi.Blocks != 100 {
+		t.Errorf("Blocks = %d, want the last known good 100", bi.Blocks)
+	}
+	if bi.Version != "v1" || bi.Subversion != "sub" {
+		t.Errorf("version fields were blanked: %+v", bi)
+	}
+	if bi.BackendError == "" {
+		t.Error("BackendError was not recorded")
+	}
+	if got := is.GetBackendTipLastAdvance(); !got.Equal(advance) {
+		t.Errorf("tip advance moved on error: %v -> %v", advance, got)
+	}
+
+	// Recovery must not read as an advance just because the error left the height alone.
+	is.SetBackendInfo(&BackendInfo{Blocks: 100, Version: "v1"})
+	if got := is.GetBackendTipLastAdvance(); !got.Equal(advance) {
+		t.Errorf("tip advance moved on recovery without a new block: %v -> %v", advance, got)
+	}
+	if is.GetBackendInfo().BackendError != "" {
+		t.Error("BackendError was not cleared on recovery")
+	}
+}
+
+// TestSetBackendInfoStoresGenesisHeight guards the narrowness of the error path: a
+// backend that legitimately answers with height 0 must still be stored.
+func TestSetBackendInfoStoresGenesisHeight(t *testing.T) {
+	is := &InternalState{}
+	is.SetBackendInfo(&BackendInfo{Blocks: 0, Version: "genesis"})
+	if got := is.GetBackendInfo().Version; got != "genesis" {
+		t.Errorf("Version = %q, want %q", got, "genesis")
+	}
+}
+
+// TestBackendTipAdvanceSurvivesRestart covers the persisted tip-advance reference.
+// BackendInfo is not persisted, so comparing against it made every process start look
+// like a fresh advance - the reason blockbook_tip_age_seconds stayed pinned near zero
+// through a crash loop instead of climbing.
+func TestBackendTipAdvanceSurvivesRestart(t *testing.T) {
+	is := &InternalState{}
+	is.SetBackendInfo(&BackendInfo{Blocks: 500})
+	advance := is.GetBackendTipLastAdvance()
+
+	packed, err := is.Pack()
+	if err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	restored, err := UnpackInternalState(packed)
+	if err != nil {
+		t.Fatalf("UnpackInternalState: %v", err)
+	}
+	if !restored.BackendTipLastAdvance.Equal(advance) {
+		t.Errorf("advance not persisted: %v -> %v", advance, restored.BackendTipLastAdvance)
+	}
+	if restored.BackendTipHeight != 500 {
+		t.Errorf("BackendTipHeight = %d, want 500", restored.BackendTipHeight)
+	}
+
+	// The backend is still at the same height after the restart: this is a stall, so the
+	// age must keep climbing from the original timestamp rather than restart at zero.
+	restored.SetBackendInfo(&BackendInfo{Blocks: 500})
+	if got := restored.GetBackendTipLastAdvance(); !got.Equal(advance) {
+		t.Errorf("restart reset the tip advance: %v -> %v", advance, got)
+	}
+}
+
+// TestBackendTipAdvanceOnRollback checks that a lower height still counts as the backend
+// being alive, so a reorg or a replaced backend cannot wedge the age at "climbing".
+func TestBackendTipAdvanceOnRollback(t *testing.T) {
+	is := &InternalState{}
+	is.SetBackendInfo(&BackendInfo{Blocks: 500})
+	advance := is.GetBackendTipLastAdvance()
+
+	is.SetBackendInfo(&BackendInfo{Blocks: 480})
+	got := is.GetBackendTipLastAdvance()
+	if !got.After(advance) {
+		t.Errorf("rollback did not refresh the tip advance: %v -> %v", advance, got)
+	}
+	if is.BackendTipHeight != 480 {
+		t.Errorf("BackendTipHeight = %d, want 480", is.BackendTipHeight)
+	}
+}
+
+// TestComputeAvgBlockPeriodSubSecond covers the reason the fractional average exists: the
+// integer form truncates, so a sub-second chain reports 0 - and both "backend stuck" rules
+// are gated on blockbook_avg_block_period > 0, which silently excluded Arbitrum (~0.24s),
+// BNB Smart Chain (~0.45s) and Robinhood (~0.10s) from either of them.
+func TestComputeAvgBlockPeriodSubSecond(t *testing.T) {
+	// 102 block times spaced 250ms apart, rounded into the uint32 seconds they are stored
+	// as: 101 intervals over ~25s.
+	is := &InternalState{}
+	times := make([]uint32, avgBlockPeriodSample+2)
+	for i := range times {
+		times[i] = uint32(i) / 4
+	}
+	is.SetBlockTimes(times)
+
+	if got := is.GetAvgBlockPeriod(); got != 0 {
+		t.Errorf("GetAvgBlockPeriod() = %d, want 0 (integer form truncates)", got)
+	}
+	got := is.GetAvgBlockPeriodSeconds()
+	if got < 0.2 || got > 0.3 {
+		t.Errorf("GetAvgBlockPeriodSeconds() = %v, want ~0.25", got)
+	}
+}
+
+// TestComputeAvgBlockPeriodNotEnoughBlocks pins the "not yet computed" case: early in an
+// initial build or reindex there are too few block times, and the metric reads 0.
+func TestComputeAvgBlockPeriodNotEnoughBlocks(t *testing.T) {
+	is := &InternalState{}
+	is.SetBlockTimes(make([]uint32, avgBlockPeriodSample))
+	if got := is.GetAvgBlockPeriodSeconds(); got != 0 {
+		t.Errorf("GetAvgBlockPeriodSeconds() = %v, want 0", got)
+	}
+}
+
+// TestComputeAvgBlockPeriodDividesByRealIntervalCount checks the float form divides the
+// span by the number of intervals it actually covers. The integer form divides a span of
+// avgBlockPeriodSample+1 intervals by avgBlockPeriodSample and so runs ~1% high; it is
+// left alone because it feeds the sync ETA.
+func TestComputeAvgBlockPeriodDividesByRealIntervalCount(t *testing.T) {
+	is := &InternalState{}
+	times := make([]uint32, avgBlockPeriodSample+2)
+	for i := range times {
+		times[i] = uint32(i) * 3
+	}
+	is.SetBlockTimes(times)
+
+	if got := is.GetAvgBlockPeriodSeconds(); got != 3 {
+		t.Errorf("GetAvgBlockPeriodSeconds() = %v, want exactly 3", got)
+	}
+	if got := is.GetAvgBlockPeriod(); got != 3 {
+		t.Errorf("GetAvgBlockPeriod() = %d, want 3 (3.03 truncated)", got)
+	}
+}

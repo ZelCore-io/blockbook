@@ -1,0 +1,97 @@
+{{define "specific"}}{{$tx := .Tx}}{{$data := .}}{{$coinbase := false}}{{range $vin := $tx.Vin}}{{if not $vin.Addresses}}{{if not $vin.Hex}}{{$coinbase = true}}{{end}}{{end}}{{end}}
+<section class="hub-card hub-summary">
+    <div class="hub-summary-main">
+        <div class="hub-title-row">
+            <h1>Transaction</h1>
+            {{if $tx.Confirmations}}<span class="hub-badge hub-badge-ok">Confirmed · {{formatUint32 $tx.Confirmations}} confirmation{{if ne $tx.Confirmations 1}}s{{end}}</span>{{else}}<span class="hub-badge hub-badge-warn">Unconfirmed</span>{{end}}
+            {{if $coinbase}}<span class="hub-badge">Coinbase</span>{{end}}
+        </div>
+        <div class="hub-id-row">
+            <span class="hub-mono hub-summary-id">{{$tx.Txid}}</span>
+            <button type="button" class="hub-copy" data-copy="{{$tx.Txid}}" aria-label="Copy transaction ID"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>
+        </div>
+    </div>
+</section>
+<dl class="hub-card hub-stat-grid">
+    <div>
+        <dt>Amount</dt>
+        <dd>{{amountSpan $tx.ValueOutSat $data "copyable"}}</dd>
+    </div>
+    <div>
+        <dt>Fee</dt>
+        <dd>{{if $tx.FeesSat}}{{amountSpan $tx.FeesSat $data "copyable"}}{{else}}-{{end}}</dd>
+        {{if $tx.FeesSat}}{{$fpb := feePerByte $tx}}{{if $fpb}}<dd class="hub-stat-note">{{$fpb}}</dd>{{end}}{{end}}
+    </div>
+    <div>
+        <dt>Block</dt>
+        {{if $tx.Confirmations}}
+        <dd><a href="/block/{{$tx.Blockheight}}">{{formatInt $tx.Blockheight}}</a></dd>
+        <dd class="hub-stat-note">{{unixTimeSpan $tx.Blocktime}}</dd>
+        {{else}}
+        <dd>Unconfirmed</dd>
+        {{if $tx.ConfirmationETABlocks}}<dd class="hub-stat-note"><span tt="Estimated first potential confirmation of this transaction.">in approx. {{relativeTime $tx.ConfirmationETASeconds}} ({{$tx.ConfirmationETABlocks}} blocks)</span></dd>{{end}}
+        {{end}}
+    </div>
+    <div>
+        <dt>Size</dt>
+        <dd>{{if $tx.Size}}<span class="hub-stat-num">{{formatInt $tx.Size}} B</span>{{else}}-{{end}}</dd>
+        {{if $tx.VSize}}<dd class="hub-stat-note">vsize {{formatInt $tx.VSize}}</dd>{{end}}
+    </div>
+</dl>
+<section class="hub-card">
+    <h2>Details</h2>
+    <div class="hub-scroll"><table class="table data-table info-table">
+        <tbody>
+            {{if $tx.Confirmations}}
+            <tr>
+                <td>Mined Time</td>
+                <td>{{unixTimeSpan $tx.Blocktime}}</td>
+            </tr>
+            {{end}}
+            <tr>
+                <td>In Block</td>
+                <td class="hub-mono">{{if $tx.Confirmations}}{{$tx.Blockhash}}{{else}}<span class="badge bg-danger">Unconfirmed</span>{{end}}</td>
+            </tr>
+            <tr>
+                <td>Total Input</td>
+                <td>{{amountSpan $tx.ValueInSat $data "copyable"}}</td>
+            </tr>
+            <tr>
+                <td>Total Output</td>
+                <td>{{amountSpan $tx.ValueOutSat $data "copyable"}}</td>
+            </tr>
+            {{if not $tx.Confirmations}}
+            <tr>
+                <td><span tt="Replace by fee">RBF</span></td>
+                <td>
+                    {{if $tx.Rbf}}
+                    <span tt="Replace-by-Fee transaction, could be overridden by a new transaction">ON</span>
+                    {{else}}
+                    <span tt="Final transaction that can not be replaced unless it is dropped from the mempool.">OFF️</span>
+                    {{end}}
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table></div>
+</section>
+<section class="hub-card">
+    <h2>Inputs and outputs</h2>
+    {{template "txdetail" .}}
+</section>
+<details class="hub-card hub-raw">
+    <summary>Raw transaction (JSON / hex)</summary>
+    <div class="hub-raw-body">
+        <button type="button" class="btn btn-paging" id="raw-button">Raw Transaction</button>
+        <button type="button" class="btn btn-paging" id="raw-hex-button">Raw Transaction Hex</button>
+        <div class="json copyable">
+            <pre id="raw" style="text-wrap: auto;"></pre>
+        </div>
+    </div>
+    <script>
+        const rawData = {{ $tx.CoinSpecificData }};
+        const txId = {{ jsStr $tx.Txid }};
+        handleTxPage(rawData, txId);
+    </script>
+</details>
+{{end}}

@@ -6,94 +6,170 @@
     <meta name="viewport" content="width=device-width,initial-scale=1.0,shrink-to-fit=no">
     <link rel="stylesheet" href="/static/css/bootstrap.5.2.2.min.css">
     <link rel="stylesheet" href="/static/css/main{{.Minified}}.css">
-    <script>var hasSecondary={{if .SecondaryCoin}}true{{else}}false{{end}};</script>
+    <link rel="stylesheet" href="/static/css/hub{{.Minified}}.css">
+    <script>var hasSecondary={{if .SecondaryCoin}}true;var secondaryCoinDefault="{{.SecondaryCoin}}={{.UseSecondaryCoin}}"{{else}}false{{end}};</script>
     <script src="/static/js/bootstrap.bundle.5.2.2.min.js"></script>
     <script src="/static/js/main{{.Minified}}.js"></script>
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="description" content="Trezor {{.CoinLabel}} Explorer">
-    <title>Trezor {{.CoinLabel}} Explorer</title>
+    {{- /* The per-page head fields are built in Go by setPageHead (server/page_head.go). */}}
+    <meta name="description" content="{{if .PageDescription}}{{.PageDescription}}{{else}}{{.CoinLabel}} Explorer{{end}}">
+    {{if .Robots}}<meta name="robots" content="{{.Robots}}">{{end}}
+    <title>{{if .PageTitle}}{{.PageTitle}}{{else}}{{.CoinLabel}} Explorer{{end}}</title>
+    {{- with .Canonical}}
+    <link rel="canonical" href="{{.}}">{{end}}
+    {{- if .PageTitle}}
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="{{.CoinLabel}} Explorer">
+    <meta property="og:title" content="{{.PageTitle}}">
+    <meta property="og:description" content="{{.PageDescription}}">
+    {{- with .Canonical}}
+    <meta property="og:url" content="{{.}}">{{end}}
+    {{- with .OGImage}}
+    <meta property="og:image" content="{{.}}">{{end}}
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="{{.PageTitle}}">
+    <meta name="twitter:description" content="{{.PageDescription}}">
+    {{- with .OGImage}}
+    <meta name="twitter:image" content="{{.}}">{{end}}
+    {{- end}}
+    {{- with .JSONLD}}
+    <script type="application/ld+json">{{.}}</script>{{end}}
+    {{- /* No favicon file ships with the fork; the icon comes from the feed's Zelcore product. */}}
+    {{- with .ExplorerContent.ZelcoreProduct}}{{with .IconURL}}
+    <link rel="icon" href="{{.}}">{{end}}{{end}}
 </head>
 
-<body>
-    <header id="header">
-        <nav class="navbar navbar-expand-lg">
-            <div class="container">
-                <a class="navbar-brand" href="/" title="Home">
-                    <span class="trezor-logo"></span>
-                    <span style="padding-left: 140px;">{{.CoinLabel}} Explorer</span>
-                </a>
-                {{if .InternalExplorer}}
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent" aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
-                    <span class="navbar-toggler-icon"></span>
-                </button>
-                <div class="collapse navbar-collapse" id="navbarSupportedContent">
-                    <ul class="navbar-nav m-md-auto">
-                        <li class="nav-item pe-xl-4">
-                            <a href="/blocks" class="nav-link">Blocks</a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="/" class="nav-link">Status</a>
-                        </li>
-                    </ul>
-                    <span class="navbar-form">
-                        <form class="d-flex" id="search" action="/search" method="get">
-                            <input name="q" type="text" class="form-control form-control-lg" placeholder="Search for block, transaction, address or xpub" focus="true">
-                            <button class="btn" type="submit">
-                                <span class="search-icon"></span>
-                            </button>
-                        </form>
-                    </span>
-                    {{if .SecondaryCoin}}
-                    <div class="bb-group ms-lg-2 mt-2 mt-lg-0" role="group" aria-label="Currency switch">
+<body class="hub-page">
+    {{- /* .HomePage is set by the index handler: the home band carries the large search and the
+    "hubHomeFigures" block that index.html defines; every other page gets the compact band and the
+    "hubPage" layout with the promotions aside. */ -}}
+    <header class="hub-band{{if .HomePage}} hub-band-home{{end}}" style="--hub-band: {{.ExplorerContent.ThemeColor}}">
+        <div class="hub-nav">
+            <a class="hub-brand" href="/" title="Home">
+                {{- with .ExplorerContent.ThemeIcon}}<span class="hub-mark"><img src="{{.}}" alt="{{$.CoinLabel}}" width="36" height="36" referrerpolicy="no-referrer"></span>{{else}}<span class="hub-mark" aria-hidden="true">{{.CoinShortcut}}</span>{{end -}}
+                <span>{{.CoinLabel}} Explorer</span>
+            </a>
+            {{- /* On phones only the Flux symbol shows (hub.css), so the link carries its name in aria-label. */}}
+            <a class="hub-powered" href="https://runonflux.com" target="_blank" rel="noopener noreferrer" aria-label="Powered by Flux">
+                {{- with .ExplorerContent.FluxSymbol}}<span class="hub-powered-mark"><img src="{{.}}" alt="" width="22" height="22" referrerpolicy="no-referrer"></span>{{end}}<span class="hub-powered-text">Powered by Flux</span></a>
+            <nav class="hub-nav-links" aria-label="Main">
+                {{- if .InternalExplorer}}
+                <a href="/blocks">Blocks</a>
+                <a href="/mempool">Mempool</a>
+                <a href="/sendtx">Send transaction</a>
+                {{- end}}
+                <a href="/api-docs">API</a>
+            </nav>
+            {{- if and .InternalExplorer (not .HomePage)}}
+            <form class="hub-search" id="search" role="search" action="/search" method="get">
+                <label class="visually-hidden" for="search-q">Search</label>
+                <span class="hub-search-field"><input id="search-q" name="q" type="text" placeholder="Search for block, transaction, address or xpub" focus="true"><span class="hub-search-hint" aria-hidden="true">Block, tx, address or xpub</span></span>
+                <button type="submit">Search</button>
+            </form>
+            {{- end}}
+            {{- if and .InternalExplorer .SecondaryCoin}}
+            <div class="hub-nav-end">
+                {{- /* main.js binds the currency switch with "#header .bb-group>.btn-check"; display: contents
+                keeps main.css's fixed #header box rules from applying to this wrapper. */}}
+                <div id="header" style="display: contents">
+                    <div class="bb-group" role="group" aria-label="Currency switch">
                         <input type="radio" class="btn-check" name="btnradio" id="primary-coin" autocomplete="off"{{if not .UseSecondaryCoin}} checked{{end}}>
                         <label class="btn" for="primary-coin">{{.CoinShortcut}}</label>
                         <input type="radio" class="btn-check" name="btnradio" id="secondary-coin" autocomplete="off"{{if .UseSecondaryCoin}} checked{{end}}>
                         <label class="btn" for="secondary-coin">{{.SecondaryCoin}}</label>
-                        <button type="button" class="btn dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false"></button>
+                        <button type="button" class="btn dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Other currencies"></button>
                         <div class="dropdown-menu row">
-                            {{range $c := .SecondaryCurrencies}}
-                            <div class="col-3"><a href="?secondary={{$c}}&use_secondary=true">{{$c}}</a></div>
-                            {{end}}
+                            {{- range $c := .SecondaryCurrencies}}
+                            <div class="col-4 col-sm-3"><a href="?secondary={{$c}}&use_secondary=true"{{if eq $c $.SecondaryCoin}} class="active" aria-current="true"{{end}}>{{$c}}</a></div>
+                            {{- end}}
                         </div>
                     </div>
-                    {{end}}
                 </div>
-                {{end}}
             </div>
-        </nav>
-    </header>
-    <main id="wrap">
-        <div class="container">
-            {{- template "specific" . -}}
+            {{- end}}
         </div>
+        {{- if .HomePage}}
+        <div class="hub-hero">
+            <div class="hub-hero-main">
+                <h1>Explore {{.CoinLabel}}</h1>
+                {{- if .InternalExplorer}}
+                <form class="hub-search" id="search" role="search" action="/search" method="get">
+                    <label class="visually-hidden" for="search-q">Search</label>
+                    <span class="hub-search-field"><input id="search-q" name="q" type="text" placeholder="Search for block, transaction, address or xpub" focus="true"><span class="hub-search-hint" aria-hidden="true">Block, tx, address or xpub</span></span>
+                    <button type="submit">Search</button>
+                </form>
+                {{- end}}
+            </div>
+            {{- block "hubHomeFigures" .}}{{end}}
+        </div>
+        {{- end}}
+    </header>
+    <main>
+        {{- if .HomePage}}{{template "specific" .}}{{else}}{{template "hubPage" .}}{{end -}}
     </main>
-    <footer id="footer">
-        <div class="container">
-            <nav class="navbar navbar-dark">
-                <span class="navbar-nav">
-                    <a class="nav-link" href="https://satoshilabs.com/" target="_blank" rel="noopener noreferrer">Created by SatoshiLabs</a>
-                </span>
-                <span class="navbar-nav ml-md-auto">
-                    <a class="nav-link" href="{{- .TOSLink -}}" target="_blank" rel="noopener noreferrer">Terms of Use</a>
-                </span>
-                <span class="navbar-nav ml-md-auto d-md-flex d-none">
-                    <a class="nav-link" href="https://trezor.io/" target="_blank" rel="noopener noreferrer">Trezor</a>
-                </span>
-                <span class="navbar-nav ml-md-auto d-md-flex d-none">
-                    <a class="nav-link" href="https://trezor.io/trezor-suite" target="_blank" rel="noopener noreferrer">Suite</a>
-                </span>
-                <span class="navbar-nav ml-md-auto d-md-flex d-none">
-                    <a class="nav-link" href="https://trezor.io/support" target="_blank" rel="noopener noreferrer">Support</a>
-                </span>
-                <span class="navbar-nav ml-md-auto">
-                    <a class="nav-link" href="/sendtx">Send Transaction</a>
-                </span>
-                <span class="navbar-nav ml-md-auto d-lg-flex d-none">
-                    <a class="nav-link" href="https://trezor.io/compare" target="_blank" rel="noopener noreferrer">Don't have a Trezor? Get one!</a>
-                </span>
+    <footer class="hub-footer">
+        {{- with .ExplorerContent.MoreExplorers}}
+        <div class="hub-footer-explorers">
+            <nav class="hub-footer-explorers-inner" aria-labelledby="hub-footer-explorers-title">
+                <span class="hub-footer-explorers-title" id="hub-footer-explorers-title">More explorers</span>
+                {{- range .}}
+                <a href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{.Name}}</a>
+                {{- end}}
             </nav>
+        </div>
+        {{- end}}
+        <div class="hub-footer-inner">
+            <a class="hub-footer-brand" href="https://zelcore.io" target="_blank" rel="noopener noreferrer">Zelcore</a>
+            {{- range .ExplorerContent.Products}}{{if and .Name (ne .ID "zelcore")}}
+            <a href="{{.TargetURL}}" target="_blank" rel="noopener noreferrer">{{.Name}}</a>
+            {{- end}}{{end}}
+            <a href="https://runonflux.com" target="_blank" rel="noopener noreferrer">
+                {{- with .ExplorerContent.FluxSymbol}}<img src="{{.}}" alt="Flux" width="24" height="24" loading="lazy" referrerpolicy="no-referrer">{{end}}Powered by Flux</a>
+            <a href="https://docs.zelcore.io" target="_blank" rel="noopener noreferrer">Documentation</a>
+            <a href="{{.TOSLink}}" target="_blank" rel="noopener noreferrer">Terms of use</a>
+            <a href="/status">Status</a>
+            <span class="hub-footer-legal">Based on Blockbook by SatoshiLabs · AGPL-3.0 · <a href="{{.SourceURL}}" title="{{.SourceLabel}}" target="_blank" rel="noopener noreferrer">Source code</a></span>
         </div>
     </footer>
 </body>
 
 </html>
+{{- define "hubPage"}}
+<div class="hub-layout">
+    <div class="hub-main">{{template "specific" .}}</div>
+    {{- template "hubAside" .}}
+</div>
+{{- end}}
+{{- define "hubAside"}}{{$campaign := .ExplorerContent.InnerCampaign}}{{$zelcore := .ExplorerContent.ZelcoreProduct}}
+{{- if or $campaign $zelcore}}
+<aside class="hub-aside" aria-label="Promotions">
+    {{- with $campaign}}
+    <a class="hub-campaign" href="{{.TargetURL}}" target="_blank" rel="sponsored noopener noreferrer">
+        {{- if .ImageURL}}<img src="{{.ImageURL}}" alt="" width="320" height="200" loading="lazy" referrerpolicy="no-referrer">{{end}}
+        <div class="hub-campaign-body">
+            <div class="hub-label">Sponsored</div>
+            <div class="hub-campaign-title">{{.Title}}</div>
+            {{- if .Description}}
+            <div class="hub-campaign-text">{{.Description}}</div>
+            {{- end}}
+        </div>
+    </a>
+    {{- end}}
+    {{- with $zelcore}}
+    <a class="hub-zelcore-prompt{{if not .CTAFilled}} hub-product-outline{{end}}" href="{{.TargetURL}}" target="_blank" rel="noopener noreferrer" style="--tile-accent: {{.Accent}}">
+        <span class="hub-product-icon" aria-hidden="true">{{if .IconURL}}<img src="{{.IconURL}}" alt="" width="40" height="40" loading="lazy" referrerpolicy="no-referrer">{{else}}Z{{end}}</span>
+        <span>
+            <span class="hub-zelcore-prompt-title">Watch in Zelcore</span>
+            {{- if .Tagline}}
+            <span class="hub-zelcore-prompt-text">{{.Tagline}}</span>
+            {{- end}}
+        </span>
+    </a>
+    {{- end}}
+</aside>
+{{- end}}
+{{- end}}
+
+{{- /* e: per-row copy buttons for the (truncated) addresses and txids inside transaction lists. They are shown on touch screens only (hub.css); the one-argument templates take the text to copy. */ -}}
+{{- define "hubIOCopy"}}<button type="button" class="hub-copy hub-io-copy" data-copy="{{.}}" aria-label="Copy address"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>{{end -}}
+{{- define "hubTxCopy"}}<button type="button" class="hub-copy hub-io-copy" data-copy="{{.}}" aria-label="Copy transaction ID"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>{{end -}}

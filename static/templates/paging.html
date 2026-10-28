@@ -1,16 +1,16 @@
-{{define "paging"}}{{$data := .}}{{if $data.PrevPage}}
-<nav class="paging justify-content-end">
-    <a class="btn btn-paging" href="?page={{$data.PrevPage}}{{$data.PageParams}}">Previous</a>
+{{define "paging"}}{{$data := .}}{{if $data.PrevPage}}{{$last := 0}}{{range $p := $data.PagingRange}}{{$last = $p}}{{end}}
+<nav class="paging justify-content-end" aria-label="Pagination">
+    <a class="btn btn-paging hub-pg-step" href="?page={{$data.PrevPage}}{{$data.PageParams}}" aria-label="Previous page"><span class="hub-pg-text">Previous</span><span class="hub-pg-arrow" aria-hidden="true">&lsaquo;</span></a>
     {{if $data.PagingRange}}
     <div class="paging-group mx-2">
-    <div class="bb-group">
+    <div class="bb-group{{if gt $last 999}} hub-pg-wide{{end}}">
         {{range $p := $data.PagingRange}}
-            {{if $p}}<a class="btn{{if eq $data.Page $p}} active{{end}}" href="?page={{$p}}{{$data.PageParams}}">{{$p}}</a>
-            {{else}}<span>...</span>{{end}}
+            {{if $p}}<a class="btn{{if eq $data.Page $p}} active{{else if or (eq $p $data.PrevPage) (eq $p $data.NextPage)}} hub-pg-near{{else}} hub-pg-far{{end}}" href="?page={{$p}}{{$data.PageParams}}"{{if eq $data.Page $p}} aria-current="page"{{end}}>{{$p}}</a>
+            {{else}}<span class="hub-pg-gap">...</span>{{end}}
         {{end}}
     </div>
     </div>
     {{end}}
-    <a class="btn btn-paging" href="?page={{$data.NextPage}}{{$data.PageParams}}">Next</a>
+    <a class="btn btn-paging hub-pg-step" href="?page={{$data.NextPage}}{{$data.PageParams}}" aria-label="Next page"><span class="hub-pg-text">Next</span><span class="hub-pg-arrow" aria-hidden="true">&rsaquo;</span></a>
 </nav>
 {{end}}{{end}}

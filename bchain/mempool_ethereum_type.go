@@ -2,6 +2,8 @@ package bchain
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/golang/glog"
@@ -18,8 +20,7 @@ type MempoolEthereumType struct {
 }
 
 // NewMempoolEthereumType creates new mempool handler.
-func NewMempoolEthereumType(chain BlockChain, mempoolTxTimeoutHours int, queryBackendOnResync bool) *MempoolEthereumType {
-	mempoolTimeoutTime := time.Duration(mempoolTxTimeoutHours) * time.Hour
+func NewMempoolEthereumType(chain BlockChain, mempoolTimeoutTime time.Duration, queryBackendOnResync bool) *MempoolEthereumType {
 	return &MempoolEthereumType{
 		BaseMempool: BaseMempool{
 			chain:        chain,
@@ -85,32 +86,65 @@ func (m *MempoolEthereumType) createTxEntry(txid string, txTime uint32) (txEntry
 			addrIndexes, _ = appendAddress(addrIndexes, int32(i+1), t[i].To, parser)
 		}
 	}
-	if m.OnNewTxAddr != nil {
-		sent := make(map[string]struct{})
-		for _, si := range addrIndexes {
-			if _, found := sent[si.addrDesc]; !found {
-				m.OnNewTxAddr(tx, AddressDescriptor(si.addrDesc))
-				sent[si.addrDesc] = struct{}{}
-			}
-		}
-	}
 	if m.OnNewTx != nil {
 		m.OnNewTx(mtx)
 	}
-	return txEntry{addrIndexes: addrIndexes, time: txTime}, true
+	entry := txEntry{addrIndexes: addrIndexes, time: txTime}
+	if csd, ok := tx.CoinSpecificData.(EthereumSpecificData); ok && csd.Tx != nil && len(mtx.Vin) > 0 {
+		nonce, err := strconv.ParseUint(strings.TrimPrefix(csd.Tx.AccountNonce, "0x"), 16, 64)
+		if err != nil {
+			glog.Warning("cannot parse nonce ", csd.Tx.AccountNonce, " of tx ", txid, ": ", err)
+		} else {
+			entry.from = string(mtx.Vin[0].AddrDesc)
+			entry.nonce = nonce
+		}
+	}
+	return entry, true
+}
+
+// RemoveSenderTransactionsUpToNonce retires every entry sent by from with a nonce at or below the
+// mined one - no such transaction can ever mine, whatever the backend says about its pool presence.
+// Returns the removed txids.
+func (m *MempoolEthereumType) RemoveSenderTransactionsUpToNonce(from AddressDescriptor, nonce uint64) []string {
+	m.mux.Lock()
+	defer m.mux.Unlock()
+	// collect first - removeEntryFromMempool compacts the outpoint slice being scanned
+	var candidates []string
+	for _, o := range m.addrDescToTx[string(from)] {
+		if entry, ok := m.txEntries[o.Txid]; ok && entry.from != "" && entry.from == string(from) && entry.nonce <= nonce {
+			candidates = append(candidates, o.Txid)
+		}
+	}
+	var removed []string
+	for _, txid := range candidates {
+		// a self-transfer lists the txid twice under the same address
+		if entry, ok := m.txEntries[txid]; ok {
+			m.removeEntryFromMempool(txid, entry)
+			removed = append(removed, txid)
+		}
+	}
+	return removed
 }
 
 // Resync ethereum type removes timed out transactions and returns number of transactions in mempool.
 // Transactions are added/removed by AddTransactionToMempool/RemoveTransactionFromMempool methods
 func (m *MempoolEthereumType) Resync() (int, error) {
+	start := time.Now()
+	processedTxs := 0
+	backendRemoved := 0
 	if m.queryBackendOnResync {
+		backendSnapshotTime := uint32(time.Now().Unix())
 		txs, err := m.chain.GetMempoolTransactions()
 		if err != nil {
 			return 0, err
 		}
+		processedTxs = len(txs)
+		backendTxs := make(map[string]struct{}, len(txs))
 		for _, txid := range txs {
+			backendTxs[txid] = struct{}{}
 			m.AddTransactionToMempool(txid)
 		}
+		backendRemoved = m.removeTransactionsMissingFromBackend(backendTxs, backendSnapshotTime)
 	}
 	m.mux.Lock()
 	entries := len(m.txEntries)
@@ -128,11 +162,40 @@ func (m *MempoolEthereumType) Resync() (int, error) {
 		m.nextTimeoutRun = now.Add(mempoolTimeoutRunPeriod)
 	}
 	m.mux.Unlock()
-	glog.Info("Mempool: resync ", entries, " transactions in mempool")
+	duration := time.Since(start)
+	durationRounded := duration.Round(time.Millisecond)
+	if durationRounded == 0 {
+		durationRounded = duration
+	}
+	if m.queryBackendOnResync {
+		throughput := 0.0
+		if seconds := duration.Seconds(); seconds > 0 {
+			throughput = float64(processedTxs) / seconds
+		}
+		glog.Infof("Mempool: resync complete, mempool size %d txs, processed %d txs, removed %d stale txs, duration %s, throughput %.2f tx/s", entries, processedTxs, backendRemoved, durationRounded, throughput)
+	} else {
+		glog.Infof("Mempool: resync complete, mempool size %d txs, duration %s", entries, durationRounded)
+	}
 	return entries, nil
 }
 
-// AddTransactionToMempool adds transactions to mempool, returns true if tx added to mempool, false if not added (for example duplicate call)
+func (m *MempoolEthereumType) removeTransactionsMissingFromBackend(backendTxs map[string]struct{}, backendSnapshotTime uint32) int {
+	removed := 0
+	m.mux.Lock()
+	defer m.mux.Unlock()
+	for txid, entry := range m.txEntries {
+		if _, exists := backendTxs[txid]; exists || entry.time >= backendSnapshotTime {
+			continue
+		}
+		m.removeEntryFromMempool(txid, entry)
+		removed++
+	}
+	return removed
+}
+
+// AddTransactionToMempool adds transactions to mempool, returns true if tx added to mempool, false if not added (for example duplicate call).
+// An existing entry keeps its original time - the resync path re-adds every backend tx and the timeout
+// sweep depends on the first-seen stamp; use AddOrRefreshTransactionInMempool to age from the newest add.
 func (m *MempoolEthereumType) AddTransactionToMempool(txid string) bool {
 	m.mux.Lock()
 	_, exists := m.txEntries[txid]
@@ -153,6 +216,23 @@ func (m *MempoolEthereumType) AddTransactionToMempool(txid string) bool {
 		m.mux.Unlock()
 	}
 	return !exists
+}
+
+// AddOrRefreshTransactionInMempool is AddTransactionToMempool for a caller whose own store ages from
+// the newest submission (the alternative-provider cache): an existing entry is restamped in place, so
+// the timeout sweep cannot drop it while that store still serves the transaction as pending.
+func (m *MempoolEthereumType) AddOrRefreshTransactionInMempool(txid string) bool {
+	m.mux.Lock()
+	entry, exists := m.txEntries[txid]
+	if exists {
+		entry.time = uint32(time.Now().Unix())
+		m.txEntries[txid] = entry
+	}
+	m.mux.Unlock()
+	if exists {
+		return true
+	}
+	return m.AddTransactionToMempool(txid)
 }
 
 // RemoveTransactionFromMempool removes transaction from mempool

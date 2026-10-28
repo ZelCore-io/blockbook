@@ -1,0 +1,91 @@
+{
+  "checkedAt": "2026-10-23T09:23:09.635656+00:00",
+  "bases": [
+    "https://blockbook.grs-2.zelcore.io",
+    "https://blockbook.grs-1.zelcore.io"
+  ],
+  "status": [
+    {
+      "blockbook": {
+        "coin": "Groestlcoin",
+        "network": "GRS",
+        "host": "FX-GRS-02",
+        "version": "0.6.0",
+        "gitCommit": "c5ade771de895035480adf0f411e6250ff243183",
+        "buildTime": "2026-10-22T19:43:07+00:00",
+        "syncMode": true,
+        "initialSync": false,
+        "inSync": true,
+        "bestHeight": 6311058,
+        "lastBlockTime": "2026-10-23T09:22:07.868915683Z",
+        "inSyncMempool": true,
+        "lastMempoolTime": "2026-10-23T09:23:07.883568467Z",
+        "mempoolSize": 0,
+        "decimals": 8,
+        "dbSize": 7244202690,
+        "hasFiatRates": true,
+        "currentFiatRatesTime": "2026-10-23T09:16:13.482227432Z",
+        "about": "Zelcore Blockbook - blockchain indexer and explorer, forked from Blockbook by Trezor and SatoshiLabs. Zelcore: https://zelcore.io. Upstream: https://github.com/trezor/blockbook."
+      },
+      "backend": {
+        "chain": "main",
+        "blocks": 6311058,
+        "headers": 6311058,
+        "bestBlockHash": "000000000000db3e11305aa42cbb2e1e312c2fe697dad4f01630b6ae4b33acf5",
+        "difficulty": "43143.16182822702",
+        "sizeOnDisk": 4008301766,
+        "version": "310000",
+        "subversion": "/Groestlcoin:31.0.0/",
+        "protocolVersion": "70016"
+      }
+    },
+    {
+      "blockbook": {
+        "coin": "Groestlcoin",
+        "network": "GRS",
+        "host": "FX-GRS-01",
+        "version": "0.5.0",
+        "gitCommit": "9dfbb10c",
+        "buildTime": "2025-04-30T10:57:54+00:00",
+        "syncMode": true,
+        "initialSync": false,
+        "inSync": true,
+        "bestHeight": 6311058,
+        "lastBlockTime": "2026-10-23T09:22:07.868286509Z",
+        "inSyncMempool": true,
+        "lastMempoolTime": "2026-10-23T09:23:07.884553975Z",
+        "mempoolSize": 0,
+        "decimals": 8,
+        "dbSize": 6050763710,
+        "hasFiatRates": true,
+        "currentFiatRatesTime": "2026-10-23T09:02:01.157297904Z",
+        "about": "Blockbook - blockchain indexer for Trezor Suite https://trezor.io/trezor-suite. Do not use for any other purpose."
+      },
+      "backend": {
+        "chain": "main",
+        "blocks": 6311058,
+        "headers": 6311058,
+        "bestBlockHash": "000000000000db3e11305aa42cbb2e1e312c2fe697dad4f01630b6ae4b33acf5",
+        "difficulty": "43143.16182822702",
+        "sizeOnDisk": 4008302897,
+        "version": "310000",
+        "subversion": "/Groestlcoin:31.0.0/",
+        "protocolVersion": "70016"
+      }
+    }
+  ],
+  "sample": {
+    "height": 6311048,
+    "blockHash": "000000000001396e67574f3ca7ec37cc5cd1bb155bc81bb3a5869817d32bcaee",
+    "txid": "69a63ec4fe066bf620583594a19ae1984d183641ee53d39034f8cc7015613a19",
+    "address": "FpXpN9AA22fooDuZ5rDK65i9xqehgMZLg7",
+    "confirmedUtxoCount": 519
+  },
+  "checks": [
+    "synced status",
+    "same confirmed block",
+    "same transaction inputs/outputs and values",
+    "same address totals",
+    "same confirmed UTXOs"
+  ]
+}

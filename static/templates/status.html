@@ -1,0 +1,148 @@
+{{define "specific"}}{{$cs := .CoinShortcut}}{{$bb := .Info.Blockbook}}{{$be := .Info.Backend}}
+<section class="hub-card"><h1>Application status</h1></section>
+{{if $bb.InitialSync}}
+<div class="hub-card hub-muted" role="status">Application is now in initial synchronization and does not provide any data.</div>
+{{end}}
+{{if not $bb.SyncMode}}
+<div class="hub-card hub-muted" role="status">Synchronization with backend is disabled, the state of index is not up to date.</div>
+{{end}}
+<div class="hub-status-grid">
+    <section class="hub-card">
+        <h2>Blockbook</h2>
+        <table class="table data-table info-table">
+            <tbody>
+                <tr>
+                    <td>Coin</td>
+                    <td>{{$bb.Coin}}</td>
+                </tr>
+                <tr>
+                    <td>Host</td>
+                    <td>{{$bb.Host}}</td>
+                </tr>
+                <tr>
+                    <td>Version / Commit / Build</td>
+                    <td>{{$bb.Version}} / <a href="{{.SourceURL}}" target="_blank" rel="noopener noreferrer">{{$bb.GitCommit}}{{if eq .SourceLabel "Source (development build)"}} (development build){{end}}</a> / {{$bb.BuildTime}}</td>
+                </tr>
+                <tr>
+                    <td>Synchronized</td>
+                    <td><h6 class="badge {{if not $bb.InSync}}bg-danger{{else}}bg-success{{end}}">{{$bb.InSync}}</h6></td>
+                </tr>
+                <tr>
+                    <td>Last Block</td>
+                    <td>{{if .InternalExplorer}}<a href="/block/{{$bb.BestHeight}}">{{formatUint32 $bb.BestHeight}}</a>{{else}}{{formatUint32 $bb.BestHeight}}{{end}}</td>
+                </tr>
+                <tr>
+                    <td>Last Block Update</td>
+                    <td>{{timeSpan $bb.LastBlockTime}}</td>
+                </tr>
+                <tr>
+                    <td>Mempool in Sync</td>
+                    <td><h6 class="badge {{if not $bb.InSyncMempool}}bg-danger{{else}}bg-success{{end}}">{{$bb.InSyncMempool}}</h6></td>
+                </tr>
+                <tr>
+                    <td>Last Mempool Update</td>
+                    <td>{{timeSpan $bb.LastMempoolTime}}</td>
+                </tr>
+                <tr>
+                    <td>Transactions in Mempool</td>
+                    <td>{{if .InternalExplorer}}<a href="/mempool">{{formatInt $bb.MempoolSize}}</a>{{else}}{{formatInt $bb.MempoolSize}}{{end}}</td>
+                </tr>
+                {{if $bb.HasFiatRates}}
+                <tr>
+                    <td>Current Fiat rates</td>
+                    <td>{{timeSpan $bb.CurrentFiatRatesTime}}</td>
+                </tr>
+                {{if or $bb.HistoricalFiatRatesTime (and $bb.HasTokenFiatRates $bb.HistoricalTokenFiatRatesTime)}}
+                <tr>
+                    <td>Historical Fiat rates</td>
+                    <td>{{timeSpan $bb.HistoricalFiatRatesTime}}{{if and $bb.HasTokenFiatRates $bb.HistoricalTokenFiatRatesTime}}<br><span class="fw-normal">tokens</span> {{timeSpan $bb.HistoricalTokenFiatRatesTime}}{{end}}</td>
+                </tr>
+                {{end}}
+                {{end}}
+                <tr>
+                    <td>Size On Disk</td>
+                    <td>{{formatInt64 $bb.DbSize}}</td>
+                </tr>
+                {{if $bb.SupportedStakingPools}}
+                <tr>
+                    <td>Supported Staking Pools</td>
+                    <td>{{$bb.SupportedStakingPools}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </section>
+    <section class="hub-card">
+        <h2>Backend</h2>
+        <table class="table data-table info-table">
+            <tbody>
+                {{if $be.BackendError}}
+                <tr>
+                    <td>Backend Error</td>
+                    <td class="text-danger">{{$be.BackendError}}</td>
+                </tr>
+                {{end}}
+                <tr>
+                    <td>Chain</td>
+                    <td>{{$be.Chain}}</td>
+                </tr>
+                <tr>
+                    <td>Version</td>
+                    <td>{{$be.Version}}</td>
+                </tr>
+                {{if $be.Subversion}}
+                <tr>
+                    <td>Subversion</td>
+                    <td>{{$be.Subversion}}</td>
+                </tr>
+                {{end}}
+                {{if $be.ProtocolVersion}}
+                <tr>
+                    <td>Protocol Version</td>
+                    <td>{{$be.ProtocolVersion}}</td>
+                </tr>
+                {{end}}
+                {{if $be.ConsensusVersion}}
+                <tr>
+                    <td>Consensus Version</td>
+                    <td>{{$be.ConsensusVersion}}</td>
+                </tr>
+                {{end}}
+                <tr>
+                    <td>Last Block</td>
+                    <td>{{formatInt $be.Blocks}}</td>
+                </tr>
+                <tr>
+                    <td>Difficulty</td>
+                    <td>{{$be.Difficulty}}</td>
+                </tr>
+                {{if $be.Timeoffset}}
+                <tr>
+                    <td>Timeoffset</td>
+                    <td>{{$be.Timeoffset}}</td>
+                </tr>
+                {{end}}
+                {{if $be.SizeOnDisk}}
+                <tr>
+                    <td>Size On Disk</td>
+                    <td>{{formatInt64 $be.SizeOnDisk}}</td>
+                </tr>
+                {{end}}
+                {{if $be.Consensus}}
+                <tr>
+                    <td>Consensus</td>
+                    <td>{{toJSON $be.Consensus}}</td>
+                </tr>
+                {{end}}
+                {{if $be.Warnings}}
+                <tr>
+                    <td>Warnings</td>
+                    <td class="text-warning">{{$be.Warnings}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </section>
+</div>
+{{if and .SecondaryCoin .RatesSource}}<span class="text-muted">Exchange rates provided by {{.RatesSource}}.</span>{{end}}
+{{end}}

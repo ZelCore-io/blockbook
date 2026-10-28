@@ -7,7 +7,7 @@
 -   index of addresses and address balances of the connected block chain
 -   fast index search
 -   simple blockchain explorer
--   websocket, API and legacy Bitcore Insight compatible socket.io interfaces
+-   websocket, API and legacy Bitcore Insight compatible REST interfaces
 -   support of multiple coins (Bitcoin and Ethereum type) with easy extensibility to other coins
 -   scripts for easy creation of debian packages for backend and blockbook
 
@@ -29,13 +29,13 @@ Contribution guide is [here](CONTRIBUTING.md).
 
 Blockbook currently supports over 30 coins. The Trezor team implemented
 
--   Bitcoin, Bitcoin Cash, Zcash, Dash, Litecoin, Bitcoin Gold, Ethereum, Ethereum Classic, Dogecoin, Namecoin, Vertcoin, DigiByte, Liquid
+-   Bitcoin, Bitcoin Cash, Zcash, Dash, Litecoin, Bitcoin Gold, Ethereum, Ethereum Classic, Dogecoin, Namecoin, Vertcoin, DigiByte
 
 the rest of coins were implemented by the community.
 
 Testnets for some coins are also supported, for example:
 
--   Bitcoin Testnet, Bitcoin Cash Testnet, ZCash Testnet, Ethereum Testnets (Sepolia, Holesky)
+-   Bitcoin Testnet, Bitcoin Cash Testnet, ZCash Testnet, Ethereum Testnets (Sepolia, Hoodi)
 
 List of all implemented coins is in [the registry of ports](/docs/ports.md).
 
@@ -78,3 +78,7 @@ Blockbook API is described [here](/docs/api.md).
 ## Environment variables
 
 List of environment variables that affect Blockbook's behavior is [here](/docs/env.md).
+
+## Security Note
+
+WebSocket origin checks are not enforced by default. If you expose Blockbook without a proxy that restricts origins, it is your responsibility to configure the origin allowlist (or equivalent controls). See `docs/env.md` for details.

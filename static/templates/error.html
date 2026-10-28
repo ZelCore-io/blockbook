@@ -1,4 +1,16 @@
 {{define "specific"}}
-<h1>Error</h1>
-<h4>{{.Error.Text}}</h4>
+<section class="hub-card hub-error">
+    <h1>{{if .ErrorTitle}}{{.ErrorTitle}}{{else}}Error{{end}}</h1>
+    <p class="hub-error-text">{{.Error.Text}}</p>
+    {{- if .ErrorHint}}
+    <p class="hub-error-hint">{{.ErrorHint}}</p>
+    {{- end}}
+    {{- if .InternalExplorer}}
+    <form class="hub-search hub-error-search" role="search" action="/search" method="get">
+        <label class="visually-hidden" for="error-q">Search</label>
+        <input id="error-q" name="q" type="text" value="{{.SearchQuery}}" placeholder="Search for block, transaction, address or xpub"{{if .SearchQuery}} autofocus{{end}}>
+        <button type="submit">Search</button>
+    </form>
+    {{- end}}
+</section>
 {{end}}

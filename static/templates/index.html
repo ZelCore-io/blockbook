@@ -1,154 +1,165 @@
-{{define "specific"}}{{$cs := .CoinShortcut}}{{$bb := .Info.Blockbook}}{{$be := .Info.Backend}}
-<h1>Application status</h1>
-{{if $bb.InitialSync}}
-<h3><span class="badge bg-danger text-white p-3 w-100" style="white-space: break-spaces;">Application is now in initial synchronization and does not provide any data.</span></h3>
-{{end}}
-{{if not $bb.SyncMode}}
-<h3><span class="badge bg-warning text-white p-3 w-100" style="white-space: break-spaces;">Synchronization with backend is disabled, the state of index is not up to date.</span></h3>
-{{end}}
-<div class="row">
-    <div class="col-lg-6">
-        <table class="table data-table info-table">
-            <tbody>
-                <tr>
-                    <td style="white-space: nowrap;"><h3>Blockbook</h3></td>
-                    <td></td>
-                </tr>
-                <tr>
-                    <td>Coin</td>
-                    <td>{{$bb.Coin}}</td>
-                </tr>
-                <tr>
-                    <td>Host</td>
-                    <td>{{$bb.Host}}</td>
-                </tr>
-                <tr>
-                    <td>Version / Commit / Build</td>
-                    <td>{{$bb.Version}} / <a href="https://github.com/trezor/blockbook/commit/{{$bb.GitCommit}}" target="_blank" rel="noopener noreferrer">{{$bb.GitCommit}}</a> / {{$bb.BuildTime}}</td>
-                </tr>
-                <tr>
-                    <td>Synchronized</td>
-                    <td><h6 class="badge {{if not $bb.InSync}}bg-danger{{else}}bg-success{{end}}">{{$bb.InSync}}</h6></td>
-                </tr>
-                <tr>
-                    <td>Last Block</td>
-                    <td>{{if .InternalExplorer}}<a href="/block/{{$bb.BestHeight}}">{{formatUint32 $bb.BestHeight}}</a>{{else}}{{formatUint32 $bb.BestHeight}}{{end}}</td>
-                </tr>
-                <tr>
-                    <td>Last Block Update</td>
-                    <td>{{timeSpan $bb.LastBlockTime}}</td>
-                </tr>
-                <tr>
-                    <td>Mempool in Sync</td>
-                    <td><h6 class="badge {{if not $bb.InSyncMempool}}bg-danger{{else}}bg-success{{end}}">{{$bb.InSyncMempool}}</h6></td>
-                </tr>
-                <tr>
-                    <td>Last Mempool Update</td>
-                    <td>{{timeSpan $bb.LastMempoolTime}}</td>
-                </tr>
-                <tr>
-                    <td>Transactions in Mempool</td>
-                    <td>{{if .InternalExplorer}}<a href="/mempool">{{formatInt $bb.MempoolSize}}</a>{{else}}{{formatInt $bb.MempoolSize}}{{end}}</td>
-                </tr>
-                {{if $bb.HasFiatRates}}
-                <tr>
-                    <td>Current Fiat rates</td>
-                    <td>{{timeSpan $bb.CurrentFiatRatesTime}}</td>
-                </tr>
-                <tr>
-                    <td>Historical Fiat rates</td>
-                    <td>{{timeSpan $bb.HistoricalFiatRatesTime}}{{if $bb.HasTokenFiatRates}}<br><span class="fw-normal">tokens</span> {{timeSpan $bb.HistoricalTokenFiatRatesTime}}{{end}}</td>
-                </tr>
-                {{end}}
-                <tr>
-                    <td>Size On Disk</td>
-                    <td>{{formatInt64 $bb.DbSize}}</td>
-                </tr>
-                {{if $bb.SupportedStakingPools}}
-                <tr>
-                    <td>Supported Staking Pools</td>
-                    <td>{{$bb.SupportedStakingPools}}</td>
-                </tr>
-                {{end}}
-            </tbody>
-        </table>
+{{- /* Home page. base.html renders the home band (title and search) because .HomePage is set; this file
+fills the band figures and lays out everything below it. The status tables live in status.html. */ -}}
+{{define "hubHomeFigures"}}{{$bb := .Info.Blockbook}}
+<dl class="hub-figures">
+    {{- if .HomePrice}}
+    <div><dt>Price</dt><dd{{with .RatesSource}} title="Exchange rates provided by {{.}}"{{end}}>{{.HomePrice}}</dd></div>
+    {{- end}}
+    <div><dt>Height</dt><dd>{{formatUint32 $bb.BestHeight}}</dd></div>
+    <div><dt>Mempool</dt><dd>{{formatInt $bb.MempoolSize}} tx</dd></div>
+</dl>
+{{- end}}
+{{define "specific"}}{{$bb := .Info.Blockbook}}{{$be := .Info.Backend}}{{$link := .InternalExplorer}}
+{{- /* All products sit in one strip that scrolls sideways. hub-products-scroll (more than four
+tiles) sizes desktop tiles so the fifth peeks in; narrower screens always scroll. The strip is a
+focusable region so keyboard users can scroll it with the arrow keys; no script is needed. When
+the tiles do not fit, main.js (hubProductCarousel) adds a slow looping drift, mouse drag and
+previous/next buttons on top of the same scrolling row. */ -}}
+{{- with .ExplorerContent.ProductTiles}}
+<div class="hub-products">
+    <section class="hub-products-grid" aria-labelledby="hub-products-title">
+        <h2 class="hub-products-title" id="hub-products-title">Flux ecosystem products</h2>
+        <div class="hub-products-strip{{if $.ExplorerContent.ProductsScroll}} hub-products-scroll{{end}}" role="region" aria-label="Flux ecosystem products" tabindex="0">
+            {{- range .}}{{template "hubProduct" .}}{{end}}
+        </div>
+    </section>
+</div>
+{{- end}}
+<div class="hub-layout">
+    <div class="hub-main">
+        {{- if $bb.InitialSync}}
+        <div class="hub-card hub-muted" role="status">Application is now in initial synchronization and does not provide any data.</div>
+        {{- end}}
+        {{- if not $bb.SyncMode}}
+        <div class="hub-card hub-muted" role="status">Synchronization with backend is disabled, the state of index is not up to date.</div>
+        {{- end}}
+        <section class="hub-card hub-card-flush">
+            <nav class="hub-tabs" aria-label="Latest activity">
+                <a href="/?tab=blocks"{{if eq .HomeTab "blocks"}} class="active" aria-current="page"{{end}}>Blocks</a>
+                <a href="/?tab=txs"{{if eq .HomeTab "txs"}} class="active" aria-current="page"{{end}}>Transactions</a>
+                {{- if $link}}
+                <a class="hub-tabs-end" href="{{if ne .HomeTab "txs"}}/blocks{{else if and .MempoolTxids .MempoolTxids.Mempool}}/mempool{{else if .Block}}/block/{{.Block.Height}}{{else}}/mempool{{end}}">View all</a>
+                {{- end}}
+            </nav>
+            {{- if eq .HomeTab "txs"}}
+            {{- if and .MempoolTxids .MempoolTxids.Mempool}}
+            <div class="hub-scroll">
+                <table class="hub-linkrows">
+                    <tbody>
+                        {{- range .MempoolTxids.Mempool}}
+                        <tr>
+                            <td class="hub-ellipsis">{{if $link}}<a class="hub-mono" href="/tx/{{.Txid}}">{{.Txid}}</a>{{else}}<span class="hub-mono">{{.Txid}}</span>{{end}}</td>
+                            <td class="text-nowrap">{{unixTimeSpan .Time}}</td>
+                        </tr>
+                        {{- end}}
+                    </tbody>
+                </table>
+            </div>
+            {{- else if and .Block .Block.Transactions}}
+            <p class="hub-muted px-3 pt-3 mb-0">The mempool is empty. Showing transactions from block {{if $link}}<a href="/block/{{.Block.Height}}">{{formatUint32 .Block.Height}}</a>{{else}}{{formatUint32 .Block.Height}}{{end}}.</p>
+            <div class="hub-scroll">
+                <table class="hub-linkrows">
+                    <tbody>
+                        {{- range .Block.Transactions}}
+                        <tr>
+                            <td class="hub-ellipsis">{{if $link}}<a class="hub-mono" href="/tx/{{.Txid}}">{{.Txid}}</a>{{else}}<span class="hub-mono">{{.Txid}}</span>{{end}}</td>
+                            <td class="text-nowrap">{{unixTimeSpan .Blocktime}}</td>
+                        </tr>
+                        {{- end}}
+                    </tbody>
+                </table>
+            </div>
+            {{- else}}
+            <p class="hub-muted p-3 mb-0">No transactions to show.</p>
+            {{- end}}
+            {{- else}}
+            {{- if and .Blocks .Blocks.Blocks}}
+            <div class="hub-scroll">
+                <table class="hub-linkrows">
+                    <tbody>
+                        {{- range .Blocks.Blocks}}
+                        <tr>
+                            <td class="text-nowrap">{{if $link}}<a class="hub-mono" href="/block/{{.Height}}">{{formatUint32 .Height}}</a>{{else}}<span class="hub-mono">{{formatUint32 .Height}}</span>{{end}}<div class="hub-muted">{{unixTimeSpan .Time}}</div></td>
+                            <td class="hub-mono hub-ellipsis d-none d-sm-table-cell">{{.Hash}}</td>
+                            <td class="text-nowrap">{{.Txs}} tx · {{formatUint32 .Size}} B</td>
+                        </tr>
+                        {{- end}}
+                    </tbody>
+                </table>
+            </div>
+            {{- else}}
+            <p class="hub-muted p-3 mb-0">No blocks to show.</p>
+            {{- end}}
+            {{- end}}
+        </section>
     </div>
-    <div class="col-lg-6">
-        <table class="table data-table info-table">
-            <tbody>
-                <tr>
-                    <td style="white-space: nowrap;"><h3>Backend</h3></td>
-                    <td></td>
-                </tr>
-                {{if $be.BackendError}}
-                <tr>
-                    <td>Backend Error</td>
-                    <td class="text-danger">{{$be.BackendError}}</td>
-                </tr>
-                {{end}}
-                <tr>
-                    <td>Chain</td>
-                    <td>{{$be.Chain}}</td>
-                </tr>
-                <tr>
-                    <td>Version</td>
-                    <td>{{$be.Version}}</td>
-                </tr>
-                {{if $be.Subversion}}
-                <tr>
-                    <td>Subversion</td>
-                    <td>{{$be.Subversion}}</td>
-                </tr>
-                {{end}}
-                {{if $be.ProtocolVersion}}
-                <tr>
-                    <td>Protocol Version</td>
-                    <td>{{$be.ProtocolVersion}}</td>
-                </tr>
-                {{end}}
-                {{if $be.ConsensusVersion}}
-                <tr>
-                    <td>Consensus Version</td>
-                    <td>{{$be.ConsensusVersion}}</td>
-                </tr>
-                {{end}}
-                <tr>
-                    <td>Last Block</td>
-                    <td>{{formatInt $be.Blocks}}</td>
-                </tr>
-                <tr>
-                    <td>Difficulty</td>
-                    <td>{{$be.Difficulty}}</td>
-                </tr>
-                {{if $be.Timeoffset}}
-                <tr>
-                    <td>Timeoffset</td>
-                    <td>{{$be.Timeoffset}}</td>
-                </tr>
-                {{end}}
-                {{if $be.SizeOnDisk}}
-                <tr>
-                    <td>Size On Disk</td>
-                    <td>{{formatInt64 $be.SizeOnDisk}}</td>
-                </tr>
-                {{end}}
-                {{if $be.Consensus}}
-                <tr>
-                    <td>Consensus</td>
-                    <td>{{toJSON $be.Consensus}}</td>
-                </tr>
-                {{end}}
-                {{if $be.Warnings}}
-                <tr>
-                    <td>Warnings</td>
-                    <td class="text-warning">{{$be.Warnings}}</td>
-                </tr>
-                {{end}}
-            </tbody>
-        </table>
+    <div class="hub-aside">
+        {{- with .ExplorerContent.HomeCampaign}}
+        <a class="hub-campaign" href="{{.TargetURL}}" target="_blank" rel="sponsored noopener noreferrer">
+            {{- if .ImageURL}}<img src="{{.ImageURL}}" alt="" width="320" height="200" loading="lazy" referrerpolicy="no-referrer">{{end}}
+            <div class="hub-campaign-body">
+                <div class="hub-label">Sponsored</div>
+                <div class="hub-campaign-title">{{.Title}}</div>
+                {{- if .Description}}
+                <div class="hub-campaign-text">{{.Description}}</div>
+                {{- end}}
+            </div>
+        </a>
+        {{- end}}
+        <section class="hub-card" aria-labelledby="hub-network-title">
+            <h2 id="hub-network-title">Network</h2>
+            <dl class="hub-stat-grid">
+                {{- if $be.Difficulty}}
+                <div class="hub-stat-wide"><dt>Difficulty</dt><dd class="hub-mono hub-stat-long">{{$be.Difficulty}}</dd></div>
+                {{- end}}
+                <div class="hub-stat-wide"><dt>Node</dt><dd class="hub-mono hub-stat-node">{{if $be.Subversion}}{{$be.Subversion}}{{else}}{{$be.Version}}{{end}}</dd></div>
+                <div><dt>Status</dt><dd>{{if $bb.InSync}}<span class="hub-badge hub-badge-ok">Synced</span>{{else}}<span class="hub-badge hub-badge-warn">Syncing</span>{{end}}</dd></div>
+            </dl>
+        </section>
     </div>
 </div>
-<span class="text-muted">{{$bb.About}}
-{{if .SecondaryCoin}}<br>Exchange rates provided by Coingecko.{{end}}
-</span>
-{{end}}
+{{- with .ExplorerContent.MoreExplorers}}
+<section class="hub-explorers" aria-labelledby="hub-explorers-title">
+    <h2 id="hub-explorers-title">More explorers</h2>
+    <ul class="hub-explorers-list">
+        {{- range .}}
+        <li><a class="hub-explorer" href="{{.URL}}" target="_blank" rel="noopener noreferrer">
+            <span class="hub-explorer-icon" aria-hidden="true">{{if .IconURL}}<img src="{{.IconURL}}" alt="" width="32" height="32" loading="lazy" referrerpolicy="no-referrer">{{else}}{{initials .Name}}{{end}}</span>
+            <span class="hub-explorer-name">{{.Name}}</span>
+        </a></li>
+        {{- end}}
+    </ul>
+</section>
+{{- end}}
+{{- with .ExplorerContent.Articles}}
+<section class="hub-articles" aria-labelledby="hub-articles-title">
+    <h2 id="hub-articles-title">News from Zelcore and SSP</h2>
+    <div class="hub-articles-grid">
+        {{- range $i, $a := .}}{{if lt $i 3}}
+        <a class="hub-article" href="{{$a.URL}}" target="_blank" rel="noopener noreferrer">
+            {{- if $a.ThumbnailURL}}<img src="{{$a.ThumbnailURL}}" alt="" width="640" height="360" loading="lazy" referrerpolicy="no-referrer">{{end}}
+            <div class="hub-article-body">
+                <div class="hub-article-meta">{{if eq $a.Source "zelcore"}}Zelcore{{else}}SSP{{end}} · <time datetime="{{$a.PublishedAt}}">{{slice $a.PublishedAt 0 10}}</time></div>
+                <div class="hub-article-title">{{$a.Title}}</div>
+            </div>
+        </a>
+        {{- end}}{{end}}
+    </div>
+</section>
+{{- end}}
+{{- end}}
+{{- /* A product tile. Accent is a validated #RRGGBB (Flux Blue Wave when the feed has none), so it is
+the only value that reaches the style attribute. CTAFilled picks a filled button when white text
+reaches 4.5:1 on the accent, else an outlined one with dark text. */ -}}
+{{- define "hubProduct"}}
+        <a class="hub-product{{if not .CTAFilled}} hub-product-outline{{end}}" href="{{.TargetURL}}" target="_blank" rel="noopener noreferrer" style="--tile-accent: {{.Accent}}">
+            <span class="hub-product-head">
+                <span class="hub-product-icon" aria-hidden="true">{{if .IconURL}}<img src="{{.IconURL}}" alt="" width="36" height="36" loading="lazy" referrerpolicy="no-referrer">{{else}}{{initials .Name}}{{end}}</span>
+                <span class="hub-product-name">{{.Name}}</span>
+            </span>
+            {{- if .Tagline}}
+            <span class="hub-product-tagline">{{.Tagline}}</span>
+            {{- end}}
+            <span class="hub-product-cta">{{if .CTALabel}}{{.CTALabel}}{{else}}Learn more{{end}} →</span>
+        </a>
+{{- end}}

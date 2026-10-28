@@ -1,42 +1,56 @@
 package bchain
 
 import (
+	"encoding/json"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 )
 
-// EthereumInternalTransfer contains data about internal transfer
-type EthereumInternalTransfer struct {
-	Type  EthereumInternalTransactionType `json:"type"`
-	From  string                          `json:"from"`
-	To    string                          `json:"to"`
-	Value big.Int                         `json:"value"`
+// ProcessInternalTransactions specifies if internal transactions are processed
+var ProcessInternalTransactions bool
+
+type EthereumInternalDataProvider interface {
+	GetInternalDataForBlock(
+		hash string,
+		height uint32,
+		txs []RpcTransaction,
+	) ([]EthereumInternalData, []ContractInfo, error)
 }
 
-// FourByteSignature contains data about about a contract function signature
+// EthereumInternalTransfer contains data about internal transfer
+type EthereumInternalTransfer struct {
+	Type  EthereumInternalTransactionType `json:"type" ts_doc:"The type of internal transaction (CALL, CREATE, SELFDESTRUCT)."`
+	From  string                          `json:"from" ts_doc:"Sender address of this internal transfer."`
+	To    string                          `json:"to" ts_doc:"Recipient address of this internal transfer."`
+	Value big.Int                         `json:"value" ts_doc:"Amount (in Wei) transferred internally."`
+}
+
+// FourByteSignature contains data about a contract function signature
 type FourByteSignature struct {
 	// stored in DB
-	Name       string
-	Parameters []string
+	Name       string   `ts_doc:"Original function name as stored in the database."`
+	Parameters []string `ts_doc:"Raw parameter type definitions (e.g. ['uint256','address'])."`
 	// processed from DB data and stored only in cache
-	DecamelName      string
-	Function         string
-	ParsedParameters []abi.Type
+	DecamelName      string     `ts_doc:"A decamelized version of the function name for readability."`
+	Function         string     `ts_doc:"Reconstructed function definition string (e.g. 'transfer(address,uint256)')."`
+	ParsedParameters []abi.Type `ts_doc:"ABI-parsed parameter types (cached for efficiency)."`
 }
 
 // EthereumParsedInputParam contains data about a contract function parameter
 type EthereumParsedInputParam struct {
-	Type   string   `json:"type"`
-	Values []string `json:"values,omitempty"`
+	Type   string   `json:"type" ts_doc:"Parameter type (e.g. 'uint256')."`
+	Values []string `json:"values,omitempty" ts_doc:"List of stringified parameter values."`
 }
 
 // EthereumParsedInputData contains the parsed data for an input data hex payload
 type EthereumParsedInputData struct {
-	MethodId string                     `json:"methodId"`
-	Name     string                     `json:"name"`
-	Function string                     `json:"function,omitempty"`
-	Params   []EthereumParsedInputParam `json:"params,omitempty"`
+	MethodId string                     `json:"methodId" ts_doc:"First 4 bytes of the input data (method signature ID)."`
+	Name     string                     `json:"name" ts_doc:"Parsed function name if recognized."`
+	Function string                     `json:"function,omitempty" ts_doc:"Full function signature (including parameter types)."`
+	Params   []EthereumParsedInputParam `json:"params,omitempty" ts_doc:"List of parsed parameters for this function call."`
+	// Truncated: parse budget exceeded, only MethodId is populated
+	Truncated bool `json:"parsedDataTruncated,omitempty" ts_doc:"True when input data exceeded the parse-size budget and parameters were not decoded."`
 }
 
 // EthereumInternalTransactionType - type of ethereum transaction from internal data
@@ -49,25 +63,65 @@ const (
 	SELFDESTRUCT
 )
 
-// EthereumInternalTransaction contains internal transfers
+// EthereumInternalData contains internal transfers
 type EthereumInternalData struct {
-	Type      EthereumInternalTransactionType `json:"type"`
-	Contract  string                          `json:"contract,omitempty"`
-	Transfers []EthereumInternalTransfer      `json:"transfers,omitempty"`
-	Error     string
+	Type      EthereumInternalTransactionType `json:"type" ts_doc:"High-level type of the internal transaction (CALL, CREATE, etc.)."`
+	Contract  string                          `json:"contract,omitempty" ts_doc:"Address of the contract involved, if any."`
+	Transfers []EthereumInternalTransfer      `json:"transfers,omitempty" ts_doc:"List of internal transfers associated with this data."`
+	Error     string                          `ts_doc:"Error message if something went wrong while processing."`
 }
 
 // ContractInfo contains info about a contract
 type ContractInfo struct {
 	// Deprecated: Use Standard instead.
-	Type              TokenStandardName `json:"type" ts_type:"'' | 'XPUBAddress' | 'ERC20' | 'ERC721' | 'ERC1155' | 'BEP20' | 'BEP721' | 'BEP1155'" ts_doc:"@deprecated: Use standard instead."`
-	Standard          TokenStandardName `json:"standard" ts_type:"'' | 'XPUBAddress' | 'ERC20' | 'ERC721' | 'ERC1155' | 'BEP20' | 'BEP721' | 'BEP1155'"`
-	Contract          string            `json:"contract"`
-	Name              string            `json:"name"`
-	Symbol            string            `json:"symbol"`
-	Decimals          int               `json:"decimals"`
-	CreatedInBlock    uint32            `json:"createdInBlock,omitempty"`
-	DestructedInBlock uint32            `json:"destructedInBlock,omitempty"`
+	Type              TokenStandardName `json:"type" ts_type:"'' | 'XPUBAddress' | 'ERC20' | 'ERC721' | 'ERC1155' | 'BEP20' | 'BEP721' | 'BEP1155' | 'TRC20' | 'TRC721' | 'TRC1155'" ts_doc:"@deprecated: Use standard instead."`
+	Standard          TokenStandardName `json:"standard" ts_type:"'' | 'XPUBAddress' | 'ERC20' | 'ERC721' | 'ERC1155' | 'BEP20' | 'BEP721' | 'BEP1155' | 'TRC20' | 'TRC721' | 'TRC1155'"`
+	Contract          string            `json:"contract" ts_doc:"Smart contract address."`
+	Name              string            `json:"name" ts_doc:"Readable name of the contract."`
+	Symbol            string            `json:"symbol" ts_doc:"Symbol for tokens under this contract, if applicable."`
+	Decimals          int               `json:"decimals" ts_doc:"Number of decimal places, if applicable."`
+	CreatedInBlock    uint32            `json:"createdInBlock,omitempty" ts_doc:"Block height where contract was first created."`
+	DestructedInBlock uint32            `json:"destructedInBlock,omitempty" ts_doc:"Block height where contract was destroyed (if any)."`
+	// IsErc4626 is set on a successful asset()+totalAssets() probe; lazy and one-way.
+	IsErc4626 bool `json:"-"`
+	// Erc4626AssetContract is the underlying asset (EIP-55), read on the same probe.
+	Erc4626AssetContract string `json:"-"`
+}
+
+// EthereumTypeRPCCall defines one eth_call request payload.
+type EthereumTypeRPCCall struct {
+	Data string
+	To   string
+	From string
+}
+
+// EthereumTypeRPCCallResult carries one eth_call response payload.
+type EthereumTypeRPCCallResult struct {
+	Data  string
+	Error error
+}
+
+// EthereumMulticallCall is one sub-call in a Multicall3 aggregate3 batch.
+// CallData is "0x"-prefixed hex. AllowFailure=true lets a revert produce
+// Success=false in the result slot instead of failing the batch.
+type EthereumMulticallCall struct {
+	Target       string
+	CallData     string
+	AllowFailure bool
+}
+
+// EthereumMulticallResult is one slot of the aggregate3 return; Data is the
+// "0x"-prefixed return bytes (or revert payload when Success=false).
+type EthereumMulticallResult struct {
+	Success bool
+	Data    string
+}
+
+// EthereumContractInfoResult is one contract's metadata verdict from a batched probe. Info==nil with
+// Err==nil is a conclusive "no token here"; a non-nil Err says nothing, so it must not be cached.
+type EthereumContractInfoResult struct {
+	Info *ContractInfo
+	Err  error
 }
 
 // Ethereum token standard names
@@ -81,37 +135,38 @@ const (
 // the map must match all bchain.TokenStandard to avoid index out of range panic
 var EthereumTokenStandardMap = []TokenStandardName{ERC20TokenStandard, ERC771TokenStandard, ERC1155TokenStandard}
 
+// MultiTokenValue holds one ID-value pair for multi-token standards like ERC1155
 type MultiTokenValue struct {
-	Id    big.Int
-	Value big.Int
+	Id    big.Int `ts_doc:"Token ID for this multi-token entry."`
+	Value big.Int `ts_doc:"Amount of the token ID transferred or owned."`
 }
 
 // TokenTransfer contains a single token transfer
 type TokenTransfer struct {
-	Standard         TokenStandard
-	Contract         string
-	From             string
-	To               string
-	Value            big.Int
-	MultiTokenValues []MultiTokenValue
+	Standard         TokenStandard     `ts_doc:"Integer value od the token standard."`
+	Contract         string            `ts_doc:"Smart contract address for the token."`
+	From             string            `ts_doc:"Sender address of the token transfer."`
+	To               string            `ts_doc:"Recipient address of the token transfer."`
+	Value            big.Int           `ts_doc:"Amount of tokens transferred (for fungible tokens)."`
+	MultiTokenValues []MultiTokenValue `ts_doc:"List of ID-value pairs for multi-token transfers (e.g., ERC1155)."`
 }
 
 // RpcTransaction is returned by eth_getTransactionByHash
 type RpcTransaction struct {
-	AccountNonce         string `json:"nonce"`
-	GasPrice             string `json:"gasPrice"`
+	AccountNonce         string `json:"nonce" ts_doc:"Transaction nonce from the sender's account."`
+	GasPrice             string `json:"gasPrice" ts_doc:"Gas price bid by the sender in Wei."`
 	MaxPriorityFeePerGas string `json:"maxPriorityFeePerGas,omitempty"`
 	MaxFeePerGas         string `json:"maxFeePerGas,omitempty"`
 	BaseFeePerGas        string `json:"baseFeePerGas,omitempty"`
-	GasLimit             string `json:"gas"`
-	To                   string `json:"to"` // nil means contract creation
-	Value                string `json:"value"`
-	Payload              string `json:"input"`
-	Hash                 string `json:"hash"`
-	BlockNumber          string `json:"blockNumber"`
-	BlockHash            string `json:"blockHash,omitempty"`
-	From                 string `json:"from"`
-	TransactionIndex     string `json:"transactionIndex"`
+	GasLimit             string `json:"gas" ts_doc:"Maximum gas allowed for this transaction."`
+	To                   string `json:"to" ts_doc:"Recipient address if not a contract creation. Empty if it's contract creation."`
+	Value                string `json:"value" ts_doc:"Amount of Ether (in Wei) sent in this transaction."`
+	Payload              string `json:"input" ts_doc:"Hex-encoded input data for contract calls."`
+	Hash                 string `json:"hash" ts_doc:"Transaction hash."`
+	BlockNumber          string `json:"blockNumber" ts_doc:"Block number where this transaction was included, if mined."`
+	BlockHash            string `json:"blockHash,omitempty" ts_doc:"Hash of the block in which this transaction was included, if mined."`
+	From                 string `json:"from" ts_doc:"Sender's address derived by the backend."`
+	TransactionIndex     string `json:"transactionIndex" ts_doc:"Index of the transaction within the block, if mined."`
 	// Signature values - ignored
 	// V string `json:"v"`
 	// R string `json:"r"`
@@ -120,53 +175,91 @@ type RpcTransaction struct {
 
 // RpcLog is returned by eth_getLogs
 type RpcLog struct {
-	Address string   `json:"address"`
-	Topics  []string `json:"topics"`
-	Data    string   `json:"data"`
+	Address string   `json:"address" ts_doc:"Contract or address from which this log originated."`
+	Topics  []string `json:"topics" ts_doc:"Indexed event signatures and parameters."`
+	Data    string   `json:"data" ts_doc:"Unindexed event data in hex form."`
 }
 
-// RpcLog is returned by eth_getTransactionReceipt
+// RpcReceipt is returned by eth_getTransactionReceipt
 type RpcReceipt struct {
-	GasUsed     string    `json:"gasUsed"`
-	Status      string    `json:"status"`
-	Logs        []*RpcLog `json:"logs"`
-	L1Fee       string    `json:"l1Fee,omitempty"`
-	L1FeeScalar string    `json:"l1FeeScalar,omitempty"`
-	L1GasPrice  string    `json:"l1GasPrice,omitempty"`
-	L1GasUsed   string    `json:"l1GasUsed,omitempty"`
+	GasUsed           string    `json:"gasUsed" ts_doc:"Amount of gas actually used by the transaction."`
+	EffectiveGasPrice string    `json:"effectiveGasPrice,omitempty" ts_doc:"Actual gas price paid per gas unit; on L2 networks this differs from the transaction gasPrice bid."`
+	Status            string    `json:"status" ts_doc:"Transaction execution status (0x0 = fail, 0x1 = success)."`
+	Logs              []*RpcLog `json:"logs" ts_doc:"Array of log entries generated by this transaction."`
+	L1Fee             string    `json:"l1Fee,omitempty" ts_doc:"Additional Layer 1 fee, if on a rollup network."`
+	L1FeeScalar       string    `json:"l1FeeScalar,omitempty" ts_doc:"Fee scaling factor for L1 fees on some L2s."`
+	L1GasPrice        string    `json:"l1GasPrice,omitempty" ts_doc:"Gas price used on L1 for the rollup network."`
+	L1GasUsed         string    `json:"l1GasUsed,omitempty" ts_doc:"Amount of L1 gas used by the transaction, if any."`
+	ContractAddress   string    `json:"contractAddress,omitempty"`
+}
+
+// TxStatus is status of transaction.
+type TxStatus int
+
+// statuses of transaction
+const (
+	TxStatusUnknown = TxStatus(iota - 2)
+	TxStatusPending
+	TxStatusFailure
+	TxStatusOK
+)
+
+// EthereumTxData contains Ethereum-like transaction data needed by API worker logic.
+type EthereumTxData struct {
+	Status               TxStatus `json:"status"` // 1 OK, 0 Fail, -1 pending, -2 unknown
+	Nonce                uint64   `json:"nonce"`
+	GasLimit             *big.Int `json:"gaslimit"`
+	GasUsed              *big.Int `json:"gasused"`
+	GasPrice             *big.Int `json:"gasprice"`
+	EffectiveGasPrice    *big.Int `json:"effectiveGasPrice,omitempty"`
+	MaxPriorityFeePerGas *big.Int `json:"maxPriorityFeePerGas,omitempty"`
+	MaxFeePerGas         *big.Int `json:"maxFeePerGas,omitempty"`
+	BaseFeePerGas        *big.Int `json:"baseFeePerGas,omitempty"`
+	L1Fee                *big.Int `json:"l1Fee,omitempty"`
+	L1FeeScalar          string   `json:"l1FeeScalar,omitempty"`
+	L1GasPrice           *big.Int `json:"l1GasPrice,omitempty"`
+	L1GasUsed            *big.Int `json:"L1GasUsed,omitempty"`
+	Data                 string   `json:"data"`
 }
 
 // EthereumSpecificData contains data specific to Ethereum transactions
 type EthereumSpecificData struct {
-	Tx           *RpcTransaction       `json:"tx"`
-	InternalData *EthereumInternalData `json:"internalData,omitempty"`
-	Receipt      *RpcReceipt           `json:"receipt,omitempty"`
+	Tx           *RpcTransaction       `json:"tx" ts_doc:"Raw transaction details from the blockchain node."`
+	InternalData *EthereumInternalData `json:"internalData,omitempty" ts_doc:"Summary of internal calls/transfers, if any."`
+	Receipt      *RpcReceipt           `json:"receipt,omitempty" ts_doc:"Transaction receipt info, including logs and gas usage."`
+	// ChainExtraData holds optional normalized chain-specific data for Ethereum-like chains.
+	ChainExtraData json.RawMessage `json:"chainExtraData,omitempty"`
 }
 
 // AddressAliasRecord maps address to ENS name
 type AddressAliasRecord struct {
-	Address string
-	Name    string
+	Address string `ts_doc:"Address whose alias is being stored."`
+	Name    string `ts_doc:"The resolved name/alias (e.g. ENS domain)."`
 }
 
 // EthereumBlockSpecificData contain data specific for Ethereum block
 type EthereumBlockSpecificData struct {
-	InternalDataError   string
-	AddressAliasRecords []AddressAliasRecord
-	Contracts           []ContractInfo
+	InternalDataError   string               `ts_doc:"Error message for processing block internal data, if any."`
+	AddressAliasRecords []AddressAliasRecord `ts_doc:"List of address-to-alias mappings discovered in this block."`
+	Contracts           []ContractInfo       `ts_doc:"List of contracts created or updated in this block."`
+	// GasUsed/GasLimit/BaseFeePerGas are transient block-level EIP-1559 figures used for the new-block
+	// notification; they are not persisted (storeBlockSpecificDataEthereumType ignores them).
+	GasUsed       *big.Int `json:"-"`
+	GasLimit      *big.Int `json:"-"`
+	BaseFeePerGas *big.Int `json:"-"`
 }
 
-// StakingPool holds data about address participation in a staking pool contract
+// StakingPoolData holds data about address participation in a staking pool contract
 type StakingPoolData struct {
-	Contract                string  `json:"contract"`
-	Name                    string  `json:"name"`
-	PendingBalance          big.Int `json:"pendingBalance"`          // pendingBalanceOf method
-	PendingDepositedBalance big.Int `json:"pendingDepositedBalance"` // pendingDepositedBalanceOf method
-	DepositedBalance        big.Int `json:"depositedBalance"`        // depositedBalanceOf method
-	WithdrawTotalAmount     big.Int `json:"withdrawTotalAmount"`     // withdrawRequest method, return value [0]
-	ClaimableAmount         big.Int `json:"claimableAmount"`         // withdrawRequest method, return value [1]
-	RestakedReward          big.Int `json:"restakedReward"`          // restakedRewardOf method
-	AutocompoundBalance     big.Int `json:"autocompoundBalance"`     // autocompoundBalanceOf method
+	Contract                string  `json:"contract" ts_doc:"Address of the staking pool contract."`
+	Name                    string  `json:"name" ts_doc:"Human-readable name of the staking pool."`
+	PendingBalance          big.Int `json:"pendingBalance" ts_doc:"Amount not yet finalized in the pool (pendingBalanceOf)."`
+	PendingDepositedBalance big.Int `json:"pendingDepositedBalance" ts_doc:"Amount pending deposit (pendingDepositedBalanceOf)."`
+	DepositedBalance        big.Int `json:"depositedBalance" ts_doc:"Total amount currently deposited (depositedBalanceOf)."`
+	WithdrawTotalAmount     big.Int `json:"withdrawTotalAmount" ts_doc:"Total amount requested for withdrawal (withdrawRequest[0])."`
+	ClaimableAmount         big.Int `json:"claimableAmount" ts_doc:"Amount that can be claimed (withdrawRequest[1])."`
+	RestakedReward          big.Int `json:"restakedReward" ts_doc:"Total reward that has been restaked (restakedRewardOf)."`
+	AutocompoundBalance     big.Int `json:"autocompoundBalance" ts_doc:"Auto-compounded balance (autocompoundBalanceOf)."`
 }
 
 // Eip1559Fee
@@ -190,4 +283,52 @@ type Eip1559Fees struct {
 	HistoricalBaseFeeRange     []*big.Int  `json:"historicalBaseFeeRange,omitempty"`
 	PriorityFeeTrend           string      `json:"priorityFeeTrend,omitempty"`
 	BaseFeeTrend               string      `json:"baseFeeTrend,omitempty"`
+}
+
+func copyBigInt(b *big.Int) *big.Int {
+	if b == nil {
+		return nil
+	}
+	return new(big.Int).Set(b)
+}
+
+func copyBigIntSlice(s []*big.Int) []*big.Int {
+	if s == nil {
+		return nil
+	}
+	c := make([]*big.Int, len(s))
+	for i := range s {
+		c[i] = copyBigInt(s[i])
+	}
+	return c
+}
+
+// Copy returns a deep copy so callers may adjust a fee tier per request without
+// mutating a value shared across requests (e.g. a provider cache).
+func (f *Eip1559Fee) Copy() *Eip1559Fee {
+	if f == nil {
+		return nil
+	}
+	c := *f
+	c.MaxFeePerGas = copyBigInt(f.MaxFeePerGas)
+	c.MaxPriorityFeePerGas = copyBigInt(f.MaxPriorityFeePerGas)
+	return &c
+}
+
+// Copy returns a deep copy so callers may adjust fees per request without
+// mutating a value shared across requests (e.g. a provider cache).
+func (f *Eip1559Fees) Copy() *Eip1559Fees {
+	if f == nil {
+		return nil
+	}
+	c := *f
+	c.BaseFeePerGas = copyBigInt(f.BaseFeePerGas)
+	c.Low = f.Low.Copy()
+	c.Medium = f.Medium.Copy()
+	c.High = f.High.Copy()
+	c.Instant = f.Instant.Copy()
+	c.LatestPriorityFeeRange = copyBigIntSlice(f.LatestPriorityFeeRange)
+	c.HistoricalPriorityFeeRange = copyBigIntSlice(f.HistoricalPriorityFeeRange)
+	c.HistoricalBaseFeeRange = copyBigIntSlice(f.HistoricalBaseFeeRange)
+	return &c
 }

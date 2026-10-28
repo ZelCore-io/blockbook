@@ -32,15 +32,32 @@ Good examples of coin configuration are
     * `backend_*` – Additional back-end ports can be documented here. Actually the only purpose is to get them to
        port table (prefix is removed and rest of string is used as note).
     * `blockbook_internal` – Blockbook's internal port that is used for metric collecting, debugging etc.
-    * `blockbook_public` – Blockbook's public port that is used to communicate with Trezor wallet (via Socket.IO).
+    * `blockbook_insight` – Optional native Insight HTTP port (1–65535). Must be paired with
+       `blockbook.insight_binding_template`; absent fields leave Insight disabled.
+    * `blockbook_public` – Blockbook's public HTTP/API/WebSocket port.
 
 * `ipc` – Defines how Blockbook connects its back-end service.
-    * `rpc_url_template` – Template that defines URL of back-end RPC service. See note on templates below.
+    * `rpc_url_template` – Template that defines URL of back-end RPC service. See note on templates below. You can
+      override it at build time by setting the selected `BB_DEV_RPC_URL_HTTP_<coin alias>` or
+      `BB_PROD_RPC_URL_HTTP_<coin alias>` variable (for example,
+      `BB_BUILD_ENV=dev BB_DEV_RPC_URL_HTTP_ethereum=http://backend_hostname:1234`), which is used as-is during
+      template generation. `BB_BUILD_ENV` defaults to `dev`.
+    * `rpc_url_ws_template` – Template that defines URL of back-end WebSocket RPC service for subscriptions. You can
+      override it at build time by setting the selected `BB_DEV_RPC_URL_WS_<coin alias>` or
+      `BB_PROD_RPC_URL_WS_<coin alias>` variable and it should point to the same host as `rpc_url_template`.
     * `rpc_user` – User name of back-end RPC service, used by both Blockbook and back-end configuration templates.
     * `rpc_pass` – Password of back-end RPC service, used by both Blockbook and back-end configuration templates.
     * `rpc_timeout` – RPC timeout used by Blockbook.
     * `message_queue_binding_template` – Template that defines URL of back-end's message queue (ZMQ), used by both
-       Blockbook and back-end configuration template. See note on templates below.
+       Blockbook and back-end configuration template. You can override it at build time by setting the selected
+       `BB_DEV_MQ_URL_<coin alias>` or `BB_PROD_MQ_URL_<coin alias>` variable (for example,
+       `BB_BUILD_ENV=dev BB_DEV_MQ_URL_bitcoin=tcp://backend_hostname:28332`), which is used as-is during template
+       generation. See note on templates below.
+    * `message_queue_curve` – Optional ZMQ CURVE credentials. The object has three Z85 keys: `server_key` is the 
+       publisher's public key (required to enable CURVE); `public_key` and `secret_key` are Blockbook's client keypair 
+       (omit either and Blockbook generates a fresh pair at connect time). Bitcoin Core itself does not publish 
+       CurveZMQ — stock `bitcoind` `zmqpub*` sockets are unauthenticated — so this is meant for a CurveZMQ proxy 
+       or a patched backend in front of Blockbook, not for talking to Core directly.
 
 * `backend` – Definition of back-end package, configuration and service.
     * `package_name` – Name of package. See convention note in [build guide](/docs/build.md#on-naming-conventions-and-versioning).
@@ -79,6 +96,13 @@ Good examples of coin configuration are
     * `system_user` – User used to run Blockbook service. See convention note in the [build guide](/docs/build.md#on-naming-conventions-and-versioning).
     * `internal_binding_template` – Template for *-internal* parameter. See note on templates below.
     * `public_binding_template` – Template for *-public* parameter. See note on templates below.
+    * `insight_binding_template` – Optional template for *-insight*; requires `ports.blockbook_insight`
+       and an explicit host. For example `127.0.0.1:{{.Ports.BlockbookInsight}}` with port `9876`
+       generates `-insight=127.0.0.1:9876`. This operator-selected port is only an example; allocate
+       a free port before enabling. Loopback requires a reverse proxy on the same host. If the
+       proxy runs elsewhere, explicitly bind a reachable private interface and restrict access
+       to that proxy. This listener serves plain HTTP; the proxy provides public TLS. Only
+       Bitcoin-type chains with eight decimals are eligible. See the [compatibility profile](insight-compatibility.md).
     * `explorer_url` – URL of blockchain explorer. Leave empty for internal explorer.
     * `additional_params` – Additional params of exec command (see [Dogecoin definition](/configs/coins/dogecoin.json)).
     * `block_chain` – Configuration of BlockChain type that ensures communication with back-end service. All options
@@ -90,6 +114,96 @@ Good examples of coin configuration are
         * `mempool_sub_workers` – Number of subworkers for BitcoinType mempool.
         * `block_addresses_to_keep` – Number of blocks that are to be kept in blockaddresses column.
         * `additional_params` – Object of coin-specific params.
+          * Tron-specific endpoint configuration is documented in [Tron Config](/docs/tron-config.md).
+          * Alternative fee provider configuration (BitcoinType):
+            * `alternative_estimate_fee` – Set to `mempoolspaceprecise` (mempool.space [recommended fees with sub-sat/vB precision](https://mempool.space/docs/api/rest#get-recommended-fees-precise); params `url`, `periodSeconds`), `mempoolspace` (mempool.space recommended fees; params `url`, `periodSeconds`), `mempoolspaceblock` (mempool.space projected mempool blocks; params `url`, `periodSeconds`, optional `feeRangeIndex` 0-6 percentile index instead of median, optional `fallbackFeePerKB` for targets beyond the projected blocks) or `whatthefee` (whatthefee.io) to serve provider fees instead of node `estimatesmartfee`. On provider error or stale data (>10 minutes), estimates fall back to the node.
+            * `alternative_estimate_fee_params` – JSON string with the provider params, e.g. `"{\"url\": \"https://mempool.space/api/v1/fees/precise\", \"periodSeconds\": 20}"`.
+          * Alternative EIP-1559 fee provider configuration:
+            * `alternative_estimate_fee` – Set to `infura` (Infura Gas API, requires `INFURA_API_KEY`) or `1inch` (1inch gas-price API, requires `ONE_INCH_API_KEY`) to use provider fee suggestions instead of native node fee estimation. Startup fails fast if the selected provider's API-key env var is missing.
+            * `alternative_estimate_fee_params` – JSON string with `url`, `periodSeconds` and optional `staleSeconds`. Fees are fetched on demand: the provider is contacted only when a client requests an estimate, concurrent requests are coalesced into a single upstream call, and the result is cached for `periodSeconds` (the cache TTL, so upstream traffic is capped at one request per `periodSeconds`).
+              `staleSeconds` is how long the last successfully fetched fees stay usable before native fallback (served when a fetch fails), independent of the cache TTL; it defaults to 600 (10 minutes) when omitted and is clamped up to `periodSeconds` so the window is never shorter than the TTL. Note for monitoring: `blockbook_alternative_fee_provider_last_sync_timestamp_seconds` only advances on demand, so its age legitimately grows on a quiet instance — correlate with `blockbook_alternative_fee_provider_cache` before alerting.
+          * Fiat rates provider configuration (CoinGecko downloader):
+            * `fiat_rates_params` – JSON string with `coin`, `periodSeconds` and optional `url`, `tipUrl`, `attribution`, `plan`, `backfillHistory`. `url` is the base URL for the historical bootstrap requests.
+              `tipUrl` is an optional base URL that replaces the CoinGecko free/Pro URL (chosen by `plan`) for live and recent requests, so rates can come from any CoinGecko v3-compatible API such as ZelCore's rates-api. Empty or absent keeps the CoinGecko default.
+              `attribution` is an optional name credited for the exchange rates on the explorer pages ("Exchange rates provided by ..."). Absent or empty keeps the upstream credit, `Coingecko`; set it (for example to the operator of the rates relay) when `url`/`tipUrl` point to your own CoinGecko-compatible API. It is never derived from the URLs.
+              `backfillHistory` (default `false`) opts in to a one-time, non-destructive full-history backfill: during the next daily historical update Blockbook fetches the whole daily series (`days=max`) of every tracked vs currency from `url` and fills only the days on which that currency has no rate yet, merging into days that already have a record; existing rates are never rewritten and tokens are not included. Use it on a DB whose history was cut to 365 days (for example after the bootstrap gave up). Currencies that fetch successfully are stored even when others fail (a later pass fills only what is still missing); after a pass in which every currency succeeded, or after 5 incomplete passes, the `HistoricalFiatBackfillDone` DB marker is set and the backfill never runs again for that DB, even if the parameter stays in the config.
+          * Ethereum mempool timeout configuration:
+            * `mempoolTxTimeoutHours` – Legacy Blockbook-side EVM mempool retention in whole hours. It is used when `mempoolTxTimeout` is not set and the alternative pending-tx cache is not enabled (no `*_ALTERNATIVE_FETCH_MEMPOOL_TX` — a URLS-only relay deployment keeps this legacy value).
+            * `mempoolTxTimeout` – Optional Blockbook-side EVM mempool retention as a Go duration string such as `"10m"`; `"0s"` preserves the legacy zero-retention setting, but note it inverts the ordering below and so fails startup on a coin with the pending-tx cache enabled. With the cache enabled (`*_ALTERNATIVE_FETCH_MEMPOOL_TX`) it defaults to `alternativePendingTxWindow` plus a **30 minute** margin instead of the legacy hour-based value, and must stay at or above the alternative cache retention — Blockbook refuses to start otherwise, because the mempool sweep would drop a private transaction's address index while the provider cache still serves it as pending. A relay used for broadcast only (URLS set, cache off) has no such coupling and keeps the legacy behavior.
+            * `alternativePendingTxWindow` – How long a transaction broadcast through the alternative (private relay) provider is treated as still pending, as a positive Go duration string. Defaults to **3 hours** — the window in which a private relay's transaction can still be built into a block, and (since the Blinklabs alignment) also the window over which the relay answers `eth_getTransactionByHash` and counts the transaction at the pending `eth_getTransactionCount` tag. It drives the alternative cache retention and, through it, `mempoolTxTimeout` above.
+            * `alternativeMempoolTxTimeout` – Optional alternative-provider transaction cache retention as a positive Go duration string. Defaults to `alternativePendingTxWindow`; override only to hold private transactions for a *different* period than the one in which they can still land. The coin configs set it equal to their explicit `mempoolTxTimeout`, the longest value the ordering above permits, so a private transaction can be served as pending for as long as its index survives — provided the relay keeps surfacing it past its advertised window. Otherwise the missing-run eviction (`alternativeMissingTxTimeout` below) takes it at roughly that window, and the full retention is only realized after raising that timeout per the guidance below.
+            * `alternativeMissingTxTimeout` – How long a cached private transaction may stay missing from the relay's `eth_getTransactionByHash` (consecutive null answers) before Blockbook treats it as dropped or cancelled and evicts it, as a positive Go duration string. Defaults to **2 minutes** — the relay answers from one consistent store, so a null means the transaction is gone, and the tolerance only absorbs a transient relay fluke. Set it at or above the cache retention (`alternativeMempoolTxTimeout`, itself defaulting to `alternativePendingTxWindow`) for a relay that does not surface accepted transactions for as long as they stay cached — that restores eviction by cache timeout only.
+          * Hot-address configuration (Blockbook, Ethereum-type indexing):
+            * `hot_address_min_contracts` – Minimum number of contracts before hotness tracking applies (default **192**).
+            * `hot_address_min_hits` – Lookups within the current block required to mark an address hot (default **3**, clamped to **10**).
+            * `hot_address_lru_cache_size` – Max hot addresses kept in the LRU (default **20000**, clamped to **100,000**).
+          * Ethereum trace configuration (Blockbook, Ethereum-type indexing):
+            * `trace_timeout` – Optional per-request timeout passed to `debug_traceBlockByHash` as tracer config, formatted as a Go duration string such as `"20s"`.
+          * Address-contracts cache configuration (Blockbook, Ethereum-type indexing):
+            * `address_contracts_cache_min_size` – Minimum packed size (bytes) before an addressContracts entry is cached (default **300000**).
+            * `address_contracts_cache_max_bytes` – Cache size cap in bytes used while syncing near chain tip; when exceeded, cached entries are flushed early (default **2000000000**).
+            * `address_contracts_cache_bulk_max_bytes` – Cache size cap in bytes used during bulk connect; when exceeded, cached entries are flushed early (default **4000000000**).
+          * `xpubConfig` – xpub/descriptor expansion and cache tuning (BitcoinType only). Each field is optional; a missing or `<= 0` value keeps the built-in default, and a negative value is logged as invalid and ignored. When an override is present, Blockbook logs one `xpub: xpubConfig override applied: …` line at startup so you can confirm the effective values.
+
+            | Field | Default | Semantic |
+            | --- | --- | --- |
+            | `maxCacheEntries` | **5000** | Maximum number of xpubs kept in the in-memory derivation cache before the oldest entries are evicted. Raising it reduces re-derivation on busy instances but increases resident memory, since each entry holds the xpub's derived addresses and their tx lists — size the host accordingly. |
+            | `maxCacheBytes` | **1073741824** (1 GiB) | Cap on the estimated memory held by the xpub cache; least recently used entries are evicted once it is exceeded. Bounds memory where `maxCacheEntries` cannot, since an entry holds the xpub's whole txid history (~100 MB for an account with a million transactions). |
+            | `maxCacheExpirationSeconds` | **3600** | Time after last access before a cached xpub entry is dropped. |
+            | `defaultAddressesGap` | **20** | Gap limit used when a request does not specify one. Clamped down to `maxAddressesGap` if set higher. |
+            | `maxAddressesGap` | **10000** | Upper bound on the caller-supplied gap limit, protecting against unreasonably large scans. |
+
+            Example override in `configs/coins/*.json`:
+
+            ```json
+            "additional_params": {
+                "xpubConfig": {
+                    "maxCacheEntries": 2048
+                }
+            }
+            ```
+        * `additional_params_dev` – Overrides merged over `additional_params` **only** when the package is generated
+           with `BB_BUILD_ENV=dev` (see [environment variables](/docs/env.md#build-time-variables)). This is how a dev
+           instance runs a different value than production for a setting that costs money per request — above all the
+           `periodSeconds` of a paid fee or fiat-rates provider. A `BB_BUILD_ENV=prod` build ignores the block entirely,
+           so `additional_params` is always the production truth and a value tuned for dev cannot reach production.
+
+           The merge is sparse, so an override retunes one field and inherits the rest — the provider `url` is never
+           duplicated and so cannot drift from the production value:
+
+           | `additional_params` value | `additional_params_dev` value | Result |
+           | --- | --- | --- |
+           | JSON object | JSON object | merged field by field, recursively |
+           | JSON object encoded in a string (the `*_params` settings) | JSON object, or a string encoding one | the base object is decoded, merged, and re-encoded **as a string**, so the setting keeps the form the runtime expects |
+           | anything else | anything | the override replaces the value outright |
+
+           A setting named in `additional_params_dev` must already be declared in `additional_params`, or package
+           generation fails — that catches a typo, and it keeps `additional_params` a complete inventory of every
+           setting with its production value. The check runs for a `prod` build too, even though the merge does not.
+           To turn a knob on only in dev, declare it with its production value in `additional_params` and override it.
+           Fields *inside* one setting's parameters may be added freely (for example a dev-only `staleSeconds`).
+
+           ```json
+           "additional_params": {
+               "alternative_estimate_fee": "infura",
+               "alternative_estimate_fee_params": "{\"url\": \"https://gas.api.infura.io/v3/${api_key}/networks/1/suggestedGasFees\", \"periodSeconds\": 10}",
+               "fiat_rates_params": "{\"coin\": \"ethereum\", \"periodSeconds\": 900}"
+           },
+           "additional_params_dev": {
+               "alternative_estimate_fee_params": {
+                   "periodSeconds": 300
+               },
+               "fiat_rates_params": {
+                   "periodSeconds": 3600
+               }
+           }
+           ```
+
+           Note that re-encoding normalizes whitespace and sorts the keys inside a string-encoded setting, so the dev
+           render of such a value is not textually similar to the production one. Every consumer unmarshals it, so only
+           the rendered text differs. Two settings must not be overridden: `block_filter_scripts` and
+           `block_golomb_filter_p` are read straight from `additional_params` by the OpenAPI e2e suite
+           (`tests/openapi/src/config.ts`), which knows nothing about the overlay.
 
 * `meta` – Common package metadata.
     * `package_maintainer` – Full name of package maintainer.
@@ -102,6 +216,9 @@ are also templates and are executed inside base template. Use `{{.path}}` syntax
 where *.path* can be for example *.Blockbook.BlockChain.Parse*. Go uses CamelCase notation so references inside templates
 as well. Note that dot at the beginning is mandatory. Go template syntax is fully documented
 [here](https://godoc.org/text/template).
+
+Backend templates may also reference `.Env.RPCBindHost` and `.Env.RPCAllowIP`, which are derived at build time from
+`BB_RPC_BIND_HOST_<coin alias>` and `BB_RPC_ALLOW_IP_<coin alias>` to keep RPC exposure explicit and controlled.
 
 ## Built-in text
 

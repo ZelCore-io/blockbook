@@ -86,7 +86,46 @@ command: `make NO_CACHE=true all-bitcoin`.
 
 `TCMALLOC`: RocksDB, the storage engine used by Blockbook, allows to use alternative memory allocators. Use the `TCMALLOC` variable to specify Google's TCMalloc allocator `make TCMALLOC=true all-bitcoin`. To run Blockbook built with TCMalloc, the library must be installed on the target server, for example by `sudo apt-get install google-perftools`.
 
+`JEMALLOC`: The Blockbook binary links [jemalloc](https://jemalloc.net) statically as the C heap allocator that RocksDB allocates from. glibc malloc keeps freed multi-megabyte RocksDB buffers (record values, memtable blocks, write batches) resident inside fragmented arena heaps, and on busy EVM chains that retained memory grew by gigabytes per hour; jemalloc returns such buffers to the kernel. Nothing has to be installed on the target server. Use `make JEMALLOC=0 all-bitcoin` to build against glibc malloc instead. The allocator can be tuned at runtime through the `MALLOC_CONF` environment variable (see [env.md](/docs/env.md)).
+
 `PORTABLE`: By default, the RocksDB binaries shipped with Blockbook are optimized for the platform you're compiling on (-march=native or the equivalent). If you want to build a portable binary, use `make PORTABLE=1 all-bitcoin`.
+
+`BB_BUILD_ENV`: Selects which environment the package is generated for. Defaults to `dev`. Accepted values are `dev`
+and `prod`. It selects the active RPC URL override family, and in a `dev` build it also merges each coin's
+`blockbook.block_chain.additional_params_dev` block over `additional_params` (see
+[config guide](/docs/config.md)) so a dev instance can spend fewer requests on a paid fee or fiat-rates
+provider.
+Generated dev Blockbook services include `-prof=:<blockbook_internal + 20000>` automatically, while generated prod
+services do not include `-prof`.
+
+**Because the default is `dev`, a package intended for production must be built with `BB_BUILD_ENV=prod`.** The
+`Build / Deploy` workflow already does this: `mode=build` passes its `env` input through, and `mode=deploy` (dev-only)
+pins `dev`.
+
+`BB_DEV_RPC_URL_HTTP_<coin alias>` / `BB_PROD_RPC_URL_HTTP_<coin alias>`: Override `ipc.rpc_url_template` while generating
+package definitions so you can target hosted HTTP RPC endpoints without editing coin JSON. The root `Makefile` forwards
+`BB_BUILD_ENV` and any `BB_DEV_RPC_URL_*` / `BB_PROD_RPC_URL_*` variables into the Docker build/test containers.
+Resolution prefers the exact alias and also accepts archive variants such as `<alias>_archive` and, for names like Polygon,
+`<prefix>_archive_<suffix>`.
+
+`BB_DEV_RPC_URL_WS_<coin alias>` / `BB_PROD_RPC_URL_WS_<coin alias>`: Override `ipc.rpc_url_ws_template` for WebSocket
+subscriptions. The selected value should point to the same host as the selected HTTP RPC override and follows the same
+fallback resolution.
+
+`BB_DEV_MQ_URL_<coin alias>` / `BB_PROD_MQ_URL_<coin alias>`: Override `ipc.message_queue_binding_template` during
+package/config generation. The value is used as-is and should be a full MQ endpoint such as
+`tcp://backend_hostname:28332`. The root `Makefile` forwards these variables into the Docker build/test containers and
+the same alias/archive fallback resolution applies.
+
+Example:
+`BB_BUILD_ENV=prod BB_PROD_RPC_URL_HTTP_ethereum=http://backend_hostname:1234 BB_PROD_RPC_URL_WS_ethereum_archive=ws://backend_hostname:1234 make deb-ethereum_archive`.
+
+`BB_RPC_BIND_HOST_<coin alias>`: Overrides backend RPC bind host during package generation. Defaults to `127.0.0.1`
+to avoid unintended exposure. Example: `BB_RPC_BIND_HOST_ethereum=0.0.0.0 make deb-ethereum`.
+
+`BB_RPC_ALLOW_IP_<coin alias>`: Overrides backend RPC allow list for UTXO configs (e.g. `rpcallowip`). Defaults to
+`127.0.0.1` so binding to `0.0.0.0` does not implicitly open access. Example:
+`BB_RPC_ALLOW_IP_bitcoin=10.0.0.0/24 make deb-bitcoin`.
 
 ### Naming conventions and versioning
 
@@ -206,19 +245,21 @@ make command to create a portable binary.
 
 ```
 sudo apt-get update && sudo apt-get install -y \
-    build-essential git wget pkg-config libzmq3-dev libgflags-dev libsnappy-dev zlib1g-dev libzstd-dev  libbz2-dev liblz4-dev
+    build-essential git wget pkg-config libzmq3-dev libgflags-dev libsnappy-dev zlib1g-dev libzstd-dev  libbz2-dev liblz4-dev libjemalloc-dev
 git clone https://github.com/facebook/rocksdb.git
 cd rocksdb
-git checkout v7.5.3
-CFLAGS=-fPIC CXXFLAGS=-fPIC make release
+git checkout v9.10.0
+CFLAGS=-fPIC CXXFLAGS="-fPIC -Wno-error=array-bounds" make release
 ```
 
 Setup variables for grocksdb
 
 ```
 export CGO_CFLAGS="-I/path/to/rocksdb/include"
-export CGO_LDFLAGS="-L/path/to/rocksdb -lrocksdb -lstdc++ -lm -lz -ldl -lbz2 -lsnappy -llz4 -lzstd"
+export CGO_LDFLAGS="-L/path/to/rocksdb -lrocksdb -lstdc++ -lm -lz -ldl -lbz2 -lsnappy -llz4 -lzstd $(gcc -print-file-name=libjemalloc_pic.a)"
 ```
+
+The last argument links jemalloc statically as the C heap allocator (see `JEMALLOC` above); leave it out to use glibc malloc.
 
 Install ZeroMQ: https://github.com/zeromq/libzmq
 
@@ -258,7 +299,7 @@ Example for Bitcoin:
 ./blockbook -sync -blockchaincfg=build/blockchaincfg.json -internal=:9030 -public=:9130 -certfile=server/testcert -logtostderr
 ```
 
-This command starts Blockbook with parallel synchronization and providing HTTP and Socket.IO interface, with database
+This command starts Blockbook with parallel synchronization and providing HTTP API and WebSocket interfaces, with database
 in local directory *data* and established ZeroMQ and RPC connections to back-end daemon specified in configuration
 file passed to *-blockchaincfg* option.
 

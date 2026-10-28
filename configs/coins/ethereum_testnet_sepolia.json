@@ -15,20 +15,21 @@
         "blockbook_public": 19176
     },
     "ipc": {
-        "rpc_url_template": "ws://127.0.0.1:{{.Ports.BackendRPC}}",
+        "rpc_url_template": "http://127.0.0.1:{{.Ports.BackendRPC}}",
+        "rpc_url_ws_template": "ws://127.0.0.1:{{.Ports.BackendRPC}}",
         "rpc_timeout": 25
     },
     "backend": {
         "package_name": "backend-ethereum-testnet-sepolia",
         "package_revision": "satoshilabs-1",
         "system_user": "ethereum",
-        "version": "3.0.3",
-        "binary_url": "https://github.com/erigontech/erigon/releases/download/v3.0.3/erigon_v3.0.3_linux_amd64.tar.gz",
+        "version": "3.7.0",
+        "binary_url": "https://github.com/erigontech/erigon/releases/download/v3.7.0/erigon_v3.7.0_linux_amd64.tar.gz",
         "verification_type": "sha256",
-        "verification_source": "39c0063727151bac6b30d9cd16afb97b93c1f371d6a1d85d491eddd38a3fb01f",
+        "verification_source": "fca0a2de71892917a5bfafe387d541b3bf36957b2160e34f421c9c585f0fc108",
         "extract_command": "tar -C backend --strip-components=1 -xf",
         "exclude_files": [],
-        "exec_command_template": "/bin/sh -c '{{.Env.BackendInstallPath}}/{{.Coin.Alias}}/erigon --chain sepolia --snap.keepblocks --db.size.limit 15TB --db.pagesize 16KB --prune.mode full --externalcl --nat none --datadir {{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend/erigon --port {{.Ports.BackendP2P}} --ws --ws.port {{.Ports.BackendRPC}} --http --http.port {{.Ports.BackendRPC}} --http.addr 127.0.0.1 --http.corsdomain \"*\" --http.vhosts \"*\" --http.api \"eth,net,web3,debug,txpool\" --authrpc.port {{.Ports.BackendAuthRpc}} --private.api.addr \"\" --torrent.port {{.Ports.BackendHttp}} --log.dir.path {{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend --log.dir.prefix {{.Coin.Alias}}'",
+        "exec_command_template": "/bin/sh -c '{{.Env.BackendInstallPath}}/{{.Coin.Alias}}/erigon --chain sepolia --snap.keepblocks --db.size.limit 15TB --db.pagesize 16KB --prune.mode full --externalcl --nat none --datadir {{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend/erigon --port {{.Ports.BackendP2P}} --discovery.v4 --ws --ws.port {{.Ports.BackendRPC}} --http --http.port {{.Ports.BackendRPC}} --http.addr {{.Env.RPCBindHost}} --http.corsdomain \"*\" --http.vhosts \"*\" --http.api \"eth,net,web3,debug,txpool\" --rpc.logs.maxresults 200000 --authrpc.port {{.Ports.BackendAuthRpc}} --private.api.addr \"\" --torrent.port {{.Ports.BackendHttp}} --log.dir.path {{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend --log.dir.prefix {{.Coin.Alias}}'",
         "logrotate_files_template": "{{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend/{{.Coin.Alias}}.log",
         "postinst_script_template": "",
         "service_type": "simple",
@@ -39,8 +40,8 @@
         "client_config_file": "",
         "platforms": {
             "arm64": {
-                "binary_url": "https://github.com/erigontech/erigon/releases/download/v3.0.3/erigon_v3.0.3_linux_arm64.tar.gz",
-                "verification_source": "9d19484f4c10a810bb030c2d26f555719eea043d4f1a23127257f0ce6849bc00"
+                "binary_url": "https://github.com/erigontech/erigon/releases/download/v3.7.0/erigon_v3.7.0_linux_arm64.tar.gz",
+                "verification_source": "57ec92d0e68fbfb2436dab9c4c6af830a47f47fa29c2f20fafa0adbe67c8d25b"
             }
         }
     },
@@ -57,6 +58,7 @@
             "mempool_sub_workers": 2,
             "block_addresses_to_keep": 3000,
             "additional_params": {
+                "averageBlockTimeMs": 12000,
                 "consensusNodeVersion": "http://localhost:17576/eth/v1/node/version",
                 "eip1559Fees": true,
                 "mempoolTxTimeoutHours": 12,

@@ -1,11 +1,21 @@
 SHELL = /bin/bash
 VERSION ?= devel
-GITCOMMIT = $(shell cd /src && git config --global --add safe.directory /src && git describe --always --dirty)
+GITCOMMIT ?= $(shell git -c safe.directory=/src -C /src rev-parse HEAD)$(shell test -z "$$(git -c safe.directory=/src -C /src status --porcelain --untracked-files=normal)" || printf '%s' -dirty)
 BUILDTIME = $(shell date --iso-8601=seconds)
 LDFLAGS := -X github.com/trezor/blockbook/common.version=$(VERSION) -X github.com/trezor/blockbook/common.gitcommit=$(GITCOMMIT) -X github.com/trezor/blockbook/common.buildtime=$(BUILDTIME)
 BLOCKBOOK_BASE := $(GOPATH)/src/github.com/trezor
 BLOCKBOOK_SRC := $(BLOCKBOOK_BASE)/blockbook
 ARGS ?=
+
+# JEMALLOC is set by the image build arg. The static archive goes in by path because cgo's linker-flag
+# allowlist rejects -l:libjemalloc_pic.a; gcc resolves the multiarch directory.
+ifneq ($(JEMALLOC),0)
+JEMALLOC_LIB := $(shell gcc -print-file-name=libjemalloc_pic.a)
+ifeq ($(JEMALLOC_LIB),libjemalloc_pic.a)
+$(error libjemalloc_pic.a not found; install libjemalloc-dev or build the image with JEMALLOC=0)
+endif
+export CGO_LDFLAGS := $(CGO_LDFLAGS) $(JEMALLOC_LIB)
+endif
 
 all: build tools
 
@@ -27,10 +37,23 @@ test: prepare-sources
 	cd $(BLOCKBOOK_SRC) && go test -tags 'unittest' `go list ./... | grep -vP '^github.com/trezor/blockbook/(contrib|tests)'` $(ARGS)
 
 test-integration: prepare-sources
-	cd $(BLOCKBOOK_SRC) && go test -tags 'integration' `go list github.com/trezor/blockbook/tests/...` $(ARGS)
+	cd $(BLOCKBOOK_SRC) && go test -tags 'integration' `go list github.com/trezor/blockbook/tests/...` -run 'TestIntegration/.*/(rpc|sync)' -timeout 30m $(ARGS)
+
+test-e2e: prepare-sources
+	@echo "Go API e2e tests were removed. Run contrib/tests/run-openapi-tests.sh from the repository root."
+	@false
+
+test-connectivity: prepare-sources
+	cd $(BLOCKBOOK_SRC) && go test -tags 'integration' github.com/trezor/blockbook/tests -run "$${CONNECTIVITY_REGEX:-TestIntegration/.*/connectivity}" -timeout 3m $(ARGS)
 
 test-all: prepare-sources
-	cd $(BLOCKBOOK_SRC) && go test -tags 'unittest integration' `go list ./... | grep -v '^github.com/trezor/blockbook/contrib'` $(ARGS)
+	cd $(BLOCKBOOK_SRC) && go test -tags 'unittest integration' `go list ./... | grep -v '^github.com/trezor/blockbook/contrib'` -timeout 30m $(ARGS)
+
+# Regenerates blockbook-api.ts from the Go structs and hands it back to the mounted checkout.
+typescriptify: prepare-sources
+	cd $(BLOCKBOOK_SRC) && go run ./build/tools/typescriptify
+	cp $(BLOCKBOOK_SRC)/blockbook-api.ts /src/blockbook-api.ts
+	chown $(PACKAGER) /src/blockbook-api.ts
 
 prepare-sources:
 	@ [ -n "`ls /src 2> /dev/null`" ] || (echo "/src doesn't exist or is empty" 1>&2 && exit 1)

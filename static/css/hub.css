@@ -1,0 +1,2270 @@
+/*
+ * Ecosystem Hub stylesheet. Loads after main.css; upstream class names keep working.
+ *
+ * Flux ecosystem branding. Every color is from an official palette:
+ *   Flux Brand Book: Blue Wave #2B61D1, shades #4F7AD4 #86A1DA #2D2D2D #717171, black, white.
+ *   Product accents arrive per tile from the dashboard feed (--tile-accent, validated #RRGGBB).
+ * Hairlines and shadows are palette black, #2D2D2D or white at low alpha. There is no success
+ * or error color: statuses use text, and amounts use their sign.
+ *
+ * Fonts are self-hosted from static/fonts/ (no third-party font hosts):
+ *   Montserrat, headings (SIL OFL 1.1, see fonts/montserrat/OFL.txt) from @fontsource/montserrat 5.3.0
+ *   Open Sans, body (SIL OFL 1.1, see fonts/open-sans/OFL.txt) from @fontsource/open-sans 5.3.0
+ *   Roboto Mono, hashes and amounts (SIL OFL 1.1, see fonts/roboto-mono/LICENSE) from @fontsource/roboto-mono 5.3.0
+ *
+ * Public classes: .hub-page, .hub-band, .hub-band-home, .hub-nav, .hub-search, .hub-figures,
+ * .hub-products, .hub-product, .hub-powered, .hub-layout, .hub-card, .hub-aside, .hub-campaign,
+ * .hub-zelcore-prompt, .hub-tabs, .hub-stat-grid, .hub-explorers, .hub-explorer, .hub-articles,
+ * .hub-footer, .hub-footer-explorers, .hub-mono,
+ * .hub-scroll, .hub-ellipsis, .hub-summary, .hub-badge, .hub-copy, .hub-section-head, .hub-raw,
+ * .hub-io-label. Parts used inside them are named .hub-<block>-<part> (for example .hub-brand,
+ * .hub-mark, .hub-label) and are listed with their block below.
+ *
+ * Copy buttons are <button type="button" class="hub-copy" data-copy="..."> handled in main.js.
+ *
+ * Tables inside .hub-card must sit in a .hub-scroll wrapper. .hub-card sets
+ * overflow-wrap: anywhere for long strings; .hub-scroll resets it so table cells keep their
+ * width and the table scrolls inside its own box instead of breaking per character.
+ *
+ * The cascade order matters: build hub.min.N.css and main.min.N.css with csso --no-restructure,
+ * which minifies without merging or reordering rules (main.js changeCSSStyle edits the
+ * .prim-amt / .sec-amt rules by exact selector, so they must stay separate rules). Build commands (run from the repo root;
+ * the perl step restores the \XXXX escapes that csso decodes to UTF-8):
+ *   npx csso-cli@4.0.2 static/css/hub.css --no-restructure -o /tmp/hub.css
+ *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/hub.css > static/css/hub.min.10.css
+ *   npx csso-cli@4.0.2 static/css/main.css --no-restructure -o /tmp/main.css
+ *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/main.css > static/css/main.min.10.css
+ *   npx terser@5.51.2 static/js/main.js -c -m -o static/js/main.min.10.js
+ *
+ * Links: .hub-page colors plain anchors only. Bootstrap .btn and .nav-link anchors on
+ * upstream pages keep their own colors.
+ */
+
+/* ---------- Fonts ---------- */
+
+@font-face {
+    font-family: "Montserrat";
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url("../fonts/montserrat/montserrat-latin-600-normal.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Montserrat";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url("../fonts/montserrat/montserrat-latin-700-normal.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Montserrat";
+    font-style: normal;
+    font-weight: 800;
+    font-display: swap;
+    src: url("../fonts/montserrat/montserrat-latin-800-normal.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Open Sans";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("../fonts/open-sans/open-sans-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Open Sans";
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url("../fonts/open-sans/open-sans-latin-600-normal.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Open Sans";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url("../fonts/open-sans/open-sans-latin-700-normal.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Roboto Mono";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("../fonts/roboto-mono/roboto-mono-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Roboto Mono";
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url("../fonts/roboto-mono/roboto-mono-latin-500-normal.woff2") format("woff2");
+}
+
+/* ---------- Tokens ---------- */
+
+:root {
+    --hub-blue: #2B61D1;
+    --hub-ink: #000000;
+    --hub-muted: #717171;
+    --hub-surface: #FFFFFF;
+    --hub-ground: #FFFFFF;
+    --hub-link: #2B61D1;
+    --hub-link-hover: #000000;
+    --hub-text-2: #2D2D2D;
+    --hub-text-3: #2D2D2D;
+    --hub-line: rgba(45, 45, 45, 0.14);
+    --hub-line-soft: rgba(45, 45, 45, 0.08);
+    --hub-line-strong: rgba(45, 45, 45, 0.3);
+    --hub-control-border: #717171;
+    --hub-placeholder: #86A1DA;
+    --hub-footer-bg: #2D2D2D;
+    --hub-footer-text: #86A1DA;
+    --hub-radius: 18px;
+    --hub-radius-sm: 12px;
+    --hub-max: 1200px;
+    --hub-gutter: 24px;
+    --hub-font: "Open Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+    --hub-font-heading: "Montserrat", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+    --hub-font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (max-width: 575.98px) {
+    :root {
+        --hub-gutter: 16px;
+    }
+}
+
+/* ---------- Page ---------- */
+
+.hub-page {
+    background: var(--hub-ground);
+    color: var(--hub-ink);
+}
+
+/* :where() keeps the specificity at (0,1,1) / (0,2,1) so the block rules below still win. */
+.hub-page a:where(:not(.btn, .nav-link)) {
+    color: var(--hub-link);
+}
+
+.hub-page a:where(:not(.btn, .nav-link)):hover {
+    color: var(--hub-link-hover);
+}
+
+.hub-mono,
+.hub-mono * {
+    font-family: var(--hub-font-mono);
+}
+
+/* Headings use Montserrat. main.css sets the body font on every element (*), so descendants are
+   listed too. :where() keeps this at zero specificity: it beats * only by coming later, and
+   .hub-mono inside a heading still wins. */
+:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-explorer-icon, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary),
+:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-explorer-icon, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary) * {
+    font-family: var(--hub-font-heading);
+}
+
+.hub-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--hub-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+/* ---------- Band (header) ---------- */
+
+.hub-band {
+    background: var(--hub-band, #2B61D1);
+    color: #FFFFFF;
+}
+
+.hub-band a,
+.hub-band a:hover {
+    color: #FFFFFF;
+}
+
+.hub-nav {
+    max-width: var(--hub-max);
+    margin: 0 auto;
+    padding: 6px var(--hub-gutter);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 20px;
+    font-size: 14px;
+}
+
+.hub-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    min-width: 0;
+    font-weight: 800;
+    font-size: 18px;
+    overflow-wrap: anywhere;
+}
+
+.hub-mark {
+    flex: none;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #FFFFFF;
+    color: var(--hub-band, #2B61D1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 800;
+    overflow: hidden;
+}
+
+.hub-mark img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+/* "Powered by Flux" next to the brand, with the Flux symbol from the feed when it has one. */
+.hub-powered {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.hub-powered::before {
+    content: "";
+    flex: none;
+    width: 1px;
+    height: 24px;
+    margin-right: 8px;
+    background: #FFFFFF;
+}
+
+/* The feed's symbol sits on a white disc, like the coin mark, so a blue-disc logo stays visible on
+   a blue band. The logo itself is never recoloured. */
+.hub-powered-mark {
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: #FFFFFF;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.hub-powered-mark img {
+    display: block;
+    width: 22px;
+    height: 22px;
+    object-fit: contain;
+}
+
+/* D: on phones the Flux link shrinks to its symbol at the end of the brand row (the link keeps its
+   name in aria-label). Without a symbol from the feed the text stays. */
+@media (max-width: 575.98px) {
+    .hub-powered {
+        margin-left: auto;
+        min-width: 44px;
+        justify-content: center;
+    }
+
+    .hub-powered:has(.hub-powered-mark) .hub-powered-text {
+        display: none;
+    }
+}
+
+.hub-nav-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 20px;
+    font-weight: 600;
+}
+
+.hub-nav-links a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+}
+
+.hub-nav-end {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+/* D: currency switch. main.css styles it for the old white header (#header .bb-group, grey box
+   with a 0.6rem border); on the band it gets the hub radius and 44px targets on touch. */
+.hub-nav-end .bb-group {
+    border-width: 3px;
+    border-radius: var(--hub-radius-sm);
+}
+
+.hub-nav-end .bb-group > .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    --bs-btn-border-radius: 9px;
+}
+
+@media (pointer: coarse) {
+    .hub-nav-end .bb-group > .btn {
+        min-width: 44px;
+        min-height: 44px;
+    }
+}
+
+/* The dropdown toggle's padding-right: 0 (main.css) leaves the caret glued to the edge. */
+.hub-nav-end #header .btn.dropdown-toggle {
+    padding-right: var(--bs-btn-padding-x);
+}
+
+/* The currency menu: a hub card with roomy links, three columns on phones (col-4) and four from
+   576px (col-sm-3). Its height is capped so it fits a landscape phone; the rest scrolls. */
+.hub-nav-end #header .dropdown-menu {
+    --bs-dropdown-min-width: 16rem;
+    max-height: max(200px, calc(100vh - 160px));
+    max-height: max(200px, calc(100dvh - 160px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    margin: 0;
+    padding: 6px;
+    border: 1px solid var(--hub-line);
+    border-radius: var(--hub-radius-sm);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.hub-nav-end #header .dropdown-menu > div {
+    padding: 0;
+}
+
+.hub-nav-end #header .dropdown-menu a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 36px;
+    border-radius: 8px;
+    color: var(--hub-ink);
+    font-size: 14px;
+}
+
+.hub-nav-end #header .dropdown-menu a.active {
+    background: var(--hub-line-soft);
+    color: var(--hub-link);
+    font-weight: 700;
+}
+
+@media (pointer: coarse) {
+    .hub-nav-end #header .dropdown-menu a {
+        min-height: 44px;
+    }
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .hub-nav-end #header .dropdown-menu a:hover {
+        background: var(--hub-line-soft);
+        color: var(--hub-link-hover);
+    }
+}
+
+.hub-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 16px;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    border-radius: 999px;
+    background: transparent;
+    color: #FFFFFF;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+/* Inner pages: compact search sits in the nav row. */
+.hub-nav .hub-search {
+    flex: 0 1 420px;
+    margin-left: auto;
+    border-radius: 10px;
+    padding: 0;
+}
+
+.hub-nav .hub-search input {
+    height: 44px;
+    font-size: 14px;
+}
+
+/* D: below 992px the currency switch joins the nav links' row and the inner-page search takes the
+   next row, left-aligned and growing to the full width (P14). On phones the links share their row
+   with the switch and wrap inside the space left (P1); the brand fills the first row so the links always start a new one. */
+@media (max-width: 991.98px) {
+    .hub-nav-end {
+        order: 1;
+    }
+
+    .hub-nav .hub-search {
+        order: 2;
+        flex: 1 1 100%;
+        margin-left: 0;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .hub-brand {
+        flex: 1 1 calc(100% - 64px);
+    }
+
+    .hub-nav-links {
+        flex: 1 1 0;
+        min-width: 0;
+        gap: 0 16px;
+    }
+}
+
+/* ---------- Search ---------- */
+
+.hub-search {
+    display: flex;
+    min-width: 0;
+    background: #FFFFFF;
+    border-radius: 14px;
+    padding: 6px;
+}
+
+.hub-search input {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 50px;
+    border: 0;
+    border-radius: 10px;
+    padding: 0 16px;
+    background: #FFFFFF;
+    color: var(--hub-ink);
+    font-family: var(--hub-font);
+    font-size: 16px;
+}
+
+.hub-search input::placeholder {
+    color: var(--hub-muted);
+    opacity: 1;
+}
+
+/* D: the input and its short hint. Below 576px the long placeholder is made transparent (it stays
+   in the markup for assistive tech and wider screens) and the shorter hint shows in its place while
+   the field is empty. */
+.hub-search-field {
+    position: relative;
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.hub-search-hint {
+    display: none;
+}
+
+@media (max-width: 575.98px) {
+    .hub-search input::placeholder {
+        color: transparent;
+    }
+
+    .hub-search-field input:placeholder-shown + .hub-search-hint {
+        display: block;
+        position: absolute;
+        top: 50%;
+        left: 16px;
+        right: 16px;
+        transform: translateY(-50%);
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        color: var(--hub-muted);
+        font-size: 16px;
+        pointer-events: none;
+    }
+
+    .hub-nav .hub-search-field input:placeholder-shown + .hub-search-hint {
+        font-size: 14px;
+    }
+}
+
+.hub-search button {
+    flex: none;
+    min-height: 44px;
+    border: 0;
+    border-radius: 10px;
+    padding: 0 26px;
+    background: var(--hub-ink);
+    color: #FFFFFF;
+    font-family: var(--hub-font-heading);
+    font-weight: 700;
+    font-size: 15px;
+    cursor: pointer;
+}
+
+/* f: the primary form button (/sendtx), same look as the search button, 44px */
+.hub-btn {
+    min-height: 44px;
+    border: 0;
+    border-radius: 10px;
+    padding: 0 26px;
+    background: var(--hub-ink);
+    color: #FFFFFF;
+    font-family: var(--hub-font-heading);
+    font-weight: 700;
+    font-size: 15px;
+    cursor: pointer;
+}
+
+.hub-page .hub-btn:focus-visible {
+    outline: 2px solid var(--hub-link);
+    outline-offset: 2px;
+}
+
+/* ---------- Home band ---------- */
+
+.hub-band-home .hub-hero {
+    max-width: var(--hub-max);
+    margin: 0 auto;
+    padding: 44px var(--hub-gutter) 88px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 32px;
+}
+
+.hub-band-home .hub-hero-main {
+    flex: 1 1 520px;
+    min-width: 0;
+}
+
+.hub-band-home h1 {
+    margin: 0;
+    font-size: 44px;
+    line-height: 1.1;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    overflow-wrap: anywhere;
+}
+
+.hub-band-home .hub-search {
+    margin-top: 22px;
+}
+
+.hub-figures {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px 28px;
+    margin: 0;
+}
+
+.hub-figures > div {
+    min-width: 0;
+}
+
+.hub-figures dt,
+.hub-figure-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #FFFFFF;
+}
+
+/* D: one font for every figure, with tabular digits so the values do not jump as they update
+   (main.css sets the body font on every element, so the number spans are listed too). */
+.hub-figures dd,
+.hub-figure-value {
+    margin: 0;
+    font-family: var(--hub-font-heading);
+    font-size: 24px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #FFFFFF;
+    overflow-wrap: anywhere;
+}
+
+.hub-figures dd * {
+    font-family: inherit;
+}
+
+@media (max-width: 575.98px) {
+    .hub-band-home .hub-hero {
+        padding-top: 28px;
+        gap: 24px;
+    }
+
+    .hub-band-home h1 {
+        font-size: 30px;
+    }
+
+    .hub-search button {
+        padding: 0 16px;
+    }
+
+    .hub-figures dd,
+    .hub-figure-value {
+        font-size: 20px;
+    }
+}
+
+/* ---------- Product strip ---------- */
+
+.hub-products {
+    max-width: var(--hub-max);
+    margin: -56px auto 0;
+    padding: 0 var(--hub-gutter);
+}
+
+.hub-products-grid {
+    background: var(--hub-surface);
+    border-radius: var(--hub-radius);
+    padding: 20px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+.hub-products-title {
+    margin: 0 0 12px;
+    font-size: 16px;
+    font-weight: 800;
+}
+
+/* One row of every product that scrolls sideways, with no script. --strip-tile is the tile width:
+   about 1.2 tiles visible on phones, 2.2 on tablets, and on desktop exactly 4 when there are
+   4 or fewer, or 4 plus an 18% peek of the fifth when hub-products-scroll is set (5 or more).
+   The 4px side padding (cancelled by the negative margin) keeps tile focus rings inside the
+   scroll box. The strip is a focusable region, so arrow keys scroll it. The scrollbar is hidden
+   in every browser; swipe, wheel, keys and (with script) the ‹ › buttons still scroll it. */
+.hub-products-strip {
+    --strip-gap: 12px;
+    --strip-tile: calc((100% - var(--strip-gap)) / 1.2);
+    display: flex;
+    gap: var(--strip-gap);
+    margin: 0 -4px;
+    padding: 4px 4px 12px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 4px;
+    scrollbar-width: none;
+}
+
+.hub-products-strip > .hub-product {
+    flex: 0 0 var(--strip-tile);
+    scroll-snap-align: start;
+}
+
+.hub-products-strip::-webkit-scrollbar {
+    display: none;
+}
+
+.hub-page .hub-products-strip:focus-visible {
+    outline: 2px solid var(--hub-link);
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .hub-products-strip {
+        scroll-behavior: smooth;
+    }
+}
+
+@media (min-width: 576px) {
+    .hub-products-strip {
+        --strip-tile: calc((100% - 2 * var(--strip-gap)) / 2.2);
+    }
+}
+
+@media (min-width: 992px) {
+    .hub-products-strip {
+        --strip-tile: calc((100% - 3 * var(--strip-gap)) / 4);
+    }
+
+    .hub-products-strip.hub-products-scroll {
+        --strip-tile: calc((100% - 4 * var(--strip-gap)) / 4.18);
+    }
+}
+
+/* Carousel (main.js). Without script none of this applies and the strip above is the whole
+   behaviour. main.js wraps the strip in .hub-products-viewport and, only while the tiles do
+   not fit, adds .hub-products-carousel and the ‹ › buttons (.hub-products-nav, hidden
+   otherwise). Each tile appears once; the drift runs to the end and back. The script
+   moves scrollLeft itself, so snapping and CSS smooth scrolling are off while it runs; manual
+   swipe and wheel scrolling stay native. .hub-products-dragging is set during a mouse drag. */
+.hub-products-viewport {
+    position: relative;
+}
+
+.hub-products-strip.hub-products-carousel {
+    position: relative;
+    scroll-snap-type: none;
+    scroll-behavior: auto;
+}
+
+.hub-products-carousel.hub-products-dragging {
+    cursor: grabbing;
+    user-select: none;
+}
+
+.hub-products-nav {
+    position: absolute;
+    top: calc(50% - 6px);
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    margin-top: -18px;
+    padding: 0 0 3px;
+    border: 1px solid var(--hub-line-strong);
+    border-radius: 50%;
+    background: var(--hub-surface);
+    color: var(--hub-text-2);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    font: inherit;
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+}
+
+.hub-products-nav[hidden] {
+    display: none;
+}
+
+/* Half outside the strip, in the card's padding, so they cover little of a tile. */
+.hub-products-prev {
+    left: -18px;
+}
+
+.hub-products-next {
+    right: -18px;
+}
+
+/* With a mouse they show while the pointer is over the strip or focus is inside it. */
+@media (hover: hover) and (pointer: fine) {
+    .hub-products-nav {
+        opacity: 0;
+    }
+
+    .hub-products-viewport:hover .hub-products-nav,
+    .hub-products-viewport:focus-within .hub-products-nav {
+        opacity: 1;
+    }
+
+    /* f: hover colours only with a real hover, so a tap does not leave the border blue */
+    .hub-products-nav:hover {
+        border-color: var(--hub-blue);
+        color: var(--hub-blue);
+    }
+}
+
+/* f: pressed state, for every pointer */
+.hub-products-nav:active {
+    border-color: var(--hub-blue);
+    color: var(--hub-blue);
+}
+
+/* f: On touch main.js moves the pair into .hub-products-nav-pair, in the title row, right-aligned
+   (the card is the positioning box, the viewport is not), so they never sit on a tile. 44px, fully
+   opaque. .hub-products-nav-on is set on the card while the carousel is active; the title then
+   keeps clear of the pair. */
+@media (hover: none), (pointer: coarse) {
+    .hub-products-grid {
+        position: relative;
+    }
+
+    .hub-products-nav-on .hub-products-title {
+        display: flex;
+        align-items: center;
+        min-height: 44px;
+        margin-bottom: 8px;
+        padding-right: 104px;
+    }
+
+    .hub-products-nav-pair {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        z-index: 1;
+        display: flex;
+        gap: 8px;
+    }
+
+    /* the card's padding is 12px on phones (see Narrow screens below) */
+    @media (max-width: 575.98px) {
+        .hub-products-nav-pair {
+            top: 12px;
+            right: 12px;
+        }
+    }
+
+    .hub-products-nav-pair .hub-products-nav {
+        position: static;
+        flex: none;
+        width: 44px;
+        height: 44px;
+        margin: 0;
+        font-size: 28px;
+        opacity: 1;
+    }
+}
+
+/* f: edge fade while the carousel runs, so tiles do not end in a hard cut. It is dropped while
+   keyboard focus is inside, because the mask would clip the focus rings at the strip edge.
+   The 16px side padding keeps a resting tile (scrolled to its left edge) clear of the 14px fade;
+   only tiles moving in or out pass through it. */
+.hub-products-strip.hub-products-carousel {
+    padding-inline: 16px;
+    scroll-padding-inline: 16px;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+}
+
+.hub-products-strip.hub-products-carousel:focus-visible {
+    -webkit-mask-image: none;
+    mask-image: none;
+}
+
+.hub-products-strip.hub-products-carousel:has(:focus-visible) {
+    -webkit-mask-image: none;
+    mask-image: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .hub-products-nav {
+        transition: none;
+    }
+}
+
+.hub-product {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+    min-height: 132px;
+    padding: 16px;
+    border: 1px solid var(--hub-line);
+    border-top: 4px solid var(--tile-accent, #2B61D1);
+    border-radius: var(--hub-radius-sm);
+    background: var(--hub-surface);
+    color: var(--hub-ink);
+    overflow-wrap: anywhere;
+}
+
+.hub-page a.hub-product,
+.hub-page a.hub-product:hover {
+    color: var(--hub-ink);
+    text-decoration: none;
+}
+
+.hub-page a.hub-product:hover .hub-product-cta {
+    text-decoration: underline;
+}
+
+.hub-product-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.hub-product-icon {
+    flex: none;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: var(--tile-accent, #2B61D1);
+    color: #FFFFFF;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 800;
+    overflow: hidden;
+}
+
+.hub-product-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: var(--hub-surface);
+}
+
+/* White initials need 4.5:1 on the accent; an accent that fails (hub-product-outline) gets black. */
+.hub-product-outline .hub-product-icon {
+    color: #000000;
+}
+
+.hub-product-name {
+    min-width: 0;
+    font-weight: 800;
+    font-size: 16px;
+}
+
+.hub-product-tagline {
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--hub-text-2);
+}
+
+/* Filled in the accent with white text when that reaches 4.5:1 (Product.CTAFilled), otherwise
+   outlined in the accent with black text. */
+.hub-product-cta {
+    margin-top: auto;
+    align-self: flex-start;
+    padding: 8px 14px;
+    border: 2px solid var(--tile-accent, #2B61D1);
+    border-radius: 999px;
+    background: var(--tile-accent, #2B61D1);
+    color: #FFFFFF;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.hub-product-outline .hub-product-cta {
+    background: var(--hub-surface);
+    color: #000000;
+}
+
+@media (max-width: 575.98px) {
+    .hub-products-grid {
+        padding: 12px;
+    }
+
+    .hub-product {
+        min-height: 0;
+    }
+}
+
+/* ---------- Layout ---------- */
+
+.hub-layout {
+    max-width: var(--hub-max);
+    margin: 0 auto;
+    padding: 28px var(--hub-gutter);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 24px;
+}
+
+.hub-main {
+    flex: 999 1 560px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.hub-aside {
+    flex: 1 1 300px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.hub-card {
+    min-width: 0;
+    background: var(--hub-surface);
+    border: 1px solid var(--hub-line);
+    border-radius: var(--hub-radius);
+    padding: 20px;
+    color: var(--hub-ink);
+    overflow-wrap: anywhere;
+}
+
+.hub-card-flush {
+    padding: 0;
+    overflow: hidden;
+}
+
+.hub-card h2,
+.hub-card-title {
+    margin: 0 0 12px;
+    font-size: 16px;
+    font-weight: 800;
+}
+
+.hub-card-flush > h2,
+.hub-card-flush > .hub-card-title {
+    margin: 0;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--hub-line);
+}
+
+.hub-muted {
+    color: var(--hub-muted);
+}
+
+/* ---------- Campaign and Zelcore prompt ---------- */
+
+.hub-campaign {
+    display: block;
+    border: 1px solid var(--hub-line);
+    border-radius: var(--hub-radius);
+    overflow: hidden;
+    background: var(--hub-surface);
+    color: var(--hub-ink);
+    overflow-wrap: anywhere;
+}
+
+.hub-page a.hub-campaign,
+.hub-page a.hub-campaign:hover {
+    color: var(--hub-ink);
+    text-decoration: none;
+}
+
+/* height: auto lets aspect-ratio win over the img height attribute (kept to reserve space). */
+.hub-campaign img {
+    display: block;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 10;
+    object-fit: cover;
+    background: var(--hub-placeholder);
+}
+
+/* f: when the aside is full width (tablet) the image would be taller than the screen is useful */
+@media (min-width: 576px) and (max-width: 991.98px) {
+    .hub-campaign img {
+        max-height: 240px;
+    }
+}
+
+.hub-campaign-body {
+    padding: 16px 18px;
+}
+
+.hub-campaign-title {
+    margin-top: 4px;
+    font-size: 18px;
+    font-weight: 800;
+}
+
+.hub-campaign-text {
+    margin-top: 4px;
+    font-size: 14px;
+    color: var(--hub-text-3);
+}
+
+.hub-zelcore-prompt {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    padding: 16px;
+    border: 1px solid var(--hub-line);
+    border-left: 4px solid var(--tile-accent, #2B61D1);
+    border-radius: var(--hub-radius);
+    background: var(--hub-surface);
+    color: var(--hub-ink);
+    overflow-wrap: anywhere;
+}
+
+.hub-page a.hub-zelcore-prompt,
+.hub-page a.hub-zelcore-prompt:hover {
+    color: var(--hub-ink);
+    text-decoration: none;
+}
+
+.hub-zelcore-prompt .hub-product-icon {
+    width: 40px;
+    height: 40px;
+}
+
+.hub-zelcore-prompt-title {
+    display: block;
+    font-weight: 800;
+}
+
+.hub-zelcore-prompt-text {
+    font-size: 14px;
+    color: var(--hub-text-3);
+}
+
+/* ---------- Tabs ---------- */
+
+.hub-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--hub-line);
+}
+
+.hub-tabs a,
+.hub-tabs button,
+.hub-tab {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--hub-text-2);
+    font-family: var(--hub-font-heading);
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.hub-page .hub-tabs a {
+    color: var(--hub-text-2);
+}
+
+.hub-page .hub-tabs .active,
+.hub-page .hub-tabs [aria-selected="true"],
+.hub-page .hub-tabs [aria-current="page"] {
+    background: var(--hub-blue);
+    color: #FFFFFF;
+    font-weight: 700;
+}
+
+.hub-page .hub-tabs .hub-tabs-end {
+    margin-left: auto;
+    color: var(--hub-link);
+}
+
+/* ---------- Tables ---------- */
+
+.hub-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.hub-scroll table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.hub-scroll th {
+    padding: 12px 16px;
+    text-align: left;
+    color: var(--hub-muted);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.hub-scroll td {
+    padding: 14px 16px;
+    border-top: 1px solid var(--hub-line-soft);
+    color: var(--hub-text-3);
+}
+
+/* A long hash or txid cell takes the spare width and ends in an ellipsis instead of widening the table. */
+.hub-ellipsis {
+    max-width: 0;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* C: home Blocks / Transactions lists. The row's one link covers the whole row, so the empty half of
+   a row is a tap target too. The link keeps its own text and focus ring. */
+.hub-linkrows tr {
+    position: relative;
+}
+
+.hub-linkrows a::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+}
+
+.hub-linkrows a:focus-visible {
+    outline: 2px solid var(--hub-link);
+    outline-offset: -2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .hub-linkrows tr:hover {
+        background: var(--hub-line-soft);
+    }
+}
+
+/* A table scrolls inside .hub-scroll; its cells must not be broken per character. */
+.hub-card .hub-scroll {
+    overflow-wrap: normal;
+}
+
+/* Upstream info tables size their label column to its min-content (tbody is an inline-table) and
+   inherit overflow-wrap: anywhere from .data-table, so at phone width "Mined Time" broke per
+   character. Labels break between words only; values keep breaking anywhere. */
+.hub-card .info-table tr > td:first-child {
+    overflow-wrap: normal;
+}
+
+/* C: main.css sets overflow-wrap: anywhere on .data-table itself, which beats the .hub-scroll reset
+   above, so column headers broke per letter ("TIMEST / AMP"). Headers stay in one piece. */
+.hub-scroll th {
+    overflow-wrap: normal;
+    white-space: nowrap;
+}
+
+/* C: both info tables of a card (block page) and the tx Details table use one label width, so
+   "Mined Time" and "Total Input" stay on one line and the two stacked tables line up. A long
+   value (Merkle root, hash) wraps inside its cell instead of being cut at the card edge. */
+.hub-card .info-table tr > td:first-child {
+    width: 9rem;
+}
+
+.hub-card .info-table td.ellipsis {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+/* C: /blocks. Auto layout so columns size to their content; the hash column takes what is left and
+   ends in an ellipsis (.hub-ellipsis). Heights, times and counts never wrap. */
+.hub-table-fit {
+    table-layout: auto;
+}
+
+.hub-table-fit th,
+.hub-table-fit td {
+    white-space: nowrap;
+    overflow-wrap: normal;
+}
+
+.hub-th-short {
+    display: none;
+}
+
+@media (max-width: 575.98px) {
+    /* Every block hash starts with the same zeros and the height links to the block, so phones drop the column. */
+    .hub-col-hash {
+        display: none;
+    }
+
+    .hub-th-full {
+        display: none;
+    }
+
+    .hub-th-short {
+        display: inline;
+    }
+
+    .hub-table-fit.table > :not(caption) > * > * {
+        padding-left: 8px;
+        padding-right: 8px;
+    }
+
+    .hub-table-fit.table > :not(caption) > * > :first-child {
+        padding-left: 16px;
+    }
+
+    .hub-table-fit.table > :not(caption) > * > :last-child {
+        padding-right: 16px;
+    }
+}
+
+.hub-pager {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--hub-line);
+    font-size: 14px;
+}
+
+.hub-pager a,
+.hub-pager span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 14px;
+    border-radius: 8px;
+}
+
+.hub-pager .active,
+.hub-pager [aria-current="page"] {
+    background: var(--hub-blue);
+    color: #FFFFFF;
+}
+
+/* Beats .hub-page a:hover (0,2,1) so an active page link stays white on Blue Wave. */
+.hub-page .hub-pager .active,
+.hub-page .hub-pager .active:hover,
+.hub-page .hub-pager [aria-current="page"],
+.hub-page .hub-pager [aria-current="page"]:hover {
+    color: #FFFFFF;
+}
+
+/* ---------- Stat grid ---------- */
+
+.hub-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+    gap: 16px;
+    margin: 0;
+}
+
+.hub-stat-grid > div {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.hub-stat-grid dt,
+.hub-stat-label {
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--hub-muted);
+}
+
+.hub-stat-grid dd,
+.hub-stat-value {
+    margin: 2px 0 0;
+    font-family: var(--hub-font-mono);
+    font-size: 20px;
+    font-weight: 500;
+    color: var(--hub-ink);
+}
+
+/* C: a bare text node in a <dd> is set in the mono face, where the space before a unit ("253 B")
+   is a full-width gap. Wrapping the value in .hub-stat-num sets it like the amounts beside it. */
+.hub-stat-grid .hub-stat-num {
+    font-family: var(--hub-font);
+}
+
+/* f: the node version string ("/Name:1.2.3/") stays in one piece; only when even that cannot fit does it break.
+   Below 705px (where the three cells of the full-width aside are narrower than the string) it gets a row of its own.
+   The difficulty ("67355.1597271 / 2303" on multi-algo coins) gets the same, so it breaks at the slash, not mid-number. */
+.hub-stat-grid dd.hub-stat-node,
+.hub-stat-grid dd.hub-stat-long {
+    overflow-wrap: break-word;
+    font-size: 16px;
+}
+
+@media (max-width: 704.98px) {
+    .hub-stat-grid > .hub-stat-wide {
+        grid-column: 1 / -1;
+    }
+}
+
+.hub-stat-note,
+.hub-stat-grid .hub-stat-note {
+    font-family: var(--hub-font);
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--hub-muted);
+}
+
+/* ---------- Inner pages (transaction, address, block, lists) ---------- */
+/* Parts: .hub-summary-main, .hub-summary-title, .hub-summary-id, .hub-summary-height, .hub-summary-qr,
+ * .hub-title-row, .hub-title-end, .hub-id-row, .hub-badge-ok, .hub-badge-warn, .hub-copy-text, .hub-copied,
+ * .hub-balance, .hub-balance-value, .hub-balance-secondary, .hub-filter, .hub-raw-body, .hub-card-links,
+ * .hub-error-text. */
+
+.hub-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px 24px;
+}
+
+.hub-summary-main {
+    flex: 1 1 320px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.hub-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+}
+
+.hub-title-row h1,
+.hub-summary-title,
+.hub-section-head h1,
+.hub-card > h1 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 800;
+    color: var(--hub-ink);
+}
+
+.hub-card > h1 {
+    margin-bottom: 12px;
+}
+
+.hub-title-end {
+    margin-left: auto;
+    flex-wrap: wrap;
+    gap: 8px 0;
+}
+
+.hub-summary-id {
+    font-size: 15px;
+    color: var(--hub-text-2);
+}
+
+.hub-summary-height {
+    font-size: 20px;
+    font-weight: 500;
+}
+
+.hub-id-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.hub-id-row .hub-summary-id {
+    min-width: 0;
+}
+
+/* Statuses are read from their text, not a color: ok has a Blue Wave outline, warn a dark one. */
+.hub-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border: 1px solid var(--hub-line-strong);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--hub-text-2);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.hub-badge-ok {
+    border-color: var(--hub-blue);
+    color: var(--hub-ink);
+}
+
+.hub-badge-warn {
+    border-color: var(--hub-text-2);
+    color: var(--hub-ink);
+}
+
+/* f: /status. Two cards side by side on wide screens; bootstrap badges (TRUE) are 12px */
+.hub-status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+    gap: 20px;
+    align-items: start;
+}
+
+.hub-card .badge {
+    font-size: 12px;
+}
+
+.hub-copy {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 10px;
+    border: 1px solid var(--hub-control-border);
+    border-radius: 10px;
+    background: var(--hub-surface);
+    color: var(--hub-text-2);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.hub-copy:hover {
+    background: var(--hub-line-soft);
+}
+
+.hub-copy svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+}
+
+.hub-copy.hub-copied {
+    border-color: var(--hub-blue);
+    color: var(--hub-blue);
+}
+
+.hub-balance {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 16px;
+}
+
+.hub-balance-value {
+    font-family: var(--hub-font-mono);
+    font-size: 28px;
+    font-weight: 500;
+    color: var(--hub-ink);
+}
+
+.hub-balance-secondary {
+    font-size: 15px;
+    color: var(--hub-muted);
+}
+
+.hub-summary-qr {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.hub-section-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 16px;
+    margin-bottom: 12px;
+}
+
+.hub-section-head h2 {
+    margin: 0;
+}
+
+.hub-section-head p {
+    margin: 4px 0 0;
+}
+
+.hub-section-head .paging {
+    margin-left: auto;
+}
+
+.hub-card-flush > .hub-section-head {
+    margin: 0;
+    padding: 16px 20px;
+}
+
+.hub-filter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.hub-filter select {
+    min-width: 0;
+    max-width: 100%;
+    min-height: 44px;
+    padding: 0 10px;
+    border: 1px solid var(--hub-control-border);
+    border-radius: 10px;
+    background: var(--hub-surface);
+    color: var(--hub-ink);
+}
+
+/* Upstream pagers wrap inside a card instead of widening the page at phone width. */
+.hub-card .paging {
+    flex-wrap: wrap;
+    gap: 8px 0;
+    max-width: 100%;
+}
+
+.hub-card .paging-group {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.hub-card .paging .bb-group {
+    flex-wrap: wrap;
+}
+
+/* C: the pager's Previous / Next show a word on wide screens and an arrow on phones; the link keeps
+   its aria-label either way. */
+.hub-pg-arrow {
+    display: none;
+    font-size: 24px;
+    font-weight: 400;
+    line-height: 1;
+}
+
+/* C: pager buttons need a darker label than upstream's #757575 on #f6f6f6 (4.3:1). */
+.hub-card .btn-paging {
+    --bs-btn-color: #595959;
+}
+
+@media (max-width: 575.98px) {
+    /* The pager is one full-width line under the title: ‹ current ±1 … last ›. */
+    .hub-section-head .paging,
+    .hub-card .paging {
+        flex-wrap: nowrap;
+        justify-content: space-between !important;
+        align-items: center;
+        gap: 0;
+        width: 100%;
+        margin-left: 0;
+    }
+
+    .hub-card .paging .hub-pg-step {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        min-width: 44px;
+        min-height: 44px;
+        padding: 0;
+    }
+
+    .hub-pg-text {
+        display: none;
+    }
+
+    .hub-pg-arrow {
+        display: inline;
+    }
+
+    .hub-card .paging .paging-group {
+        flex: 0 1 auto;
+        margin-left: 6px !important;
+        margin-right: 6px !important;
+    }
+
+    .hub-card .paging .bb-group {
+        flex-wrap: nowrap;
+        align-items: center;
+        border-width: 0 3px;
+    }
+
+    .hub-card .paging-group > .bb-group {
+        border-width: 0 3px;
+    }
+
+    .hub-card .paging .bb-group > .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 38px;
+        min-height: 44px;
+        margin: 0;
+        --bs-btn-padding-x: 6px;
+    }
+
+    .hub-pg-gap {
+        padding: 0 4px;
+    }
+
+    /* Far pages go, except the last one; the gap after "1" goes with it. */
+    .hub-pg-far:not(:last-child),
+    .hub-pg-gap:nth-child(2) {
+        display: none !important;
+    }
+
+    /* Four or more digits: only the current page and the last one fit beside the arrows. */
+    .hub-pg-wide .hub-pg-near {
+        display: none !important;
+    }
+}
+
+/* Upstream tables keep their classes; inside a card they drop their outer margins. */
+.hub-card .data-table {
+    width: 100%;
+    margin: 0;
+}
+
+.hub-card-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+    padding: 12px 20px 16px;
+}
+
+.hub-card > .paging:last-child {
+    margin-top: 12px;
+}
+
+.hub-card-flush > .paging:last-child {
+    margin: 0;
+    padding: 0 20px 16px;
+}
+
+.hub-io-label {
+    margin: 12px 0 6px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--hub-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.hub-card .tx-detail {
+    width: 100%;
+    margin-left: 0;
+    box-shadow: none;
+    border: 1px solid var(--hub-line);
+    background: var(--hub-ground);
+    color: var(--hub-text-3);
+}
+
+.hub-card .tx-detail .ellipsis {
+    font-family: var(--hub-font-mono);
+}
+
+/* C: small print inside cards ("(20.00 sat/vByte)") stays at 12 px, and the three upstream colours
+   below 4.5:1 are darkened: the unspent marker (3.1), the outpoint arrow (4.4). The arrow also
+   gets a 32 px target. */
+.hub-card .small,
+.hub-card small {
+    font-size: max(12px, 0.875em);
+}
+
+.hub-card .unspent {
+    color: #1e7e34 !important;
+}
+
+.hub-card .outpoint {
+    color: #595959 !important;
+    min-width: 32px;
+    min-height: 32px;
+    line-height: 32px;
+    text-align: center;
+}
+
+/* e: on phones the card-in-card doubled the side padding (about 56px) and forced the addresses to
+   truncate early: the inner box loses its frame and side padding, a hairline separates transactions. */
+@media (max-width: 575.98px) {
+    .hub-card .tx-detail {
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+    }
+
+    .hub-card .tx-detail + .tx-detail {
+        margin-top: 0;
+        border-top: 1px solid var(--hub-line);
+    }
+
+    .hub-card .tx-detail > .head,
+    .hub-card .tx-detail > .body,
+    .hub-card .tx-detail > .footer,
+    .hub-card .tx-detail > .subhead,
+    .hub-card .tx-detail > .subhead-2 {
+        padding-left: 0;
+        padding-right: 0;
+    }
+
+    .hub-card .tx-in .col-12,
+    .hub-card .tx-out .col-12,
+    .hub-card .tx-addr .col-12 {
+        padding-left: 0.6rem;
+        padding-right: 0.6rem;
+        background-color: var(--hub-surface);
+    }
+}
+
+/* e: copy buttons for truncated addresses and txids in transaction lists. The wrapper is
+   transparent on mouse-and-keyboard screens, where the upstream hover icon still works; there the
+   button stays out of sight until it is reached with the keyboard. */
+.hub-io-id {
+    display: contents;
+}
+
+.hub-io-copy {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.hub-io-copy:focus-visible {
+    position: static;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    margin: 0;
+    overflow: visible;
+    clip-path: none;
+}
+
+/* e: on touch screens the address/txid stays one tap from its copy button: the pair is a flex row
+   (text takes the rest of the width and ellipsizes), the amounts wrap onto the next line. */
+@media (hover: none), (pointer: coarse) {
+    .tx-detail .tx-in .col-12,
+    .tx-detail .tx-out .col-12 {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0 8px;
+        padding-top: 0.4rem;
+        padding-bottom: 0.7rem;
+    }
+
+    .tx-detail .hub-io-id {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex: 1 1 100%;
+        min-width: 0;
+    }
+
+    .tx-detail .hub-io-id .ellipsis {
+        float: none;
+        flex: 0 1 auto;
+        min-width: 0;
+        max-width: calc(100% - 48px);
+    }
+
+    .tx-detail .hub-io-id .hub-io-copy {
+        position: static;
+        flex: none;
+        width: 44px;
+        height: 44px;
+        min-width: 44px;
+        min-height: 44px;
+        margin: 0;
+        padding: 0;
+        overflow: visible;
+        clip-path: none;
+        border-color: var(--hub-line-strong);
+    }
+
+    .tx-detail .tx-in .col-12 > .tx-amt,
+    .tx-detail .tx-out .col-12 > .tx-amt {
+        float: none !important;
+        margin-left: auto;
+    }
+
+    .tx-detail > .head > div:first-child {
+        width: 100%;
+    }
+}
+
+/* Bootstrap badges never wrap; the unconfirmed tx's "confirmation estimated in ..." badge is
+   wider than a 360 px card, so that badge may wrap. */
+.hub-card .tx-detail .badge.bg-info {
+    max-width: 100%;
+    white-space: normal;
+    text-align: left;
+}
+
+/* The "Unconfirmed Transaction!" pill is an inline span; keep it in one piece when the footer wraps. */
+.hub-card .tx-detail .txvalue.unconfirmed {
+    display: inline-block;
+}
+
+/* Upstream paints that pill white on red; inside a hub card it is a status like the others. */
+.hub-card .tx-detail .unconfirmed {
+    border: 1px solid var(--hub-text-2);
+    background: transparent;
+    color: var(--hub-ink);
+}
+
+.hub-raw > summary {
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: 800;
+}
+
+.hub-raw-body {
+    margin-top: 12px;
+}
+
+.hub-raw-body .btn-paging {
+    color: var(--hub-ink);
+}
+
+.hub-raw-body pre {
+    margin-top: 12px;
+    max-height: 480px;
+}
+
+/* e: upstream sets .json to "smaller" and the pre inside it to 0.875em, which compounds to 9px on
+   the raw transaction (Bitcoin-type and Ethereum-type pages); keep it readable */
+.hub-page .json {
+    font-size: 13px;
+}
+
+.hub-page .json #raw {
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 12px 14px;
+}
+
+.hub-error-text {
+    margin: 8px 0 0;
+    font-size: 18px;
+    color: var(--hub-text-2);
+}
+
+/* a: error and no-results page - hint line and a search box on the white card, outlined with the
+   control border (4.8:1) so it reads as a field */
+.hub-error-hint {
+    margin: 8px 0 0;
+    color: var(--hub-muted);
+}
+
+.hub-error-search {
+    margin-top: 20px;
+    max-width: 560px;
+    border: 1px solid var(--hub-control-border);
+}
+
+.hub-error-search input {
+    height: 44px;
+}
+
+/* ---------- More explorers ---------- */
+
+/* Links to the other Zelcore explorers, from the feed's "explorers" list. Pill buttons at least
+   44 px tall that wrap onto new rows; black text on white (21:1), white initials on Blue Wave
+   (5.63:1). Not promotions, so no "Sponsored" label. */
+.hub-explorers {
+    max-width: var(--hub-max);
+    margin: 0 auto;
+    padding: 4px var(--hub-gutter) 32px;
+}
+
+.hub-explorers h2 {
+    margin: 0 0 16px;
+    font-size: 20px;
+    font-weight: 800;
+}
+
+.hub-explorers-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.hub-explorers-list li {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.hub-explorer {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 44px;
+    padding: 5px 18px 5px 5px;
+    border: 1px solid var(--hub-line-strong);
+    border-radius: 999px;
+    background: var(--hub-surface);
+    color: var(--hub-ink);
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.hub-page a.hub-explorer,
+.hub-page a.hub-explorer:hover {
+    color: var(--hub-ink);
+    text-decoration: none;
+}
+
+.hub-page a.hub-explorer:hover {
+    border-color: var(--hub-blue);
+}
+
+.hub-page a.hub-explorer:hover .hub-explorer-name {
+    text-decoration: underline;
+}
+
+.hub-explorer-icon {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--hub-blue);
+    color: #FFFFFF;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 800;
+    overflow: hidden;
+}
+
+.hub-explorer-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: var(--hub-surface);
+}
+
+.hub-explorer-name {
+    min-width: 0;
+}
+
+/* ---------- Articles ---------- */
+
+.hub-articles {
+    max-width: var(--hub-max);
+    margin: 0 auto;
+    padding: 4px var(--hub-gutter) 40px;
+}
+
+.hub-articles h2 {
+    margin: 0 0 16px;
+    font-size: 20px;
+    font-weight: 800;
+}
+
+.hub-articles-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+    gap: 20px;
+}
+
+/* f: tablet: columns of at least 200px (three from 688px), so three articles do not leave an empty
+   slot; in the two-column range a lone last card takes the whole row */
+@media (min-width: 576px) and (max-width: 991.98px) {
+    .hub-articles-grid {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+    }
+}
+
+@media (min-width: 576px) and (max-width: 687.98px) {
+    .hub-articles-grid > .hub-article:last-child:nth-child(odd) {
+        grid-column: 1 / -1;
+    }
+
+    .hub-articles-grid > .hub-article:last-child:nth-child(odd) img {
+        max-height: 220px;
+    }
+}
+
+.hub-article {
+    display: block;
+    min-width: 0;
+    border: 1px solid var(--hub-line);
+    border-radius: var(--hub-radius);
+    overflow: hidden;
+    background: var(--hub-surface);
+    color: var(--hub-ink);
+    overflow-wrap: anywhere;
+}
+
+.hub-page a.hub-article,
+.hub-page a.hub-article:hover {
+    color: var(--hub-ink);
+    text-decoration: none;
+}
+
+.hub-article img {
+    display: block;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    background: var(--hub-placeholder);
+}
+
+.hub-article-body {
+    padding: 16px 18px;
+}
+
+.hub-article-meta {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--hub-muted);
+}
+
+.hub-article-title {
+    margin-top: 6px;
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+/* ---------- Footer ---------- */
+
+.hub-footer {
+    background: var(--hub-footer-bg);
+    color: var(--hub-footer-text);
+}
+
+.hub-footer-inner {
+    max-width: var(--hub-max);
+    margin: 0 auto;
+    padding: 20px var(--hub-gutter);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 28px;
+    font-size: 14px;
+}
+
+.hub-footer a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    color: #FFFFFF;
+    overflow-wrap: anywhere;
+}
+
+.hub-footer a:hover {
+    color: #FFFFFF;
+    text-decoration: underline;
+}
+
+.hub-footer a img {
+    display: block;
+    flex: none;
+    width: 24px;
+    height: 24px;
+    margin-right: 8px;
+}
+
+.hub-footer .hub-footer-brand {
+    color: #FFFFFF;
+    font-weight: 700;
+}
+
+/* The compact "More explorers" row above the footer links: #86A1DA label (5.33:1), white links. */
+.hub-footer-explorers {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.hub-footer-explorers-inner {
+    max-width: var(--hub-max);
+    margin: 0 auto;
+    padding: 12px var(--hub-gutter);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 20px;
+    font-size: 14px;
+}
+
+.hub-footer-explorers-title {
+    font-weight: 700;
+    color: var(--hub-footer-text);
+}
+
+.hub-footer-legal {
+    margin-left: auto;
+    overflow-wrap: anywhere;
+}
+
+.hub-footer-legal a {
+    color: #FFFFFF;
+    text-decoration: underline;
+}
+
+/* ---------- Focus ---------- */
+
+/* main.css sets outline: none on every element; restore a visible focus ring. */
+.hub-page a:focus-visible,
+.hub-page button:focus-visible,
+.hub-page select:focus-visible,
+.hub-page summary:focus-visible {
+    outline: 2px solid var(--hub-link);
+    outline-offset: 2px;
+}
+
+/* On the colored band and the dark footer the ring is white. */
+.hub-page .hub-band a:focus-visible,
+.hub-page .hub-band button:focus-visible,
+.hub-page .hub-band select:focus-visible,
+.hub-page .hub-band summary:focus-visible,
+.hub-page .hub-footer a:focus-visible,
+.hub-page .hub-footer button:focus-visible,
+.hub-page .hub-footer select:focus-visible,
+.hub-page .hub-footer summary:focus-visible {
+    outline: 2px solid #FFFFFF;
+    outline-offset: 2px;
+}
+
+/* The search box is white. The input gets a link-colored ring and the dark button a white
+   ring, both drawn inside their edges, so they stay visible in the compact (unpadded) nav
+   search too. */
+.hub-page .hub-search input:focus-visible {
+    outline: 2px solid var(--hub-link);
+    outline-offset: -2px;
+}
+
+.hub-page .hub-search button:focus-visible {
+    outline: 2px solid #FFFFFF;
+    outline-offset: -4px;
+}
+
+/* ---------- Narrow screens ---------- */
+
+@media (max-width: 575.98px) {
+    .hub-layout {
+        padding-top: 20px;
+        padding-bottom: 20px;
+    }
+
+    .hub-card {
+        padding: 16px;
+    }
+
+    .hub-card-flush {
+        padding: 0;
+    }
+
+    .hub-tabs {
+        gap: 4px;
+        padding: 10px 12px;
+    }
+
+    .hub-tabs a,
+    .hub-tabs button,
+    .hub-tab {
+        padding: 0 12px;
+    }
+
+    .hub-nav .hub-search {
+        flex: 1 1 100%;
+        margin-left: 0;
+    }
+
+    /* On phones the link usually wraps to its own row, where a leading divider looks stray. */
+    .hub-powered::before {
+        display: none;
+    }
+
+    .hub-footer-legal {
+        margin-left: 0;
+    }
+
+    .hub-balance-value {
+        font-size: 22px;
+    }
+
+    .hub-summary-qr {
+        width: 100%;
+    }
+}
