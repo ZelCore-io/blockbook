@@ -3,5 +3,7 @@
     "backend_install_path": "/opt/coins/nodes",
     "backend_data_path": "/opt/coins/data",
     "blockbook_install_path": "/opt/coins/blockbook",
-    "blockbook_data_path": "/opt/coins/data"
+    "blockbook_data_path": "/opt/coins/data",
+    "explorer_content_url": "https://dashboard.internal.zelcore.io/api/public/explorer/v1/config",
+    "blockbook_service_params": "-dbcache=0 -workers=1"
 }
