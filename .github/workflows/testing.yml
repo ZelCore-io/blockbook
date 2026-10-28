@@ -37,6 +37,27 @@ jobs:
         with:
           persist-credentials: false
 
+      # Building the image compiles RocksDB (~8 of the job's ~10 minutes). Its layers are
+      # cached in the GitHub Actions cache, so the image is only rebuilt when
+      # build/docker/bin changes; make test then finds blockbook-build up to date.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build image (cached)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: build/docker/bin
+          load: true
+          tags: blockbook-build:latest
+          # Same arguments as make .bin-image with BASE_IMAGE=ubuntu:24.04 PORTABLE=1.
+          build-args: |
+            TCMALLOC=
+            JEMALLOC=1
+            BASE_IMAGE=ubuntu:24.04
+            PORTABLE_ROCKSDB=1
+          cache-from: type=gha,scope=blockbook-build-ubuntu24
+          cache-to: type=gha,scope=blockbook-build-ubuntu24,mode=max
+
       - name: Run unit tests
         env:
           BB_BUILD_ENV: dev
