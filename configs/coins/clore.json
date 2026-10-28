@@ -13,6 +13,7 @@
   },
   "ipc": {
     "rpc_url_template": "http://127.0.0.1:{{.Ports.BackendRPC}}",
+    "rpc_url_ws_template": "ws://127.0.0.1:{{.Ports.BackendRPC}}",
     "rpc_user": "rpc",
     "rpc_pass": "rpc",
     "rpc_timeout": 25,
@@ -56,12 +57,13 @@
       "mempool_sub_workers": 2,
       "block_addresses_to_keep": 300,
       "xpub_magic": 76067358,
-      "slip44": 1,
+      "slip44": 1313,
       "additional_params": {
         "fiat_rates": "coingecko",
-        "fiat_rates_vs_currencies": "AED,ARS,AUD,BDT,BHD,BMD,BRL,CAD,CHF,CLP,CNY,CZK,DKK,EUR,GBP,HKD,HUF,IDR,ILS,INR,JPY,KRW,KWD,LKR,MMK,MXN,MYR,NGN,NOK,NZD,PHP,PKR,PLN,RUB,SAR,SEK,SGD,THB,TRY,TWD,UAH,USD,VEF,VND,ZAR,BTC,ETH",
-        "fiat_rates_params": "{\"coin\": \"clore-ai\", \"periodSeconds\": 900}"
-    }
+        "fiat_rates_vs_currencies": "AED,ARS,AUD,BDT,BHD,BMD,BRL,CAD,CHF,CLP,CNY,CZK,DKK,EUR,GBP,HKD,HUF,IDR,ILS,INR,JPY,KRW,KWD,LKR,MMK,MXN,MYR,NGN,NOK,NZD,PHP,PKR,PLN,RUB,SAR,SEK,SGD,THB,TRY,TWD,UAH,USD,VND,ZAR,BTC,ETH",
+        "public_url": "https://blockbook.clore.zelcore.io",
+        "fiat_rates_params": "{\"url\": \"https://viprates.zelcore.io/v2/blockbook/api/v3\", \"tipUrl\": \"https://viprates.zelcore.io/v2/blockbook/api/v3\", \"attribution\": \"ZelCore\", \"coin\": \"clore-ai\", \"periodSeconds\": 900}"
+      }
     }
   },
   "meta": {
