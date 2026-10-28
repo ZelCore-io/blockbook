@@ -538,18 +538,18 @@ func TestLongExplorerNameWraps(t *testing.T) {
 			t.Errorf("%s must wrap long words and be at least 44px tall", sel)
 		}
 	}
-	min, err := os.ReadFile("../static/css/hub.min.9.css")
+	min, err := os.ReadFile("../static/css/hub.min.10.css")
 	if err != nil || !strings.Contains(string(min), ".hub-explorer{") || !strings.Contains(string(min), ".hub-footer-explorers-inner{") {
-		t.Error("hub.min.9.css is not rebuilt")
+		t.Error("hub.min.10.css is not rebuilt")
 	}
 }
 
-// The carousel is script-only: the template ships the plain scrolling strip (no buttons, no
-// copies), hub.css turns snapping off only in carousel mode, and the minified assets that
+// The carousel is script-only: the template ships the plain scrolling strip (no buttons),
+// hub.css turns snapping off only in carousel mode, and the minified assets that
 // production serves carry both halves.
 func TestHomeProductCarouselAssets(t *testing.T) {
 	html := renderHome(t, Snapshot{Products: sixProducts()}, nil)
-	for _, absent := range []string{"hub-products-nav", "hub-product-clone", "hub-products-carousel", "hub-products-viewport", `aria-hidden="true" tabindex="-1"`} {
+	for _, absent := range []string{"hub-products-nav", "hub-products-carousel", "hub-products-viewport", `aria-hidden="true" tabindex="-1"`} {
 		if strings.Contains(html, absent) {
 			t.Errorf("template renders script-only %q", absent)
 		}
@@ -583,18 +583,25 @@ func TestHomeProductCarouselAssets(t *testing.T) {
 	if regexp.MustCompile(`(?m)^\.hub-products-nav:hover`).MatchString(string(css)) {
 		t.Error("a top-level .hub-products-nav:hover sticks after a tap on touch screens")
 	}
-	min, err := os.ReadFile("../static/css/hub.min.9.css")
+	min, err := os.ReadFile("../static/css/hub.min.10.css")
 	if err != nil || !strings.Contains(string(min), ".hub-products-strip.hub-products-carousel{") || !strings.Contains(string(min), ".hub-products-nav{") {
-		t.Error("hub.min.9.css is not rebuilt with the carousel rules")
+		t.Error("hub.min.10.css is not rebuilt with the carousel rules")
 	}
-	js, err := os.ReadFile("../static/js/main.min.9.js")
+	js, err := os.ReadFile("../static/js/main.min.10.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Previous products", "Next products", "hub-product-clone", "prefers-reduced-motion: reduce", `"aria-hidden","true"`} {
+	for _, want := range []string{"Previous products", "Next products", "prefers-reduced-motion: reduce", `"aria-hidden","true"`, "passive:!1"} {
 		if !strings.Contains(string(js), want) {
-			t.Errorf("main.min.9.js is not rebuilt with the carousel: missing %q", want)
+			t.Errorf("main.min.10.js is not rebuilt with the carousel: missing %q", want)
 		}
+	}
+	// every product shows once: the carousel no longer appends copies of the tiles
+	if strings.Contains(string(js), "hub-product-clone") || strings.Contains(string(js), "cloneNode") {
+		t.Error("main.min.10.js still copies the product tiles")
+	}
+	if !strings.Contains(string(min), ".hub-products-strip::-webkit-scrollbar{display:none}") || !strings.Contains(string(min), "scrollbar-width:none") {
+		t.Error("hub.min.10.css must hide the product strip scrollbar")
 	}
 }
 
@@ -603,20 +610,20 @@ func TestHomeProductCarouselAssets(t *testing.T) {
 // minifier merges .sec-amt into a ".base-amt,.cbase-amt,.csec-amt,.sec-amt" rule, and the switch
 // then hides every amount. It also needs the default secondary_coin cookie code.
 func TestMainAssetsCurrencySwitch(t *testing.T) {
-	css, err := os.ReadFile("../static/css/main.min.9.css")
+	css, err := os.ReadFile("../static/css/main.min.10.css")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, rule := range []string{"}.prim-amt{display:initial}", "}.sec-amt{display:none}"} {
 		if !strings.Contains(string(css), rule) {
-			t.Errorf("main.min.9.css must keep the stand-alone rule %q (build it with csso --no-restructure)", rule[1:])
+			t.Errorf("main.min.10.css must keep the stand-alone rule %q (build it with csso --no-restructure)", rule[1:])
 		}
 	}
-	js, err := os.ReadFile("../static/js/main.min.9.js")
+	js, err := os.ReadFile("../static/js/main.min.10.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(js), "secondaryCoinDefault") {
-		t.Error("main.min.9.js is not rebuilt with the default secondary_coin cookie")
+		t.Error("main.min.10.js is not rebuilt with the default secondary_coin cookie")
 	}
 }
