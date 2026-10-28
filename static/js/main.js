@@ -173,20 +173,23 @@ function handleTxPage(rawData, txId) {
 }
 
 // Home page product strip (.hub-products-strip). Without this script it is a plain sideways
-// scrolling row. Only while its real tiles do not fit (re-checked on resize), it becomes a slow
-// carousel:
-// - the tiles drift left at DRIFT px/s by advancing scrollLeft, so drift, swipe, wheel, drag,
-//   keys and buttons all move one scroll position. One copy of the tiles follows the real ones
-//   (aria-hidden, links out of the tab order), and scrollLeft jumps by exactly one set width
-//   near the ends, which shows the same picture.
+// scrolling row. Only while its tiles do not fit (re-checked on resize), it becomes a slow
+// carousel. Every product appears once: there are no copies of the tiles.
+// - the tiles drift at DRIFT px/s by advancing scrollLeft, so drift, swipe, wheel, drag, keys
+//   and buttons all move one scroll position. The drift runs to the end, holds HOLD ms, runs
+//   back to the start, holds, and so on.
 // - the drift pauses while the mouse is over the strip, keyboard focus is inside it, a pointer
 //   or touch is down, the tab is hidden or the strip is off-screen, and resumes RESUME ms after
 //   the last interaction. prefers-reduced-motion: reduce stops it and smooth scrolling.
 // - a mouse can drag the row (a drag never opens a tile link); the ‹ › buttons and
-//   ArrowLeft/ArrowRight move one tile; Home/End go to the first/last real tile.
+//   ArrowLeft/ArrowRight move one tile, from the last tile on to the first and back;
+//   Home/End go to the first/last tile. The keys also work while the mouse is over the strip.
+// - over the strip a vertical mouse wheel scrolls it sideways until it reaches an end; there
+//   the wheel scrolls the page again.
 // Scroll snapping is switched off in carousel mode (hub.css): it would fight the drift.
 function hubProductCarousel(strip) {
   const DRIFT = 25;
+  const HOLD = 2500;
   const RESUME = 4000;
   const DRAG = 5;
   const real = Array.from(strip.children).filter((e) => e.classList.contains("hub-product"));
@@ -238,40 +241,28 @@ function hubProductCarousel(strip) {
   else if (touch.addListener) touch.addListener(place);
 
   let active = false;
-  let clones = [];
-  let setW = 0; // one tile set including its trailing gap
   let tileW = 0; // from one tile to the next
   let pos = 0; // sub-pixel scroll position while drifting
+  let dir = 1; // drift direction: 1 toward the end, -1 back to the start
+  let holdUntil = 0; // rAF time until which the drift rests at an end
   let raf = 0;
   let last = 0;
   let resumeAt = 0;
   let resumeTimer = 0;
-  let settleTimer = 0;
-  let selfX = NaN; // scrollLeft this script set without animation
   let hover = false;
   let keyFocus = false;
   let mouseDown = false;
   let touchDown = false;
   let onScreen = true;
 
-  const maxScroll = () => strip.scrollWidth - strip.clientWidth;
-  // x and x - setW show the same picture; wrap() moves x into [0, setW)
-  const wrap = (x) => {
-    if (setW <= 0) return x;
-    while (x >= setW) x -= setW;
-    while (x < 0) x += setW;
-    return x;
-  };
-  const jump = (x) => {
-    if (Math.abs(strip.scrollLeft - x) >= 1) selfX = x;
-    strip.scrollLeft = x;
-  };
+  const maxScroll = () => Math.max(0, strip.scrollWidth - strip.clientWidth);
+  const atStart = () => strip.scrollLeft <= 1;
+  const atEnd = () => strip.scrollLeft >= maxScroll() - 1;
   const glide = (x) => {
-    strip.scrollTo({ left: Math.min(x, maxScroll()), behavior: reduce.matches ? "auto" : "smooth" });
+    strip.scrollTo({ left: Math.max(0, Math.min(x, maxScroll())), behavior: reduce.matches ? "auto" : "smooth" });
   };
   const measure = () => {
-    setW = clones[0].getBoundingClientRect().left - real[0].getBoundingClientRect().left;
-    tileW = setW / n;
+    tileW = real[1].getBoundingClientRect().left - real[0].getBoundingClientRect().left;
   };
   const overflows = () => {
     const cs = getComputedStyle(strip);
@@ -282,36 +273,18 @@ function hubProductCarousel(strip) {
   const evaluate = () => {
     const want = overflows();
     if (want === active) {
-      if (active) {
-        const at = strip.scrollLeft / (setW || 1);
-        measure();
-        jump(at * setW);
-      }
+      if (active) measure();
       return;
     }
     active = want;
     if (active) {
-      const frag = document.createDocumentFragment();
-      clones = real.map((t) => {
-        const c = t.cloneNode(true);
-        c.classList.add("hub-product-clone");
-        c.setAttribute("aria-hidden", "true");
-        c.setAttribute("tabindex", "-1");
-        c.querySelectorAll("a, button, [tabindex]").forEach((e) => e.setAttribute("tabindex", "-1"));
-        frag.appendChild(c);
-        return c;
-      });
-      strip.appendChild(frag);
       strip.classList.add("hub-products-carousel");
       measure();
-      // start on the copy's first tile (same picture as 0) so a swipe back works at once
-      jump(setW);
     } else {
-      clones.forEach((c) => c.remove());
-      clones = [];
       strip.classList.remove("hub-products-carousel", "hub-products-dragging");
-      jump(0);
     }
+    strip.scrollLeft = 0;
+    dir = 1;
     prev.hidden = next.hidden = !active;
     grid.classList.toggle("hub-products-nav-on", active);
     update();
@@ -324,16 +297,25 @@ function hubProductCarousel(strip) {
     if (!canRun()) return;
     const dt = last ? Math.min(now - last, 100) : 0;
     last = now;
-    pos = wrap(pos + (DRIFT * dt) / 1000);
-    strip.scrollLeft = pos;
+    if (now >= holdUntil) {
+      const max = maxScroll();
+      pos += (dir * DRIFT * dt) / 1000;
+      if (pos >= max || pos <= 0) {
+        pos = pos >= max ? max : 0;
+        dir = pos > 0 ? -1 : 1;
+        holdUntil = now + HOLD;
+      }
+      strip.scrollLeft = pos;
+    }
     raf = requestAnimationFrame(frame);
   };
   function update() {
     clearTimeout(resumeTimer);
     if (canRun()) {
       if (!raf) {
-        pos = wrap(strip.scrollLeft);
+        pos = strip.scrollLeft;
         last = 0;
+        holdUntil = 0;
         raf = requestAnimationFrame(frame);
       }
       return;
@@ -351,48 +333,18 @@ function hubProductCarousel(strip) {
     update();
   }
 
-  // one tile forward or back from the tile at the left edge
-  function step(dir) {
+  // one tile forward or back from the tile at the left edge; past the last tile back to the
+  // first, and before the first on to the last, so the buttons never dead-end
+  function step(d) {
     if (!active) return;
-    let x = wrap(strip.scrollLeft);
-    if (dir < 0 && x < tileW / 2) x += setW;
-    jump(x);
-    const i = dir > 0 ? Math.floor(x / tileW + 0.02) + 1 : Math.ceil(x / tileW - 0.02) - 1;
-    glide(i * tileW);
+    const x = strip.scrollLeft;
+    if (d > 0 && atEnd()) glide(0);
+    else if (d < 0 && atStart()) glide(maxScroll());
+    else if (d > 0) glide((Math.floor(x / tileW + 0.02) + 1) * tileW);
+    else glide((Math.ceil(x / tileW - 0.02) - 1) * tileW);
   }
-  // to real tile i (0..n-1); n is the copy of tile 0 and settles back onto it
-  const goTo = (i, back) => {
-    let x = wrap(strip.scrollLeft);
-    if (back && i === n - 1 && x < tileW) x += setW;
-    jump(x);
-    glide(i * tileW);
-  };
-
-  // Near the ends of the scroll range jump one set width so scrolling can go on either way.
-  // When scrolling stops past the copy's first tile (or on it, with keyboard focus inside, so
-  // the focused real tile is the one in view), move back onto the real tiles.
-  strip.addEventListener(
-    "scroll",
-    () => {
-      if (!active || raf) return;
-      const x = strip.scrollLeft;
-      if (Math.abs(x - selfX) < 1) {
-        selfX = NaN;
-        return;
-      }
-      if (!mouseDown) {
-        if (x <= 0 && !keyFocus) jump(setW);
-        else if (x >= maxScroll() - 1) jump(x - setW);
-      }
-      clearTimeout(settleTimer);
-      settleTimer = setTimeout(() => {
-        selfX = NaN;
-        const at = strip.scrollLeft;
-        if (active && !raf && !mouseDown && !touchDown && (at > setW + 0.5 || (keyFocus && at > setW - 0.5))) jump(at - setW);
-      }, 250);
-    },
-    { passive: true }
-  );
+  // to tile i (0..n-1)
+  const goTo = (i) => glide(i * tileW);
 
   view.addEventListener("pointerenter", (e) => {
     if (e.pointerType === "mouse") {
@@ -427,7 +379,20 @@ function hubProductCarousel(strip) {
     el.addEventListener("focusin", onFocusIn);
     el.addEventListener("focusout", onFocusOut);
   });
-  view.addEventListener("wheel", touched, { passive: true });
+  // a vertical wheel scrolls the strip sideways while it can still move that way; at an end the
+  // event goes through and the page scrolls. Horizontal wheels and trackpads stay native.
+  view.addEventListener(
+    "wheel",
+    (e) => {
+      touched();
+      if (!active || e.ctrlKey || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      const px = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? strip.clientWidth : 1);
+      if ((px > 0 && atEnd()) || (px < 0 && atStart())) return;
+      e.preventDefault();
+      strip.scrollLeft += px;
+    },
+    { passive: false }
+  );
   view.addEventListener(
     "touchstart",
     () => {
@@ -464,15 +429,7 @@ function hubProductCarousel(strip) {
         strip.setPointerCapture(e.pointerId);
       } catch (err) {}
     }
-    let x = drag.left - dx;
-    if (x <= 0) {
-      drag.left += setW;
-      x += setW;
-    } else if (x >= maxScroll() - 1) {
-      drag.left -= setW;
-      x -= setW;
-    }
-    jump(x);
+    strip.scrollLeft = Math.max(0, Math.min(drag.left - dx, maxScroll()));
   });
   const endPointer = (e) => {
     if (!drag || e.pointerId !== drag.id) return;
@@ -504,17 +461,18 @@ function hubProductCarousel(strip) {
     if (active) e.preventDefault();
   });
 
+  const isMoveKey = (e) =>
+    !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key);
   strip.addEventListener("keydown", (e) => {
-    if (!active || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (!active || !isMoveKey(e)) return;
     const k = e.key;
-    if (k !== "ArrowLeft" && k !== "ArrowRight" && k !== "Home" && k !== "End") return;
     e.preventDefault();
     keyFocus = true;
     touched();
     const tile = e.target.closest(".hub-product");
     const at = real.indexOf(tile);
     if (at < 0) {
-      if (k === "Home" || k === "End") goTo(k === "Home" ? 0 : n - 1, false);
+      if (k === "Home" || k === "End") goTo(k === "Home" ? 0 : n - 1);
       else step(k === "ArrowRight" ? 1 : -1);
       return;
     }
@@ -523,8 +481,19 @@ function hubProductCarousel(strip) {
     else if (k === "End") i = n - 1;
     else i = (at + (k === "ArrowRight" ? 1 : n - 1)) % n;
     real[i].focus({ preventScroll: true });
-    if (k === "ArrowRight" && i === 0) glide(setW);
-    else goTo(i, k === "ArrowLeft");
+    goTo(i);
+  });
+  // with the mouse over the strip the same keys work without focus inside it, unless the user
+  // is typing somewhere
+  document.addEventListener("keydown", (e) => {
+    if (!active || !hover || e.defaultPrevented || !isMoveKey(e)) return;
+    const t = e.target;
+    if (t && (t.isContentEditable || (t.closest && t.closest("input, textarea, select, [contenteditable]")))) return;
+    e.preventDefault();
+    touched();
+    if (e.key === "Home") glide(0);
+    else if (e.key === "End") glide(maxScroll());
+    else step(e.key === "ArrowRight" ? 1 : -1);
   });
 
   document.addEventListener("visibilitychange", update);
