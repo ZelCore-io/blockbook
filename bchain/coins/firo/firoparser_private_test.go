@@ -3,6 +3,7 @@
 package firo
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"math/big"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/martinboehm/btcd/wire"
 	"github.com/trezor/blockbook/bchain"
 	"github.com/trezor/blockbook/bchain/coins/btc"
 )
@@ -375,5 +377,20 @@ func TestExchangeAddress(t *testing.T) {
 	notEx := append([]byte{OpExchangeAddr}, script[1:25]...) // no OP_CHECKSIG
 	if a, s, _ := p.GetAddressesFromAddrDesc(notEx); len(a) != 0 || s {
 		t.Errorf("truncated exchange script decoded to %v, %v", a, s)
+	}
+}
+
+func TestFiroDecodeRejectsOversizedExtra(t *testing.T) {
+	// v3 type 1 transaction, no inputs or outputs, extra payload length 2^62
+	// followed by two bytes: must fail without allocating the claimed length
+	b, _ := hex.DecodeString("03000100" + "00" + "00" + "00000000" + "ff0000000000000040" + "abcd")
+	var tx FiroMsgTx
+	if err := tx.FiroDecode(bytes.NewReader(b), 0, wire.BaseEncoding); err == nil {
+		t.Fatal("FiroDecode accepted an extra payload longer than its input")
+	}
+	// the same with a length that only overruns the input
+	b, _ = hex.DecodeString("03000100" + "00" + "00" + "00000000" + "05" + "abcd")
+	if err := tx.FiroDecode(bytes.NewReader(b), 0, wire.BaseEncoding); err == nil {
+		t.Fatal("FiroDecode accepted a truncated extra payload")
 	}
 }

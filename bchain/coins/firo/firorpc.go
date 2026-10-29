@@ -200,10 +200,10 @@ func (zc *FiroRPC) GetTransaction(txid string) (*bchain.Tx, error) {
 	}
 
 	tx, err := zc.Parser.ParseTxFromJson(r)
-	tx.CoinSpecificData = r
 	if err != nil {
 		return nil, errors.Annotatef(err, "txid %v", txid)
 	}
+	tx.CoinSpecificData = r
 
 	return tx, nil
 }
