@@ -20,6 +20,13 @@ func (s *InsightServer) insightBackend() (*api.SystemInfo, int, error) {
 	return info, 0, nil
 }
 
+// insightLastBlockHash is a struct, not a map, so the key order is stock's
+// (syncTipHash, then lastblockhash).
+type insightLastBlockHash struct {
+	SyncTipHash   string `json:"syncTipHash"`
+	LastBlockHash string `json:"lastblockhash"`
+}
+
 // status serves status and its stock q variants; unknown q values and getInfo
 // fall through to the getInfo shape, as stock's default branch does.
 func (s *InsightServer) status(route insightRoute) (interface{}, int, error) {
@@ -33,7 +40,7 @@ func (s *InsightServer) status(route insightRoute) (interface{}, int, error) {
 			return nil, http.StatusServiceUnavailable, errors.New("no indexed block")
 		}
 		hash := blocks.Blocks[0].Hash
-		return map[string]string{"syncTipHash": hash, "lastblockhash": hash}, 0, nil
+		return insightLastBlockHash{SyncTipHash: hash, LastBlockHash: hash}, 0, nil
 	}
 	info, code, err := s.insightBackend()
 	if err != nil {

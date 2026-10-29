@@ -17,6 +17,9 @@ type insightRPCRequest struct {
 	Params []interface{} `json:"params"`
 }
 
+// RPCMethod names the daemon method for the raw-call latency metric label.
+func (r *insightRPCRequest) RPCMethod() string { return r.Method }
+
 type insightRPCResponse struct {
 	Result json.RawMessage  `json:"result"`
 	Error  *bchain.RPCError `json:"error"`

@@ -420,3 +420,48 @@ func TestInsightBlockMainChainAndCache(t *testing.T) {
 		t.Fatalf("cached block: calls=%d %v", f.blockCalls, again)
 	}
 }
+
+func TestInsightBlockCacheByteBound(t *testing.T) {
+	data := func(n int) *insightBlockData { return &insightBlockData{Txids: make([]string, n)} }
+	c := newInsightBlockCache()
+	c.maxCost = insightBlockCost(data(10))*2 + 1
+	c.put("a", data(10))
+	c.put("b", data(10))
+	if c.get("a") == nil || c.get("b") == nil {
+		t.Fatal("two blocks within the cap were evicted")
+	}
+	c.put("c", data(10)) // pushes the total over the cap: the least recent (a, then b was touched later) goes
+	if c.get("a") != nil || c.get("b") == nil || c.get("c") == nil {
+		t.Fatalf("eviction order wrong: a=%v b=%v c=%v", c.get("a") != nil, c.get("b") != nil, c.get("c") != nil)
+	}
+	c.put("huge", data(1000)) // above the cap by itself: not cached, nothing evicted
+	if c.get("huge") != nil || c.get("b") == nil || c.get("c") == nil {
+		t.Fatal("an oversized block was cached or evicted the others")
+	}
+	c.put("b", data(5)) // replacing an entry re-accounts its cost
+	if want := insightBlockCost(data(5)) + insightBlockCost(data(10)); c.bytes != want {
+		t.Fatalf("bytes %d, want %d", c.bytes, want)
+	}
+}
+
+// A missing path argument is an unknown route (404), an explicit empty one is
+// a rejected request (400), and every route answers in the error shape.
+// addr/ is 400 because ?address= is its other, valid form; block-index is 404
+// for any bad height, empty included, as stock answers.
+func TestInsightEmptyArgRoutes(t *testing.T) {
+	s := insightTestServer(t, insightFixture())
+	for _, tc := range []struct {
+		path string
+		code int
+	}{
+		{"/api/tx/", 404}, {"/api/rawtx/", 404}, {"/api/block/", 404}, {"/api/rawblock/", 404}, {"/api/block-index/", 404}, {"/api/block-index//", 404}, {"/api/addrs/", 404},
+		{"/api/tx//", 400}, {"/api/rawtx//", 400}, {"/api/block//", 400}, {"/api/rawblock//", 400},
+		{"/api/addr/", 400}, {"/api/addr//", 400}, {"/api/addr//utxo", 400}, {"/api/addr//balance", 400},
+		{"/api/addrs//utxo", 400}, {"/api/addrs//balance", 400}, {"/api/addrs//txs", 400},
+	} {
+		w := insightRequest(s, "GET", tc.path, "")
+		if w.Code != tc.code || !strings.Contains(w.Body.String(), `"status":"error"`) {
+			t.Errorf("%s: %d %s", tc.path, w.Code, w.Body)
+		}
+	}
+}

@@ -3,11 +3,13 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/trezor/blockbook/api"
 	"github.com/trezor/blockbook/bchain"
@@ -157,6 +159,14 @@ func TestInsightVerifyMessage(t *testing.T) {
 		t.Fatalf("POST rpc params %v", seen)
 	}
 
+	// as stock (req.body.x || req.query.x): a non-empty body field beats the
+	// query, an empty or absent one falls back to it
+	seen = nil
+	w = insightTypedRequest(s, "POST", "/api/messages/verify?address=q1&signature=qs&message=qm", `{"address":"b1","signature":"","message":"bm"}`, "application/json")
+	if w.Code != 200 || !reflect.DeepEqual(seen, [][]interface{}{{"b1", "qs", "bm"}}) {
+		t.Fatalf("body/query precedence %d %v", w.Code, seen)
+	}
+
 	// as stock: an empty message is a message; a missing one is an error
 	seen = nil
 	w = insightRequest(s, "GET", "/api/messages/verify?address=t1A&signature=c2ln&message=", "")
@@ -228,4 +238,55 @@ func insightTypedRequest(s *InsightServer, method, path, body, contentType strin
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	return w
+}
+
+func TestInsightEstimateFeeDedupeCacheAndGone(t *testing.T) {
+	f := insightFixture()
+	f.fees = map[int]int64{2: 12345, 3: 2000, 500: 700}
+	s := insightTestServer(t, f)
+	now := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
+	insightNow = func() time.Time { return now }
+	t.Cleanup(func() { insightNow = time.Now })
+
+	// repeated targets collapse to one key at their first place, one call each
+	w := insightRequest(s, "GET", "/api/utils/estimatefee?nbBlocks=3,2,3,2", "")
+	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"3":0.00002,"2":0.00012345}` || !reflect.DeepEqual(f.feeCalls, []int{3, 2}) {
+		t.Fatalf("dedupe %d %s %v", w.Code, w.Body.String(), f.feeCalls)
+	}
+
+	// targets the worker does not cache are cached for 10 s here
+	f.feeCalls = nil
+	for i := 0; i < 2; i++ {
+		w = insightRequest(s, "GET", "/api/utils/estimatefee?nbBlocks=500,500", "")
+		if w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"500":0.000007}` {
+			t.Fatalf("high target %d %s", w.Code, w.Body.String())
+		}
+	}
+	if !reflect.DeepEqual(f.feeCalls, []int{500}) {
+		t.Fatalf("high target not cached: %v", f.feeCalls)
+	}
+	now = now.Add(insightFeeCacheTTL)
+	insightRequest(s, "GET", "/api/utils/estimatefee?nbBlocks=500", "")
+	if !reflect.DeepEqual(f.feeCalls, []int{500, 500}) {
+		t.Fatalf("expired entry not refreshed: %v", f.feeCalls)
+	}
+	// an unavailable high target is not cached
+	f.fees[600] = 0
+	f.feeCalls = nil
+	insightRequest(s, "GET", "/api/utils/estimatefee?nbBlocks=600", "")
+	insightRequest(s, "GET", "/api/utils/estimatefee?nbBlocks=600", "")
+	if !reflect.DeepEqual(f.feeCalls, []int{600, 600}) {
+		t.Fatalf("failure cached: %v", f.feeCalls)
+	}
+
+	// a gone client stops the loop before any backend call
+	f.feeCalls = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest("GET", "/api/utils/estimatefee?nbBlocks=2,3", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, r)
+	if rec.Code == 200 || len(f.feeCalls) != 0 {
+		t.Fatalf("gone client: %d %v", rec.Code, f.feeCalls)
+	}
 }

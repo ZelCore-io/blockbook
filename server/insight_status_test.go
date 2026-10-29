@@ -33,7 +33,7 @@ func TestInsightStatusVariants(t *testing.T) {
 	for _, tc := range []struct{ query, want string }{
 		{"?q=getDifficulty", `{"difficulty":2.5}` + "\n"},
 		{"?q=getBestBlockHash", `{"bestblockhash":"bb"}` + "\n"},
-		{"?q=getLastBlockHash", `{"lastblockhash":"tip","syncTipHash":"tip"}` + "\n"},
+		{"?q=getLastBlockHash", `{"syncTipHash":"tip","lastblockhash":"tip"}` + "\n"},
 		{"?q=getInfo", info},
 		{"?q=unknown", info},
 		{"", info},
@@ -114,6 +114,17 @@ func TestInsightRPCAdapter(t *testing.T) {
 		return json.Unmarshal([]byte(`{"result":"00ff","error":null,"id":"1"}`), res)
 	})
 	var hex string
+	var sentReq interface{}
+	rpcSpy := NewInsightRPC(func(req interface{}, res interface{}) error {
+		sentReq = req
+		return json.Unmarshal([]byte(`{"result":"00ff"}`), res)
+	})
+	if err := rpcSpy("getblock", nil, &hex); err != nil {
+		t.Fatal(err)
+	}
+	if named, ok := sentReq.(interface{ RPCMethod() string }); !ok || named.RPCMethod() != "getblock" {
+		t.Fatalf("request does not name its method for the metric label: %T", sentReq)
+	}
 	if err := rpc("getblock", []interface{}{"h", 0}, &hex); err != nil || hex != "00ff" {
 		t.Fatal(err, hex)
 	}

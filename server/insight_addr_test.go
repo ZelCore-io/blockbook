@@ -331,3 +331,44 @@ func TestInsightTxsByAddress(t *testing.T) {
 		}
 	}
 }
+
+// A short or final page ends the read: a window spanning two worker pages
+// does not request a second page that does not exist, and a deep window stops
+// at the last page.
+func TestInsightHistoryStopsAtLastPage(t *testing.T) {
+	short := func() *insightFake {
+		f := insightDeepFixture()
+		f.address.Txids = f.address.Txids[:30]
+		f.address.Txs, f.address.UnconfirmedTxs = 28, 2
+		return f
+	}
+	for _, tc := range []struct {
+		name    string
+		fixture func() *insightFake
+		query   string
+		history []int
+		count   int
+	}{
+		{"short first page", short, "?from=5&to=55", []int{1}, 25},
+		{"exactly full last page", func() *insightFake {
+			f := short()
+			f.address.Txs = 48
+			f.address.Txids = insightDeepFixture().address.Txids[:50]
+			return f
+		}, "?from=10&to=60", []int{1}, 40},
+		// Deep: the window reaches past the last page (13 of 200); one page is read.
+		{"deep window past the end", insightDeepFixture, "?from=2450&to=2650", []int{13}, 52},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := tc.fixture()
+			w := insightRequest(insightTestServer(t, f), "GET", "/api/addrs/A/txs"+tc.query, "")
+			var out insightHistoryOut
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+				t.Fatalf("%d %s", w.Code, w.Body)
+			}
+			if !reflect.DeepEqual(f.historyPages, tc.history) || len(out.Items) != tc.count {
+				t.Fatalf("history pages %v, %d items", f.historyPages, len(out.Items))
+			}
+		})
+	}
+}

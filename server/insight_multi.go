@@ -119,11 +119,8 @@ func (s *InsightServer) multiUtxo(route insightRoute, onlyConfirmed bool) (inter
 			return nil, insightClientGoneCode, err
 		}
 		var code int
-		if out, code, err = s.appendUtxos(out, a, onlyConfirmed); err != nil {
+		if out, code, err = s.appendUtxos(out, a, onlyConfirmed, insightMultiUtxoMax); err != nil {
 			return nil, code, err
-		}
-		if len(out) > insightMultiUtxoMax {
-			return nil, errInsightTooManyUtxos.code, errInsightTooManyUtxos
 		}
 	}
 	return out, 0, nil

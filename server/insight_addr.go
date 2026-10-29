@@ -57,11 +57,14 @@ func insightWindow(fromStr, toStr string, defTo int) (from, to int, err error) {
 // worker pages and the worker reads about `to` txids, not a fixed 1000. A
 // window that does not start on the first page is preceded by a cheap totals
 // query, and a window at or past the end stops there, so a huge from never
-// makes the worker scan the whole history. Offsets are positions in the
+// makes the worker scan the whole history; the totals also cap the last page
+// asked for. A short or final page ends the read, so a window spanning two
+// pages does not request a second page that does not exist. Offsets are positions in the
 // worker's sequence, so consecutive windows tile it without gaps; a txid
 // repeated inside one window is returned once.
 func (s *InsightServer) addressPages(address string, from, to int) (*api.Address, []string, int, int, error) {
 	size := to - from
+	total := -1 // known from the totals query only
 	if size <= 0 || from >= size {
 		a, err := s.worker.GetAddress(address, 1, 1, api.AccountDetailsTokens, insightHistoryFilter, "")
 		if err != nil {
@@ -70,11 +73,15 @@ func (s *InsightServer) addressPages(address string, from, to int) (*api.Address
 		if a == nil {
 			return nil, nil, 0, http.StatusInternalServerError, errors.New("missing address")
 		}
-		if total := a.Txs + a.UnconfirmedTxs; size <= 0 || from >= total {
+		total = a.Txs + a.UnconfirmedTxs
+		if size <= 0 || from >= total {
 			return a, []string{}, total, 0, nil
 		}
 	}
 	first, last := from/size+1, (to-1)/size+1
+	if total >= 0 { // the totals already say where the last page is
+		last = min(last, (total+size-1)/size)
+	}
 	var paged *api.Address
 	var ids []string
 	for page := first; page <= last; page++ {
@@ -93,6 +100,11 @@ func (s *InsightServer) addressPages(address string, from, to int) (*api.Address
 			break
 		}
 		ids = append(ids, a.Txids...)
+		// A short or final page is the end: the next page would only be
+		// clamped back to it.
+		if len(a.Txids) < size || a.TotalPages > 0 && a.Page >= a.TotalPages {
+			break
+		}
 	}
 	// The paged answer's totals match the sequence the offsets index.
 	head := paged
@@ -267,7 +279,7 @@ func (s *InsightServer) addrValue(route insightRoute, addr string) (interface{},
 
 // utxo serves addr/:a/utxo and addr/utxo?address=, pending included.
 func (s *InsightServer) utxo(route insightRoute, addr string) (interface{}, int, error) {
-	out, code, err := s.appendUtxos(make([]insightUtxo, 0), addr, false)
+	out, code, err := s.appendUtxos(make([]insightUtxo, 0), addr, false, 0)
 	if err != nil {
 		return nil, code, err
 	}
@@ -275,11 +287,17 @@ func (s *InsightServer) utxo(route insightRoute, addr string) (interface{}, int,
 }
 
 // appendUtxos appends the stock utxo rows of addr (pending included unless
-// onlyConfirmed). A row without an address takes the requested one.
-func (s *InsightServer) appendUtxos(out []insightUtxo, addr string, onlyConfirmed bool) ([]insightUtxo, int, error) {
+// onlyConfirmed). A row without an address takes the requested one. A limit
+// above 0 caps len(out): rows that would pass it are refused with 413 before
+// any is converted (the worker has already read the address's whole set, so
+// the cap bounds the answer, not that read).
+func (s *InsightServer) appendUtxos(out []insightUtxo, addr string, onlyConfirmed bool, limit int) ([]insightUtxo, int, error) {
 	rows, err := s.worker.GetAddressUtxo(addr, onlyConfirmed)
 	if err != nil {
 		return nil, insightAddressErrorCode(err), err
+	}
+	if limit > 0 && len(out)+len(rows) > limit {
+		return nil, errInsightTooManyUtxos.code, errInsightTooManyUtxos
 	}
 	for _, u := range rows {
 		amount, sat, err := insightMoney(u.AmountSat)

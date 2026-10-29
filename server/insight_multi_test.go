@@ -464,6 +464,13 @@ func TestInsightMultiUtxoCap(t *testing.T) {
 	if w := insightMultiPost(s, "/api/addrs/utxo", insightForm, "addrs=A,B,C"); w.Code != 413 {
 		t.Fatal(w.Code)
 	}
+	// One address over the cap is refused on its own, before the next is read.
+	huge := map[string]*insightMultiAddr{"A": {utxos: rows("a", 20001)}, "B": {utxos: rows("b", 1)}}
+	if f, s := insightMultiServer(t, huge); true {
+		if w := insightRequest(s, "GET", "/api/addrs/A,B/utxo", ""); w.Code != 413 || len(f.utxoCalls) != 1 {
+			t.Fatal(w.Code, f.utxoCalls)
+		}
+	}
 	// The single-address route keeps the full set.
 	f := insightFixture()
 	f.utxos = rows("x", 20001)
@@ -483,5 +490,25 @@ func TestInsightMultiClientGone(t *testing.T) {
 		if w.Code == 200 || len(f.utxoCalls) != 0 || len(f.lightSizes) != 0 || len(f.pages) != 0 {
 			t.Fatal(path, w.Code, f.utxoCalls, f.lightSizes)
 		}
+	}
+}
+
+// POST precedence: the addresses come only from the body (a query addrs is
+// ignored), and a path or query window beats the body's from/to.
+func TestInsightMultiPostPrecedence(t *testing.T) {
+	_, s := insightMultiServer(t, insightMultiUtxoAddrs())
+	w := insightMultiPost(s, "/api/addrs/utxo?addrs=B", insightForm, "addrs=A")
+	if keys := insightUtxoKeys(t, w.Body.Bytes()); w.Code != 200 || !reflect.DeepEqual(keys, insightUtxoKeys(t, insightMultiPost(s, "/api/addrs/utxo", insightForm, "addrs=A").Body.Bytes())) || len(keys) != 2 {
+		t.Fatal(w.Code, w.Body)
+	}
+	_, s = insightMultiServer(t, insightMultiMergeAddrs())
+	// merged order: pA, h10a, h7b, h5shared
+	_, ids := insightMultiDecode(t, insightMultiPost(s, "/api/addrs/txs?addrs=B&from=1&to=2", "application/json", `{"addrs":"A,B","from":0,"to":1}`))
+	if !reflect.DeepEqual(ids, []string{"h10a"}) {
+		t.Fatalf("query window must beat the body: %v", ids)
+	}
+	_, ids = insightMultiDecode(t, insightMultiPost(s, "/api/addrs/txs", "application/json", `{"addrs":"A,B","from":2,"to":3}`))
+	if !reflect.DeepEqual(ids, []string{"h7b"}) {
+		t.Fatalf("body window: %v", ids)
 	}
 }

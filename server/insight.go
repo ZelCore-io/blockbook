@@ -50,6 +50,7 @@ type InsightServer struct {
 	rpc          InsightRPC
 	coinShortcut string
 	blockCache   *insightBlockCache
+	feeCache     insightFeeCache
 }
 
 func NewInsightServer(binding string, chainType bchain.ChainType, decimals int, worker insightWorker, broadcast func(string) (string, error)) (*InsightServer, error) {
@@ -190,8 +191,6 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	insightJSON(w, 200, value)
 }
 
-// insightErrorStatus maps a handler status to the generic public message.
-// Unknown statuses, including 0, become 500.
 // insightClientError is a handler error whose fixed, client-safe message
 // replaces the generic one for its status code.
 type insightClientError struct {
@@ -201,6 +200,8 @@ type insightClientError struct {
 
 func (e *insightClientError) Error() string { return e.message }
 
+// insightErrorStatus maps a handler status to the generic public message.
+// Unknown statuses, including 0, become 500.
 func insightErrorStatus(code int) (int, string) {
 	switch code {
 	case http.StatusBadRequest:

@@ -22,6 +22,11 @@ const (
 	insightRPCNotFound        = -5
 	insightTipRetries         = 3
 	insightBlockCacheSize     = 32
+	// insightBlockCacheBytes caps the cached txid lists in total, so a run of
+	// very large blocks cannot grow the cache by entry count alone. A block
+	// whose own cost exceeds the cap is not cached.
+	insightBlockCacheBytes = 16 << 20
+	insightTxidCost        = 64 + 16 + 16 // hex txid + string header + slice slot slack
 )
 
 // insightBlockPageSize is how many txs one GetBlock call loads. A var so tests
@@ -190,14 +195,22 @@ type insightBlockCache struct {
 	mu      sync.Mutex
 	order   *list.List // front = most recent; values are *insightBlockCacheEntry
 	entries map[string]*list.Element
+	bytes   int // sum of entry costs
+	maxSize int // entry count bound
+	maxCost int // total cost bound
 }
 type insightBlockCacheEntry struct {
 	hash string
 	data *insightBlockData
+	cost int
+}
+
+func insightBlockCost(data *insightBlockData) int {
+	return len(data.Txids)*insightTxidCost + 256
 }
 
 func newInsightBlockCache() *insightBlockCache {
-	return &insightBlockCache{order: list.New(), entries: map[string]*list.Element{}}
+	return &insightBlockCache{order: list.New(), entries: map[string]*list.Element{}, maxSize: insightBlockCacheSize, maxCost: insightBlockCacheBytes}
 }
 
 func (c *insightBlockCache) get(hash string) *insightBlockData {
@@ -211,19 +224,27 @@ func (c *insightBlockCache) get(hash string) *insightBlockData {
 }
 
 func (c *insightBlockCache) put(hash string, data *insightBlockData) {
+	cost := insightBlockCost(data)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if el, ok := c.entries[hash]; ok {
-		el.Value.(*insightBlockCacheEntry).data = data
-		c.order.MoveToFront(el)
+		c.remove(el)
+	}
+	if cost > c.maxCost {
 		return
 	}
-	c.entries[hash] = c.order.PushFront(&insightBlockCacheEntry{hash, data})
-	for c.order.Len() > insightBlockCacheSize {
-		last := c.order.Back()
-		c.order.Remove(last)
-		delete(c.entries, last.Value.(*insightBlockCacheEntry).hash)
+	c.entries[hash] = c.order.PushFront(&insightBlockCacheEntry{hash, data, cost})
+	c.bytes += cost
+	for c.order.Len() > c.maxSize || c.bytes > c.maxCost {
+		c.remove(c.order.Back())
 	}
+}
+
+// remove drops an element; the caller holds c.mu.
+func (c *insightBlockCache) remove(el *list.Element) {
+	entry := c.order.Remove(el).(*insightBlockCacheEntry)
+	delete(c.entries, entry.hash)
+	c.bytes -= entry.cost
 }
 
 // loadBlock returns the block header (api.Block with no Transactions), the

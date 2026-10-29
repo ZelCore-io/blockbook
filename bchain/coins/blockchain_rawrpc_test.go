@@ -20,3 +20,19 @@ func TestRawRPC(t *testing.T) {
 		t.Fatal("chain without Call exposed raw RPC")
 	}
 }
+
+type namedRawRequest string
+
+func (n namedRawRequest) RPCMethod() string { return string(n) }
+
+func TestRawRPCLabel(t *testing.T) {
+	if got := rawRPCLabel(namedRawRequest("getblock")); got != "RawRPC:getblock" {
+		t.Fatalf("named request label %q", got)
+	}
+	if got := rawRPCLabel(namedRawRequest("")); got != "RawRPC" {
+		t.Fatalf("empty method label %q", got)
+	}
+	if got := rawRPCLabel(struct{}{}); got != "RawRPC" {
+		t.Fatalf("unnamed request label %q", got)
+	}
+}
