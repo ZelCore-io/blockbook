@@ -1697,37 +1697,29 @@ func (w *Worker) GetAddress(address string, page int, txsOnPage int, option Acco
 		if err != nil {
 			return nil, errors.Annotatef(err, "getAddressTxids %v true", addrDesc)
 		}
-		if option == AccountDetailsBasic {
-			// Basic detail: skip per-tx loading. The count is the raw mempool
-			// index length; it may include entries that have just been confirmed
-			// but not yet evicted from the mempool. unconfirmedBalance/sending/
-			// receiving are not computed and will be omitted from the response.
-			unconfirmedTxs = len(txm)
-		} else {
-			for _, txid := range txm {
-				tx, err := w.getTransaction(txid, false, true, addresses)
-				// mempool transaction may fail
-				if err != nil || tx == nil {
-					glog.Warning("GetTransaction in mempool: ", err)
-				} else {
-					// skip already confirmed txs, mempool may be out of sync
-					if tx.Confirmations == 0 {
-						unconfirmedTxs++
-						uBalReceiving.Add(&uBalReceiving, tx.getAddrVoutValue(addrDesc))
-						// ethereum has a different logic - value not in input and add maximum possible fees
-						if w.chainType == bchain.ChainEthereumType {
-							uBalSending.Add(&uBalSending, tx.getAddrEthereumTypeMempoolInputValue(addrDesc))
-						} else {
-							uBalSending.Add(&uBalSending, tx.getAddrVinValue(addrDesc))
+		for _, txid := range txm {
+			tx, err := w.getTransaction(txid, false, true, addresses)
+			// mempool transaction may fail
+			if err != nil || tx == nil {
+				glog.Warning("GetTransaction in mempool: ", err)
+			} else {
+				// skip already confirmed txs, mempool may be out of sync
+				if tx.Confirmations == 0 {
+					unconfirmedTxs++
+					uBalReceiving.Add(&uBalReceiving, tx.getAddrVoutValue(addrDesc))
+					// ethereum has a different logic - value not in input and add maximum possible fees
+					if w.chainType == bchain.ChainEthereumType {
+						uBalSending.Add(&uBalSending, tx.getAddrEthereumTypeMempoolInputValue(addrDesc))
+					} else {
+						uBalSending.Add(&uBalSending, tx.getAddrVinValue(addrDesc))
+					}
+					if option >= AccountDetailsTxidHistory {
+						// entries past (page+1)*txsOnPage can never fall into the page window;
+						// not retaining them bounds memory on addresses with a huge pending set
+						if filter.Vout == AddressFilterVoutQueryNotNecessary || len(mempoolTxs) < (page+1)*txsOnPage {
+							mempoolTxs = append(mempoolTxs, tx)
 						}
-						if option >= AccountDetailsTxidHistory {
-							// entries past (page+1)*txsOnPage can never fall into the page window;
-							// not retaining them bounds memory on addresses with a huge pending set
-							if filter.Vout == AddressFilterVoutQueryNotNecessary || len(mempoolTxs) < (page+1)*txsOnPage {
-								mempoolTxs = append(mempoolTxs, tx)
-							}
-							mempoolTxCount++
-						}
+						mempoolTxCount++
 					}
 				}
 			}
@@ -1807,11 +1799,7 @@ func (w *Worker) GetAddress(address string, page int, txsOnPage int, option Acco
 			totalSecondaryValue = secondaryRate * totalBaseValue
 		}
 	}
-	var unconfirmedBalanceSat *Amount
-	if option > AccountDetailsBasic {
-		uBalSat.Sub(&uBalReceiving, &uBalSending)
-		unconfirmedBalanceSat = (*Amount)(&uBalSat)
-	}
+	uBalSat.Sub(&uBalReceiving, &uBalSending)
 	var contractInfoBestHeight uint32
 	if ed.contractInfo != nil {
 		h, _, err := w.db.GetBestBlock()
@@ -1829,7 +1817,7 @@ func (w *Worker) GetAddress(address string, page int, txsOnPage int, option Acco
 		Txs:                   int(ba.Txs),
 		NonTokenTxs:           ed.nonContractTxs,
 		InternalTxs:           ed.internalTxs,
-		UnconfirmedBalanceSat: unconfirmedBalanceSat,
+		UnconfirmedBalanceSat: (*Amount)(&uBalSat),
 		UnconfirmedTxs:        unconfirmedTxs,
 		UnconfirmedSending:    amountOrNil(&uBalSending),
 		UnconfirmedReceiving:  amountOrNil(&uBalReceiving),
