@@ -38,6 +38,11 @@ type insightFake struct {
 	// pages is height best-(p-1). blocksCalls counts those calls.
 	chain       []db.BlockInfo
 	blocksCalls int
+	// shiftReads makes that many index reads beyond the tip row report the
+	// wrong height, as if the tip moved between two reads.
+	shiftReads int
+	// blockCalls counts GetBlock calls.
+	blockCalls int
 	// blockByHash backs GetBlock (paged like the worker); rawBlock and rawErr
 	// back GetBlockRaw.
 	blockByHash map[string]*api.Block
@@ -78,11 +83,18 @@ func (f *insightFake) GetBlocks(page int, size int) (*api.Blocks, error) {
 		for i := (page - 1) * size; i < page*size && i < len(f.chain); i++ {
 			out.Blocks = append(out.Blocks, f.chain[len(f.chain)-1-i])
 		}
+		if page > 1 && f.shiftReads > 0 {
+			f.shiftReads--
+			for i := range out.Blocks {
+				out.Blocks[i].Height++
+			}
+		}
 		return out, f.err
 	}
 	return f.blocks, f.err
 }
 func (f *insightFake) GetBlock(bid string, page int, size int) (*api.Block, error) {
+	f.blockCalls++
 	b := f.blockByHash[bid]
 	if b == nil {
 		return nil, api.NewAPIError("Block not found", true)

@@ -1,12 +1,14 @@
 package server
 
 import (
+	"container/list"
 	"encoding/hex"
 	"errors"
 	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/trezor/blockbook/api"
@@ -15,10 +17,11 @@ import (
 )
 
 const (
-	insightBlocksDefaultLimit = 100
+	insightBlocksDefaultLimit = 200 // stock BLOCK_LIMIT
 	insightBlocksMaxLimit     = 200
 	insightRPCBlockNotFound   = -5
 	insightTipRetries         = 3
+	insightBlockCacheSize     = 32
 )
 
 // insightBlockPageSize is how many txs one GetBlock call loads. A var so tests
@@ -28,7 +31,10 @@ var insightBlockPageSize = 1000
 // insightNow is the clock for "today"; a var so tests can pin it.
 var insightNow = time.Now
 
-var errInsightTipMoved = errors.New("chain tip moved during the request")
+var (
+	errInsightTipMoved   = errors.New("chain tip moved during the request")
+	errInsightEmptyIndex = errors.New("no indexed block")
+)
 
 // insightHash64 reports whether s is a 64-character hex hash, and returns it
 // lower-cased.
@@ -103,7 +109,7 @@ func (s *InsightServer) blockIndex(route insightRoute) (interface{}, int, error)
 			return nil, http.StatusInternalServerError, err
 		}
 		if !ok {
-			return nil, http.StatusServiceUnavailable, errors.New("no indexed block")
+			return nil, http.StatusServiceUnavailable, errInsightEmptyIndex
 		}
 		if uint32(height) > best {
 			return nil, http.StatusNotFound, errors.New("height out of range")
@@ -160,49 +166,119 @@ func (s *InsightServer) rawBlock(route insightRoute) (interface{}, int, error) {
 	}{rawHex}, 0, nil
 }
 
-// loadBlock fetches a block with all of its transactions, paging as needed.
-func (s *InsightServer) loadBlock(hash string) (*api.Block, []*api.Tx, error) {
-	first, err := s.worker.GetBlock(hash, 1, insightBlockPageSize)
+// insightBlockData is what a block response needs beyond its header. Both
+// fields are immutable for a given hash, so they are cached by hash; the
+// header (confirmations, neighbours) is always read fresh.
+type insightBlockData struct {
+	Txids  []string
+	Reward *api.Amount // coinbase outputs minus all fees, in satoshi
+}
+
+// insightBlockCache is a small LRU of insightBlockData keyed by block hash.
+type insightBlockCache struct {
+	mu      sync.Mutex
+	order   *list.List // front = most recent; values are *insightBlockCacheEntry
+	entries map[string]*list.Element
+}
+type insightBlockCacheEntry struct {
+	hash string
+	data *insightBlockData
+}
+
+func newInsightBlockCache() *insightBlockCache {
+	return &insightBlockCache{order: list.New(), entries: map[string]*list.Element{}}
+}
+
+func (c *insightBlockCache) get(hash string) *insightBlockData {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if el, ok := c.entries[hash]; ok {
+		c.order.MoveToFront(el)
+		return el.Value.(*insightBlockCacheEntry).data
+	}
+	return nil
+}
+
+func (c *insightBlockCache) put(hash string, data *insightBlockData) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if el, ok := c.entries[hash]; ok {
+		el.Value.(*insightBlockCacheEntry).data = data
+		c.order.MoveToFront(el)
+		return
+	}
+	c.entries[hash] = c.order.PushFront(&insightBlockCacheEntry{hash, data})
+	for c.order.Len() > insightBlockCacheSize {
+		last := c.order.Back()
+		c.order.Remove(last)
+		delete(c.entries, last.Value.(*insightBlockCacheEntry).hash)
+	}
+}
+
+// loadBlock returns the block header (api.Block with no Transactions), the
+// txids in block order and the reward. A cache miss pages through every tx in
+// insightBlockPageSize chunks and keeps only txids and the running fee sum, so
+// memory stays at one page of transactions. A hit still reads one fresh
+// header row (one tx) so confirmations and neighbours are current.
+func (s *InsightServer) loadBlock(hash string) (*api.Block, *insightBlockData, error) {
+	pageSize := insightBlockPageSize
+	cached := s.blockCache.get(hash)
+	if cached != nil {
+		pageSize = 1
+	}
+	head, err := s.worker.GetBlock(hash, 1, pageSize)
 	if err != nil {
 		return nil, nil, err
 	}
-	if first == nil {
+	if head == nil {
 		return nil, nil, errors.New("missing block")
 	}
-	txs := append(make([]*api.Tx, 0, first.TxCount), first.Transactions...)
-	for page := 2; len(txs) < first.TxCount; page++ {
-		if page > first.TotalPages {
-			return nil, nil, errors.New("block transactions missing")
-		}
-		next, err := s.worker.GetBlock(hash, page, insightBlockPageSize)
-		if err != nil {
-			return nil, nil, err
-		}
-		if next == nil || next.Page != page || len(next.Transactions) == 0 {
-			return nil, nil, errors.New("block page missing")
-		}
-		txs = append(txs, next.Transactions...)
+	if cached != nil && len(cached.Txids) == head.TxCount {
+		head.Transactions = nil
+		return head, cached, nil
 	}
-	return first, txs, nil
-}
-
-// insightBlockReward is the coinbase output total minus the fees of every tx
-// in the block, as an integer.
-func insightBlockReward(txs []*api.Tx) *api.Amount {
+	data := &insightBlockData{Txids: make([]string, 0, head.TxCount)}
 	total := new(big.Int)
-	if len(txs) > 0 && txs[0] != nil {
-		for _, out := range txs[0].Vout {
-			v := out.ValueSat.AsBigInt()
-			total.Add(total, &v)
-		}
-	}
-	for _, tx := range txs {
-		if tx != nil {
+	collect := func(txs []*api.Tx) error {
+		for _, tx := range txs {
+			if tx == nil {
+				return errors.New("missing block transaction")
+			}
+			if len(data.Txids) == 0 { // the coinbase is the first tx of the block
+				for _, out := range tx.Vout {
+					v := out.ValueSat.AsBigInt()
+					total.Add(total, &v)
+				}
+			}
 			fee := tx.FeesSat.AsBigInt()
 			total.Sub(total, &fee)
+			data.Txids = append(data.Txids, tx.Txid)
+		}
+		return nil
+	}
+	page, got := head, 1
+	for {
+		if err := collect(page.Transactions); err != nil {
+			return nil, nil, err
+		}
+		if len(data.Txids) >= head.TxCount {
+			break
+		}
+		got++
+		if got > head.TotalPages {
+			return nil, nil, errors.New("block transactions missing")
+		}
+		if page, err = s.worker.GetBlock(hash, got, pageSize); err != nil {
+			return nil, nil, err
+		}
+		if page == nil || page.Page != got || len(page.Transactions) == 0 {
+			return nil, nil, errors.New("block page missing")
 		}
 	}
-	return (*api.Amount)(total)
+	head.Transactions = nil
+	data.Reward = (*api.Amount)(total)
+	s.blockCache.put(hash, data)
+	return head, data, nil
 }
 
 func (s *InsightServer) block(route insightRoute) (interface{}, int, error) {
@@ -210,26 +286,19 @@ func (s *InsightServer) block(route insightRoute) (interface{}, int, error) {
 	if !ok {
 		return nil, http.StatusBadRequest, errors.New("invalid block hash")
 	}
-	b, txs, err := s.loadBlock(hash)
+	b, data, err := s.loadBlock(hash)
 	if err != nil {
 		return nil, insightBlockErrorCode(err), err
 	}
-	reward, _, err := insightMoney(insightBlockReward(txs))
+	reward, _, err := insightMoney(data.Reward)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	txids := make([]string, 0, len(txs))
-	for _, tx := range txs {
-		if tx == nil {
-			return nil, http.StatusInternalServerError, errors.New("missing block transaction")
-		}
-		txids = append(txids, tx.Txid)
-	}
 	out := &insightBlock{
 		Hash: b.Hash, Size: b.Size, Height: b.Height, Version: insightNumberOrString(string(b.Version)),
-		MerkleRoot: b.MerkleRoot, Tx: txids, Time: b.Time, Nonce: insightNumberOrString(b.Nonce),
+		MerkleRoot: b.MerkleRoot, Tx: data.Txids, Time: b.Time, Nonce: insightNumberOrString(b.Nonce),
 		Bits: b.Bits, Difficulty: insightNumberOrString(b.Difficulty), Confirmations: b.Confirmations,
-		Prev: b.Prev, Next: b.Next, Reward: reward, IsMainChain: true,
+		Prev: b.Prev, Next: b.Next, Reward: reward, IsMainChain: b.Confirmations != -1,
 	}
 	if s.rpc != nil {
 		var header struct {
@@ -242,67 +311,96 @@ func (s *InsightServer) block(route insightRoute) (interface{}, int, error) {
 	return out, 0, nil
 }
 
-// insightBlocksQuery validates limit and blockDate. A missing blockDate is
-// today in UTC.
-func insightBlocksQuery(route insightRoute, now time.Time) (limit int, day time.Time, isToday bool, ok bool) {
+// insightBlocksQuery validates limit, blockDate and startTimestamp. A missing
+// blockDate is today in UTC. end is the exclusive upper time bound: the next
+// midnight, or startTimestamp+1 when startTimestamp is given (stock treats an
+// explicit end as inclusive, so a page opened with the previous moreTs
+// repeats that last row and skips none).
+func insightBlocksQuery(route insightRoute, now time.Time) (limit int, day time.Time, end int64, isToday bool, ok bool) {
 	limit = insightBlocksDefaultLimit
 	if raw := route.query.Get("limit"); route.query.Has("limit") {
 		n, err := strconv.Atoi(raw)
 		if !insightDigits(raw) || err != nil || n < 1 || n > insightBlocksMaxLimit {
-			return 0, time.Time{}, false, false
+			return
 		}
 		limit = n
 	}
 	today := now.UTC().Truncate(24 * time.Hour)
-	if !route.query.Has("blockDate") {
-		return limit, today, true, true
+	day, isToday = today, true
+	if route.query.Has("blockDate") {
+		var err error
+		if day, err = time.Parse("2006-01-02", route.query.Get("blockDate")); err != nil {
+			return
+		}
+		isToday = day.Equal(today)
 	}
-	day, err := time.Parse("2006-01-02", route.query.Get("blockDate"))
-	if err != nil {
-		return 0, time.Time{}, false, false
+	end = day.Unix() + 86400
+	if route.query.Has("startTimestamp") {
+		raw := route.query.Get("startTimestamp")
+		ts, err := strconv.ParseInt(raw, 10, 64)
+		if !insightDigits(raw) || err != nil || ts < 1 || ts > 1<<40 {
+			return
+		}
+		end = ts + 1
 	}
-	return limit, day, day.Equal(today), true
+	return limit, day, end, isToday, true
 }
 
 func (s *InsightServer) blocks(route insightRoute) (interface{}, int, error) {
-	limit, day, isToday, ok := insightBlocksQuery(route, insightNow())
+	limit, day, end, isToday, ok := insightBlocksQuery(route, insightNow())
 	if !ok {
 		return nil, http.StatusBadRequest, errors.New("invalid blocks query")
 	}
-	start, end := day.Unix(), day.Unix()+86400
-	list := insightBlockList{Blocks: []insightBlockRow{}, Pagination: insightBlockPagination{
-		Next: day.AddDate(0, 0, 1).Format("2006-01-02"), Prev: day.AddDate(0, 0, -1).Format("2006-01-02"),
-		CurrentTs: end - 1, Current: day.Format("2006-01-02"), IsToday: isToday,
+	// Stock: lte is startTimestamp or the next midnight; currentTs = lte-1 and
+	// next is the date of lte.
+	lte := end
+	if route.query.Has("startTimestamp") {
+		lte = end - 1
+	}
+	result := insightBlockList{Blocks: []insightBlockRow{}, Pagination: insightBlockPagination{
+		Next: time.Unix(lte, 0).UTC().Format("2006-01-02"), Prev: day.AddDate(0, 0, -1).Format("2006-01-02"),
+		CurrentTs: lte - 1, Current: day.Format("2006-01-02"), IsToday: isToday,
 	}}
 	for try := 0; try < insightTipRetries; try++ {
-		rows, more, err := s.blocksInRange(start, end, limit)
+		rows, more, err := s.blocksInRange(day.Unix(), end, limit)
 		if err == errInsightTipMoved {
 			continue
+		}
+		if err == errInsightEmptyIndex {
+			return nil, http.StatusServiceUnavailable, err
 		}
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
 		for _, r := range rows {
-			list.Blocks = append(list.Blocks, insightBlockRow{Height: r.Height, Size: r.Size, Hash: r.Hash, Time: r.Time, TxLength: r.Txs, IsMainChain: true})
+			result.Blocks = append(result.Blocks, insightBlockRow{Height: r.Height, Size: r.Size, Hash: r.Hash, Time: r.Time, TxLength: r.Txs, IsMainChain: true})
 		}
-		list.Length = len(list.Blocks)
-		list.Pagination.More = more
+		result.Length = len(result.Blocks)
+		result.Pagination.More = more
 		if more {
 			t := rows[len(rows)-1].Time
-			list.Pagination.MoreTs = &t
+			result.Pagination.MoreTs = &t
 		}
-		return list, 0, nil
+		return result, 0, nil
 	}
 	return nil, http.StatusServiceUnavailable, errInsightTipMoved
 }
 
+// Block times are only loosely ordered (consensus allows a block to be up to
+// about 2 h out of order), so the search can place a block within roughly 2 h
+// of a boundary on the wrong side. It never errors on that, and the result is
+// always a contiguous run of heights.
+//
 // blocksInRange returns up to limit rows with start <= time < end, newest
 // first, and whether older rows in the range were cut off. Heights are found
 // by binary search over single-row index reads, never by scanning.
 func (s *InsightServer) blocksInRange(start, end int64, limit int) ([]db.BlockInfo, bool, error) {
 	best, ok, err := s.insightTip()
-	if err != nil || !ok {
+	if err != nil {
 		return nil, false, err
+	}
+	if !ok {
+		return nil, false, errInsightEmptyIndex
 	}
 	cache := map[uint32]db.BlockInfo{}
 	at := func(h uint32) (db.BlockInfo, error) {

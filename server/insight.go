@@ -48,6 +48,7 @@ type InsightServer struct {
 	// rpc and coinShortcut are set by SetBackend before Start; rpc may be nil.
 	rpc          InsightRPC
 	coinShortcut string
+	blockCache   *insightBlockCache
 }
 
 func NewInsightServer(binding string, chainType bchain.ChainType, decimals int, worker insightWorker, broadcast func(string) (string, error)) (*InsightServer, error) {
@@ -61,7 +62,7 @@ func NewInsightServer(binding string, chainType bchain.ChainType, decimals int, 
 	if worker == nil {
 		return nil, errors.New("Insight requires a query worker")
 	}
-	s := &InsightServer{worker: worker, broadcast: broadcast, slots: make(chan struct{}, 32)}
+	s := &InsightServer{worker: worker, broadcast: broadcast, slots: make(chan struct{}, 32), blockCache: newInsightBlockCache()}
 	s.http = &http.Server{Addr: binding, Handler: s, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	return s, nil
 }

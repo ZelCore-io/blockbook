@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -110,9 +111,20 @@ func TestInsightBlocksByDateEdges(t *testing.T) {
 	}
 	insightGetJSON(t, s, "/api/blocks?limit=200", 200)
 	f.blocksCalls = 0
-	insightGetJSON(t, s, "/api/blocks?blockDate=2026-10-28", 200)
+	out := insightGetJSON(t, s, "/api/blocks?blockDate=2026-10-28", 200)
+	if got := insightRowHeights(t, out); !reflect.DeepEqual(got, []int{4, 3}) {
+		t.Fatalf("heights %v", got)
+	}
 	if f.blocksCalls == 0 || f.blocksCalls > 40 {
 		t.Fatalf("GetBlocks calls: %d", f.blocksCalls)
+	}
+	// The newest day holds a block too.
+	old := insightNow
+	insightNow = func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }
+	defer func() { insightNow = old }()
+	out = insightGetJSON(t, s, "/api/blocks", 200)
+	if got := insightRowHeights(t, out); !reflect.DeepEqual(got, []int{5}) || out["pagination"].(map[string]interface{})["isToday"] != true {
+		t.Fatalf("today %v", out)
 	}
 	// A large chain stays logarithmic.
 	big := make([]db.BlockInfo, 1000000)
@@ -283,5 +295,128 @@ func TestInsightBlockNotFound(t *testing.T) {
 	f.err = errors.New("db secret")
 	if w := insightRequest(s, "GET", "/api/block/"+insightHashN(4), ""); w.Code != 500 || strings.Contains(w.Body.String(), "secret") {
 		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+func TestInsightBlocksStartTimestamp(t *testing.T) {
+	f := insightFixture()
+	f.chain = insightChain6()
+	s := insightTestServer(t, f)
+	// Page through the 27th two rows at a time with moreTs. The end is
+	// inclusive, as in stock, so the last row of a page opens the next one.
+	out := insightGetJSON(t, s, "/api/blocks?blockDate=2026-10-27&limit=2", 200)
+	moreTs := int64(out["pagination"].(map[string]interface{})["moreTs"].(float64))
+	out = insightGetJSON(t, s, "/api/blocks?blockDate=2026-10-27&limit=2&startTimestamp="+strconv.FormatInt(moreTs, 10), 200)
+	p := out["pagination"].(map[string]interface{})
+	if got := insightRowHeights(t, out); !reflect.DeepEqual(got, []int{1, 0}) || p["more"] != false {
+		t.Fatalf("second page %v %v", got, p)
+	}
+	if p["currentTs"].(float64) != float64(moreTs-1) || p["current"] != "2026-10-27" || p["next"] != time.Unix(moreTs, 0).UTC().Format("2006-01-02") {
+		t.Fatalf("pagination %v", p)
+	}
+	// An end before the day, or a block exactly at the end, behave inclusively.
+	out = insightGetJSON(t, s, "/api/blocks?blockDate=2026-10-27&startTimestamp="+strconv.FormatInt(f.chain[0].Time-1, 10), 200)
+	if out["length"].(float64) != 0 {
+		t.Fatalf("%v", out)
+	}
+	out = insightGetJSON(t, s, "/api/blocks?blockDate=2026-10-27&startTimestamp="+strconv.FormatInt(f.chain[0].Time, 10), 200)
+	if got := insightRowHeights(t, out); !reflect.DeepEqual(got, []int{0}) {
+		t.Fatalf("%v", got)
+	}
+	for _, q := range []string{"startTimestamp=", "startTimestamp=0", "startTimestamp=-1", "startTimestamp=x", "startTimestamp=1.5"} {
+		insightGetJSON(t, s, "/api/blocks?blockDate=2026-10-27&"+q, 400)
+	}
+}
+
+func TestInsightBlocksDefaultLimit(t *testing.T) {
+	f := insightFixture()
+	n := 250
+	f.chain = make([]db.BlockInfo, n)
+	for i := range f.chain {
+		f.chain[i] = db.BlockInfo{Hash: insightHashN(0), Time: time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC).Unix() + int64(i)*60, Height: uint32(i)}
+	}
+	s := insightTestServer(t, f)
+	out := insightGetJSON(t, s, "/api/blocks?blockDate=2026-10-27", 200)
+	if out["length"].(float64) != 200 || out["pagination"].(map[string]interface{})["more"] != true {
+		t.Fatalf("default limit: %v", out["length"])
+	}
+}
+
+// Block times are only loosely ordered. With two swapped times at a day
+// boundary the search may place a boundary block on the wrong side, but the
+// answer stays a contiguous run of heights within the documented 2 h of the
+// window, and never an error.
+func TestInsightBlocksNonMonotonicTimes(t *testing.T) {
+	f := insightFixture()
+	f.chain = insightChain6()
+	f.chain[2].Time = time.Date(2026, 10, 28, 0, 0, 5, 0, time.UTC).Unix()
+	f.chain[3].Time = time.Date(2026, 10, 27, 23, 59, 58, 0, time.UTC).Unix()
+	s := insightTestServer(t, f)
+	out := insightGetJSON(t, s, "/api/blocks?blockDate=2026-10-27", 200)
+	heights := insightRowHeights(t, out)
+	if len(heights) == 0 || len(heights) > 4 {
+		t.Fatalf("heights %v", heights)
+	}
+	for i := 1; i < len(heights); i++ {
+		if heights[i] != heights[i-1]-1 {
+			t.Fatalf("not contiguous: %v", heights)
+		}
+	}
+	start := time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC).Unix()
+	for _, row := range out["blocks"].([]interface{}) {
+		at := int64(row.(map[string]interface{})["time"].(float64))
+		if at < start-7200 || at > start+86400+7200 {
+			t.Fatalf("row outside the tolerance: %v", row)
+		}
+	}
+}
+
+func TestInsightBlocksTipMovedAndEmptyIndex(t *testing.T) {
+	f := insightFixture()
+	f.chain = insightChain6()
+	s := insightTestServer(t, f)
+	// One stale read is retried and the answer is right.
+	f.shiftReads = 1
+	out := insightGetJSON(t, s, "/api/blocks?blockDate=2026-10-27", 200)
+	if got := insightRowHeights(t, out); !reflect.DeepEqual(got, []int{2, 1, 0}) {
+		t.Fatalf("after retry: %v", got)
+	}
+	f.shiftReads = 1
+	if out = insightGetJSON(t, s, "/api/block-index/3", 200); out["blockHash"] != insightHashN(3) {
+		t.Fatalf("after retry: %v", out)
+	}
+	// A tip that never settles is a 503, for both routes.
+	f.shiftReads = 1000
+	insightGetJSON(t, s, "/api/blocks?blockDate=2026-10-27", 503)
+	insightGetJSON(t, s, "/api/block-index/3", 503)
+	// No index at all is a 503, for both routes.
+	f.shiftReads = 0
+	f.chain = []db.BlockInfo{}
+	insightGetJSON(t, s, "/api/blocks?blockDate=2026-10-27", 503)
+	insightGetJSON(t, s, "/api/block-index/0", 503)
+}
+
+func TestInsightBlockMainChainAndCache(t *testing.T) {
+	old := insightBlockPageSize
+	insightBlockPageSize = 2
+	defer func() { insightBlockPageSize = old }()
+	hash := insightHashN(3)
+	f := insightFixture()
+	insightBlockFixture(f, hash, 5)
+	f.blockByHash[hash].Confirmations = -1
+	s := insightTestServer(t, f)
+	out := insightGetJSON(t, s, "/api/block/"+hash, 200)
+	if out["isMainChain"] != false || out["confirmations"].(float64) != -1 {
+		t.Fatalf("stale block: %v", out)
+	}
+	// 5 txs at 2 per page is 3 pages on the first request; a repeat reads one
+	// header row only and still reports fresh confirmations.
+	if f.blockCalls != 3 {
+		t.Fatalf("first request GetBlock calls: %d", f.blockCalls)
+	}
+	f.blockByHash[hash].Confirmations = 4
+	again := insightGetJSON(t, s, "/api/block/"+hash, 200)
+	if f.blockCalls != 4 || again["isMainChain"] != true || again["confirmations"].(float64) != 4 || !reflect.DeepEqual(again["tx"], out["tx"]) || again["reward"] != out["reward"] {
+		t.Fatalf("cached block: calls=%d %v", f.blockCalls, again)
 	}
 }
