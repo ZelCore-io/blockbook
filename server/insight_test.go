@@ -234,7 +234,7 @@ func TestInsightInvalidRequests(t *testing.T) {
 	}{
 		{"GET", "/unknown", "", 404}, {"OPTIONS", "/unknown", "", 404}, {"POST", "/api/status", "", 405}, {"GET", "/api/tx/send", "", 405},
 		{"POST", "/api/sync", "", 405}, {"OPTIONS", "/insight-api/status", "", 204},
-		{"GET", "/api/addr", "", 400}, {"GET", "/api/addrs/A,B/txs", "", 400},
+		{"GET", "/api/addr", "", 400}, {"GET", "/api/addrs/A,B/txs", "", 200}, {"GET", "/api/addrs/A,B/txs?to=1001", "", 400},
 		{"GET", "/api/addrs/A/txs?from=-1&to=5", "", 400}, {"GET", "/api/addrs/A/txs?from=0&to=1001", "", 400},
 		{"GET", "/api/addrs/A/txs?to=1001", "", 200}, {"GET", "/api/addrs/A/txs?from=-1", "", 200},
 		{"GET", "/api/addrs/A/txs?from=0&to=1000", "", 200}, {"GET", "/api/addrs/A/txs?from=2000&to=3000", "", 200}, {"GET", "/api/addrs/A/txs//5", "", 200}, {"GET", "/api/addrs/A/txs/0/", "", 200},

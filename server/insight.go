@@ -236,6 +236,14 @@ func (s *InsightServer) handle(route insightRoute) (interface{}, int, error) {
 		return s.utxo(route, address)
 	case "history":
 		return s.history(route, address)
+	case "multiutxo":
+		return s.multiUtxo(route, false)
+	case "multiunspent":
+		return s.multiUtxo(route, true)
+	case "multibalance":
+		return s.multiBalance(route)
+	case "multitxs":
+		return s.multiTxs(route)
 	case "send":
 		return s.send(route)
 	case "tx":

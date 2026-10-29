@@ -119,7 +119,12 @@ func insightMatch(r *http.Request) (insightRoute, []string, bool) {
 		case n == 3 && parts[2] == "balance":
 			route.kind, route.addresses = "multibalance", strings.Split(parts[1], ",")
 		case n >= 3 && n <= 5 && parts[2] == "txs":
-			route.kind, single = "history", parts[1]
+			// A comma makes it the merged multi-address history.
+			if strings.Contains(parts[1], ",") {
+				route.kind, route.addresses = "multitxs", strings.Split(parts[1], ",")
+			} else {
+				route.kind, single = "history", parts[1]
+			}
 			if n > 3 {
 				route.from = parts[3]
 			}

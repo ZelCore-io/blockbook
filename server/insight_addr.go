@@ -110,13 +110,13 @@ func (s *InsightServer) addressPages(address string, from, to int) (*api.Address
 }
 
 // insightOwnTx returns a copy of tx with isOwn set on the inputs and outputs
-// that pay or spend address alone, as Blockbook's address history does
-// (setIsOwnAddress). The worker's tx is not modified.
-func insightOwnTx(tx *api.Tx, address string) *api.Tx {
+// that pay or spend one of the owned addresses alone, as Blockbook's address
+// history does (setIsOwnAddress). The worker's tx is not modified.
+func insightOwnTx(tx *api.Tx, owned map[string]bool) *api.Tx {
 	if tx == nil {
 		return nil
 	}
-	own := func(addresses []string) bool { return len(addresses) == 1 && addresses[0] == address }
+	own := func(addresses []string) bool { return len(addresses) == 1 && owned[addresses[0]] }
 	c := *tx
 	if tx.Vin != nil {
 		c.Vin = append([]api.Vin{}, tx.Vin...)
@@ -139,6 +139,11 @@ func insightOwnTx(tx *api.Tx, address string) *api.Tx {
 
 // historyItems loads and transforms the txs of an address history window.
 func (s *InsightServer) historyItems(address string, ids []string) ([]*insightTx, int, error) {
+	return s.ownedItems(map[string]bool{address: true}, ids)
+}
+
+// ownedItems loads and transforms txs, marking isOwn for the owned addresses.
+func (s *InsightServer) ownedItems(owned map[string]bool, ids []string) ([]*insightTx, int, error) {
 	items := make([]*insightTx, 0, len(ids))
 	for _, id := range ids {
 		tx, err := s.worker.GetTransaction(id, false, false)
@@ -148,7 +153,7 @@ func (s *InsightServer) historyItems(address string, ids []string) ([]*insightTx
 		if tx == nil {
 			return nil, http.StatusInternalServerError, errors.New("missing transaction")
 		}
-		item, err := insightTransaction(insightOwnTx(tx, address))
+		item, err := insightTransaction(insightOwnTx(tx, owned))
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
@@ -262,11 +267,20 @@ func (s *InsightServer) addrValue(route insightRoute, addr string) (interface{},
 
 // utxo serves addr/:a/utxo and addr/utxo?address=, pending included.
 func (s *InsightServer) utxo(route insightRoute, addr string) (interface{}, int, error) {
-	rows, err := s.worker.GetAddressUtxo(addr, false)
+	out, code, err := s.appendUtxos(make([]insightUtxo, 0), addr, false)
+	if err != nil {
+		return nil, code, err
+	}
+	return out, 0, nil
+}
+
+// appendUtxos appends the stock utxo rows of addr (pending included unless
+// onlyConfirmed). A row without an address takes the requested one.
+func (s *InsightServer) appendUtxos(out []insightUtxo, addr string, onlyConfirmed bool) ([]insightUtxo, int, error) {
+	rows, err := s.worker.GetAddressUtxo(addr, onlyConfirmed)
 	if err != nil {
 		return nil, insightAddressErrorCode(err), err
 	}
-	out := make([]insightUtxo, 0, len(rows))
 	for _, u := range rows {
 		amount, sat, err := insightMoney(u.AmountSat)
 		if err != nil {
@@ -274,7 +288,7 @@ func (s *InsightServer) utxo(route insightRoute, addr string) (interface{}, int,
 		}
 		address := u.Address
 		if address == "" {
-			address = route.addresses[0]
+			address = addr
 		}
 		out = append(out, insightUtxo{address, u.Txid, u.Vout, amount, sat, u.Height, u.Confirmations, u.Coinbase})
 	}
