@@ -17,6 +17,7 @@ import (
 	"github.com/trezor/blockbook/api"
 	"github.com/trezor/blockbook/bchain"
 	"github.com/trezor/blockbook/common"
+	"github.com/trezor/blockbook/db"
 )
 
 type insightFake struct {
@@ -30,6 +31,9 @@ type insightFake struct {
 	fetched []string
 	enter   chan struct{}
 	release chan struct{}
+	blocks  *api.Blocks
+	// blocksPage and blocksSize record the last GetBlocks call.
+	blocksPage, blocksSize int
 }
 
 func (f *insightFake) GetSystemInfo(bool) (*api.SystemInfo, error) {
@@ -57,13 +61,18 @@ func (f *insightFake) GetTransaction(id string, _ bool, _ bool) (*api.Tx, error)
 	f.fetched = append(f.fetched, id)
 	return f.txs[id], f.err
 }
+func (f *insightFake) GetBlocks(page int, size int) (*api.Blocks, error) {
+	f.blocksPage, f.blocksSize = page, size
+	return f.blocks, f.err
+}
 func insightAmount(n int64) *api.Amount { return (*api.Amount)(big.NewInt(n)) }
 func insightFixture() *insightFake {
 	return &insightFake{
 		address: &api.Address{AddrStr: "A", BalanceSat: insightAmount(1), UnconfirmedBalanceSat: insightAmount(-1), Txs: 3, UnconfirmedTxs: 1, Txids: []string{"pending", "a", "b", "c"}},
 		utxos:   api.Utxos{{Txid: "a", AmountSat: insightAmount(1), Coinbase: true}},
 		txs:     map[string]*api.Tx{"pending": {Txid: "pending"}, "a": {Txid: "a", FeesSat: insightAmount(1), Vin: []api.Vin{{Coinbase: "abc"}}, Vout: []api.Vout{{ValueSat: insightAmount(1), Hex: "6a026869", Addresses: []string{"OP_RETURN (hi)"}}}}, "b": {Txid: "b"}, "c": {Txid: "c"}},
-		info:    &api.SystemInfo{Backend: &common.BackendInfo{Blocks: 10, Version: "123", ProtocolVersion: "456", Difficulty: "2.5"}},
+		info:    &api.SystemInfo{Blockbook: &api.BlockbookInfo{InSync: true, BestHeight: 10}, Backend: &common.BackendInfo{Blocks: 10, Version: "123", ProtocolVersion: "456", Difficulty: "2.5", BestBlockHash: "bb"}},
+		blocks:  &api.Blocks{Blocks: []db.BlockInfo{{Hash: "tip"}}},
 	}
 }
 func insightTestServer(t *testing.T, f *insightFake) *InsightServer {
@@ -124,6 +133,7 @@ func TestInsightInvalidRequests(t *testing.T) {
 		code               int
 	}{
 		{"GET", "/unknown", "", 404}, {"OPTIONS", "/unknown", "", 404}, {"POST", "/api/status", "", 405}, {"GET", "/api/tx/send", "", 405},
+		{"POST", "/api/sync", "", 405}, {"OPTIONS", "/insight-api/status", "", 204},
 		{"GET", "/api/addr", "", 400}, {"GET", "/api/addrs/A,B/txs", "", 400},
 		{"GET", "/api/addrs/A/txs?from=-1", "", 400}, {"GET", "/api/addrs/A/txs?to=1001", "", 400},
 		{"GET", "/api/addrs/A/txs?from=2&to=1", "", 400}, {"GET", "/api/addrs/A/txs?from=1.5", "", 400},

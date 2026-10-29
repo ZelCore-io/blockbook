@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -28,6 +27,7 @@ type insightWorker interface {
 	GetAddress(string, int, int, api.AccountDetails, *api.AddressFilter, string) (*api.Address, error)
 	GetAddressUtxo(string, bool) (api.Utxos, error)
 	GetTransaction(string, bool, bool) (*api.Tx, error)
+	GetBlocks(page int, blocksOnPage int) (*api.Blocks, error)
 }
 
 // InsightServer is the optional eight-decimal Bitcoin compatibility listener.
@@ -43,6 +43,9 @@ type InsightServer struct {
 	started   bool
 	listener  net.Listener
 	active    sync.WaitGroup
+	// rpc and coinShortcut are set by SetBackend before Start; rpc may be nil.
+	rpc          InsightRPC
+	coinShortcut string
 }
 
 func NewInsightServer(binding string, chainType bchain.ChainType, decimals int, worker insightWorker, broadcast func(string) (string, error)) (*InsightServer, error) {
@@ -115,71 +118,6 @@ func insightError(w http.ResponseWriter, code int, message string) {
 	}{"error", message})
 }
 
-type insightRoute struct{ kind, address, from, to string }
-
-func insightMatch(r *http.Request) (insightRoute, bool) {
-	parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
-	if len(parts) < 3 || parts[0] != "" || parts[1] != "api" {
-		return insightRoute{}, false
-	}
-	route := insightRoute{}
-	switch parts[2] {
-	case "status":
-		if len(parts) == 3 {
-			route.kind = "status"
-		}
-	case "tx":
-		if len(parts) == 4 && parts[3] == "send" {
-			route.kind = "send"
-		}
-	case "addr":
-		if len(parts) == 3 {
-			route.kind = "summary"
-		} else if len(parts) == 4 {
-			if parts[3] == "utxo" {
-				route.kind = "utxo"
-			} else {
-				route.kind = "summary"
-				route.address = parts[3]
-			}
-		} else if len(parts) == 5 {
-			route.address = parts[3]
-			route.kind = "summary"
-			if parts[4] == "utxo" {
-				route.kind = "utxo"
-			}
-		}
-	case "addrs":
-		txs := 3
-		if len(parts) > 3 && parts[3] != "txs" {
-			route.address = parts[3]
-			txs = 4
-		}
-		if len(parts) > txs && parts[txs] == "txs" && len(parts) <= txs+3 {
-			route.kind = "history"
-			if len(parts) > txs+1 {
-				route.from = parts[txs+1]
-			}
-			if len(parts) > txs+2 {
-				route.to = parts[txs+2]
-			}
-		}
-	}
-	if route.kind == "" {
-		return route, false
-	}
-	if route.address == "" {
-		route.address = r.URL.Query().Get("address")
-	}
-	if route.from == "" {
-		route.from = r.URL.Query().Get("from")
-	}
-	if route.to == "" {
-		route.to = r.URL.Query().Get("to")
-	}
-	return route, true
-}
-
 func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sourceURL, sourceLabel := sourceLink(common.GetVersionInfo().GitCommit)
 	w.Header().Set("Link", fmt.Sprintf("<%s>; rel=\"source\"; title=\"%s\"", sourceURL, sourceLabel))
@@ -187,7 +125,7 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Expose-Headers", "Link")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	route, ok := insightMatch(r)
+	route, methods, ok := insightMatch(r)
 	if !ok {
 		insightError(w, 404, "Route not found")
 		return
@@ -196,12 +134,8 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(204)
 		return
 	}
-	method := http.MethodGet
-	if route.kind == "send" {
-		method = http.MethodPost
-	}
-	if r.Method != method {
-		w.Header().Set("Allow", method+", OPTIONS")
+	if !insightAllowed(methods, r.Method) {
+		w.Header().Set("Allow", strings.Join(methods, ", ")+", OPTIONS")
 		insightError(w, 405, "Method not allowed")
 		return
 	}
@@ -223,29 +157,46 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	defer func() { <-s.slots; s.active.Done() }()
-	if route.kind != "status" && route.kind != "send" && (route.address == "" || strings.Contains(route.address, ",")) {
-		insightError(w, 400, "A single address is required")
-		return
+	if insightSingleAddressKinds[route.kind] {
+		if _, ok := insightSingleAddress(route); !ok {
+			insightError(w, 400, "A single address is required")
+			return
+		}
 	}
-	value, code, err := s.handle(w, r, route)
+	if r.Method == http.MethodPost {
+		body, code, err := insightReadBody(w, r)
+		if err != nil {
+			code, message := insightErrorStatus(code)
+			insightError(w, code, message)
+			return
+		}
+		route.body = body
+	}
+	value, code, err := s.handle(route)
 	if err != nil {
-		if code == 0 {
-			code = 500
-		}
-		message := "Backend request failed"
-		if code == 400 {
-			message = "Invalid request"
-		}
-		if code == 413 {
-			message = "Request body too large"
-		}
-		if code == 503 {
-			message = "Service unavailable"
-		}
+		code, message := insightErrorStatus(code)
 		insightError(w, code, message)
 		return
 	}
 	insightJSON(w, 200, value)
+}
+
+// insightErrorStatus maps a handler status to the generic public message.
+// Unknown statuses, including 0, become 500.
+func insightErrorStatus(code int) (int, string) {
+	switch code {
+	case http.StatusBadRequest:
+		return code, "Invalid request"
+	case http.StatusNotFound:
+		return code, "Not found"
+	case http.StatusRequestEntityTooLarge:
+		return code, "Request body too large"
+	case http.StatusNotImplemented:
+		return code, "Not supported"
+	case http.StatusServiceUnavailable:
+		return code, "Service unavailable"
+	}
+	return http.StatusInternalServerError, "Backend request failed"
 }
 
 func insightStatusNumber(value string) json.Number {
@@ -255,27 +206,28 @@ func insightStatusNumber(value string) json.Number {
 	}
 	return "0"
 }
-func (s *InsightServer) handle(w http.ResponseWriter, r *http.Request, route insightRoute) (interface{}, int, error) {
+
+// handle dispatches an admitted route. Kinds without a handler yet are 501.
+func (s *InsightServer) handle(route insightRoute) (interface{}, int, error) {
+	address, _ := insightSingleAddress(route)
 	switch route.kind {
 	case "status":
-		info, err := s.worker.GetSystemInfo(false)
-		if err != nil {
-			return nil, 500, err
-		}
-		if info == nil || info.Backend == nil || info.Backend.BackendError != "" {
-			return nil, 503, errors.New("backend unavailable")
-		}
-		b := info.Backend
-		return map[string]interface{}{"info": map[string]interface{}{"blocks": b.Blocks, "version": insightStatusNumber(b.Version), "protocolversion": insightStatusNumber(b.ProtocolVersion), "difficulty": insightStatusNumber(b.Difficulty), "errors": ""}}, 0, nil
+		return s.status(route)
+	case "sync":
+		return s.sync()
+	case "peer":
+		return insightPeer(), 0, nil
+	case "version":
+		return insightVersion(), 0, nil
 	case "summary":
-		address, err := s.worker.GetAddress(route.address, 1, 1, api.AccountDetailsTokens, &api.AddressFilter{Vout: api.AddressFilterVoutOff}, "")
+		address, err := s.worker.GetAddress(address, 1, 1, api.AccountDetailsTokens, &api.AddressFilter{Vout: api.AddressFilterVoutOff}, "")
 		if err != nil {
 			return nil, insightAddressErrorCode(err), err
 		}
 		out, err := insightAddress(address)
 		return out, 500, err
 	case "utxo":
-		rows, err := s.worker.GetAddressUtxo(route.address, false)
+		rows, err := s.worker.GetAddressUtxo(address, false)
 		if err != nil {
 			return nil, insightAddressErrorCode(err), err
 		}
@@ -287,32 +239,24 @@ func (s *InsightServer) handle(w http.ResponseWriter, r *http.Request, route ins
 			}
 			address := u.Address
 			if address == "" {
-				address = route.address
+				address = route.addresses[0]
 			}
 			out = append(out, insightUtxo{address, u.Txid, u.Vout, amount, sat, u.Height, u.Confirmations, u.Coinbase})
 		}
 		return out, 0, nil
 	case "history":
-		return s.history(route)
+		return s.history(route, address)
 	case "send":
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, insightBodyLimit))
-		if err != nil {
-			var large *http.MaxBytesError
-			if errors.As(err, &large) {
-				return nil, 413, err
-			}
-			return nil, 400, err
-		}
 		var input struct {
 			Rawtx string `json:"rawtx"`
 		}
-		if err = json.Unmarshal(body, &input); err != nil {
+		if err := json.Unmarshal(route.body, &input); err != nil {
 			return nil, 400, err
 		}
 		if input.Rawtx == "" {
 			return nil, 400, errors.New("empty rawtx")
 		}
-		if _, err = hex.DecodeString(input.Rawtx); err != nil {
+		if _, err := hex.DecodeString(input.Rawtx); err != nil {
 			return nil, 400, err
 		}
 		if s.broadcast == nil {
@@ -326,7 +270,7 @@ func (s *InsightServer) handle(w http.ResponseWriter, r *http.Request, route ins
 			Txid string `json:"txid"`
 		}{txid}, 0, nil
 	}
-	return nil, 500, errors.New("missing route")
+	return nil, http.StatusNotImplemented, errors.New("route not implemented")
 }
 
 func insightOffset(value string, fallback int) (int, error) {
@@ -344,7 +288,7 @@ func insightOffset(value string, fallback int) (int, error) {
 	}
 	return n, nil
 }
-func (s *InsightServer) history(route insightRoute) (interface{}, int, error) {
+func (s *InsightServer) history(route insightRoute, addr string) (interface{}, int, error) {
 	from, err := insightOffset(route.from, 0)
 	if err != nil {
 		return nil, 400, err
@@ -360,7 +304,7 @@ func (s *InsightServer) history(route insightRoute) (interface{}, int, error) {
 	if prefix == 0 {
 		prefix = 1
 	}
-	address, err := s.worker.GetAddress(route.address, 1, prefix, api.AccountDetailsTxidHistory, &api.AddressFilter{Vout: api.AddressFilterVoutOff}, "")
+	address, err := s.worker.GetAddress(addr, 1, prefix, api.AccountDetailsTxidHistory, &api.AddressFilter{Vout: api.AddressFilterVoutOff}, "")
 	if err != nil {
 		return nil, insightAddressErrorCode(err), err
 	}

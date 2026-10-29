@@ -212,6 +212,21 @@ func (c *blockChainWithMetrics) observeRPCLatency(method string, start time.Time
 	c.m.RPCLatency.With(common.Labels{"method": method, "error": e}).Observe(float64(time.Since(start)) / 1e6) // in milliseconds
 }
 
+// RawRPC exposes the wrapped chain's raw JSON-RPC caller (BitcoinRPC.Call,
+// promoted through coins that embed it). Calls are observed as "RawRPC".
+func (c *blockChainWithMetrics) RawRPC() (func(req interface{}, res interface{}) error, bool) {
+	caller, ok := c.b.(interface {
+		Call(interface{}, interface{}) error
+	})
+	if !ok {
+		return nil, false
+	}
+	return func(req interface{}, res interface{}) (err error) {
+		defer func(s time.Time) { c.observeRPCLatency("RawRPC", s, err) }(time.Now())
+		return caller.Call(req, res)
+	}, true
+}
+
 func (c *blockChainWithMetrics) Initialize() error {
 	return c.b.Initialize()
 }
