@@ -86,7 +86,9 @@ to the public server's own handler (`PublicServer.Handler`): `/`, `/tx/`, `/addr
 - **Timeouts.** The listener's 60 s `WriteTimeout` is lifted for that request
   (`http.ResponseController`), matching the public server, which has no write timeout. The
   30 s request read timeout is the same on both servers. A websocket upgrade clears the
-  connection deadlines, so websocket clients stay connected through the listener port. The
+  connection deadlines, so websocket clients stay connected through the listener port (a proxy
+  in front still applies its own idle limits: HAProxy cuts an idle websocket at `timeout client`/
+  `timeout server` unless `timeout tunnel` is set on that backend). The
   connection-level limits stay the listener's: 5 s to send headers (public: 10 s) and 60 s
   keep-alive idle (public: 120 s).
 - **Proxy and TLS.** The listener is plain HTTP behind the proxy. Nothing in the public handler
@@ -97,7 +99,7 @@ to the public server's own handler (`PublicServer.Handler`): `/`, `/tx/`, `/addr
   hostname to it. Client IPs for the rate limiter come from the same trusted-proxy headers as on
   the public port.
 - **SEO.** The UI on the second hostname is duplicate content. With `public_url` set
-  (`https://blockbook.firo.zelcore.io` for Firo), every page served through the listener carries
+  (`https://explorer.firo.zelcore.io` for Firo, the hostname that already resolves), every page served through the listener carries
   `<link rel="canonical">`, `og:url` and JSON-LD for the main explorer host, and `robots.txt`,
   `sitemap.xml` and `llms.txt` advertise only that host. Without `public_url` they would echo the
   request's own Host, so set it whenever `insight_ui` is on.
