@@ -16,13 +16,19 @@ const insightTxsPageSize = 10
 // that many pages, so a larger value is simply past the end.
 const insightMaxPageNum = 1 << 30
 
-// tx serves tx/:txid with spending info (spentTxId and friends) filled.
+// tx serves tx/:txid. spentTxId and friends come from the extended index when
+// the coin has one. Without it the worker could only find a spender by walking
+// the whole history of every spent output's address, an unbounded scan on a
+// public listener, so it is not requested: spent stays true/false and
+// spentTxId stays null. With the extended index the worker fills the spending
+// fields from the index whatever this flag says (api/worker.go), so false
+// loses nothing there.
 func (s *InsightServer) tx(route insightRoute) (interface{}, int, error) {
 	txid, ok := insightHash64(route.arg)
 	if !ok {
 		return nil, http.StatusBadRequest, errors.New("invalid txid")
 	}
-	tx, err := s.worker.GetTransaction(txid, true, false)
+	tx, err := s.worker.GetTransaction(txid, false, false)
 	if err != nil {
 		return nil, insightNotFoundCode(err, insightTxNotFound(txid)), err
 	}

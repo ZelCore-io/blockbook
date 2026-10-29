@@ -52,6 +52,7 @@ var expectedRules = map[string]Rule{
 	"E7":  {"E7", "Task 8 rule 7", "vin vout/sequence zero omitted by Blockbook"},
 	"E8":  {"E8", "spec Call 2 (deep paging)", "from >= 1000: the converter returns the first 1000, the listener serves the real window"},
 	"E9":  {"E9", "spec Verification (ZEC); only with -zebra-new", "estimatefee -1 and messages/verify 501 are the normal answers of a Zebra-backed ZEC listener"},
+	"E11": {"E11", "final review M2; stock behaviour", "addr/:a/balance|totalReceived|totalSent|unconfirmedBalance: the converter returns the full address summary, the listener the stock bare satoshi integer"},
 	"E10": {"E10", "Task 8 drift tolerance", "list membership differs by drift between the two requests (new block or pending tx)"},
 }
 
@@ -131,6 +132,14 @@ func Compare(ref, got interface{}, mode string, path string) []Finding {
 func compareWith(ref, got interface{}, mode, path string, opts Options) []Finding {
 	route, q := splitPath(path)
 	c := &comparer{mode: mode, path: path, route: route, query: q, opts: opts}
+	if mode == "converter" && isBareScalarRoute(route) {
+		if _, isObj := ref.(map[string]interface{}); isObj {
+			if _, isNum := toRat(got); isNum {
+				c.add(KindExpected, "", ref, got, "E11")
+				return c.out
+			}
+		}
+	}
 	if m, ok := ref.(map[string]interface{}); ok {
 		if n, ok := toRat(m["totalItems"]); ok {
 			c.refTotal = n
@@ -138,6 +147,20 @@ func compareWith(ref, got interface{}, mode, path string, opts Options) []Findin
 	}
 	c.walk("", ref, got, nil)
 	return c.out
+}
+
+// isBareScalarRoute reports addr/:a/balance|totalReceived|totalSent|unconfirmedBalance,
+// which stock Insight answers with a bare integer.
+func isBareScalarRoute(route string) bool {
+	parts := strings.Split(route, "/")
+	if len(parts) != 3 || parts[0] != "addr" {
+		return false
+	}
+	switch parts[2] {
+	case "balance", "totalReceived", "totalSent", "unconfirmedBalance":
+		return true
+	}
+	return false
 }
 
 func splitPath(p string) (string, url.Values) {

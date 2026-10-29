@@ -21,6 +21,10 @@ import (
 
 const insightBodyLimit = 8 << 20
 
+// insightBodyTimeout bounds reading a POST body, which happens before a
+// concurrency slot is taken.
+const insightBodyTimeout = 10 * time.Second
+
 type insightWorker interface {
 	GetSystemInfo(bool) (*api.SystemInfo, error)
 	GetAddress(string, int, int, api.AccountDetails, *api.AddressFilter, string) (*api.Address, error)
@@ -50,7 +54,9 @@ type InsightServer struct {
 	rpc          InsightRPC
 	coinShortcut string
 	blockCache   *insightBlockCache
-	feeCache     insightFeeCache
+	// bodyTimeout overrides insightBodyTimeout (tests).
+	bodyTimeout time.Duration
+	feeCache    insightFeeCache
 }
 
 func NewInsightServer(binding string, chainType bchain.ChainType, decimals int, worker insightWorker, broadcast func(string) (string, error)) (*InsightServer, error) {
@@ -144,6 +150,29 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		insightError(w, 405, "Method not allowed")
 		return
 	}
+	if !s.admissible() {
+		w.Header().Set("Retry-After", "1")
+		insightError(w, 503, "Service unavailable")
+		return
+	}
+	// The body is read, size-limited and parsed before a concurrency slot is
+	// taken, so clients that trickle a body cannot hold the 32 slots.
+	if r.Method == http.MethodPost {
+		timeout := s.bodyTimeout
+		if timeout <= 0 {
+			timeout = insightBodyTimeout
+		}
+		// Not every ResponseWriter supports deadlines (test recorders); the
+		// server-wide ReadTimeout still applies then.
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(timeout))
+		body, code, err := insightReadBody(w, r)
+		if err != nil {
+			code, message := insightErrorStatus(code)
+			insightError(w, code, message)
+			return
+		}
+		route.body = body
+	}
 	s.mu.Lock()
 	if s.closing || !s.ready.Load() {
 		s.mu.Unlock()
@@ -167,15 +196,6 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			insightError(w, 400, "A single address is required")
 			return
 		}
-	}
-	if r.Method == http.MethodPost {
-		body, code, err := insightReadBody(w, r)
-		if err != nil {
-			code, message := insightErrorStatus(code)
-			insightError(w, code, message)
-			return
-		}
-		route.body = body
 	}
 	route.ctx = r.Context()
 	value, code, err := s.handle(route)
@@ -286,4 +306,11 @@ func insightAddressErrorCode(err error) int {
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError
+}
+
+// admissible reports whether the listener is ready and not shutting down.
+func (s *InsightServer) admissible() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closing && s.ready.Load()
 }

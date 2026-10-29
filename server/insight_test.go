@@ -51,8 +51,10 @@ type insightFake struct {
 	// spending records the spendingTxs flag of each GetTransaction call;
 	// txErr fails single txids. clampPages makes GetBlock clamp a page
 	// beyond the end to the last page, as the worker does.
-	spending   []bool
-	txErr      map[string]error
+	spending []bool
+	txErr    map[string]error
+	// txHook runs on every GetTransaction call (e.g. to cancel a request).
+	txHook     func(id string)
 	clampPages bool
 	// pages records the page of every GetAddress call, historyPages only
 	// those of txid-history calls; pageHook rewrites the txids of a history
@@ -126,6 +128,9 @@ func (f *insightFake) GetAddressUtxo(_ string, confirmed bool) (api.Utxos, error
 func (f *insightFake) GetTransaction(id string, spending bool, _ bool) (*api.Tx, error) {
 	f.fetched = append(f.fetched, id)
 	f.spending = append(f.spending, spending)
+	if f.txHook != nil {
+		f.txHook(id)
+	}
 	if err := f.txErr[id]; err != nil {
 		return nil, err
 	}

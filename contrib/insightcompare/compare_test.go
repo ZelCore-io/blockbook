@@ -221,6 +221,31 @@ func TestCompareExpectedMissing(t *testing.T) {
 	}
 }
 
+func TestCompareBareScalarRoutesAreE11(t *testing.T) {
+	ref := j(t, `{"addrStr":"a","balance":0.1,"balanceSat":"10000000","transactions":["t"]}`)
+	for _, r := range []string{"balance", "totalReceived", "totalSent", "unconfirmedBalance"} {
+		fs := Compare(ref, j(t, `10000000`), "converter", "addr/a/"+r)
+		if failing(fs) != 0 || len(fs) != 1 || fs[0].Kind != KindExpected || !strings.HasPrefix(fs[0].Note, "E11") {
+			t.Fatalf("%s: want one expected E11, got %+v", r, fs)
+		}
+	}
+	// Elsewhere an object against a number is still a failure.
+	if failing(Compare(ref, j(t, `5`), "converter", "addr/a")) == 0 {
+		t.Fatal("addr/a object vs number must fail")
+	}
+	if failing(Compare(ref, j(t, `5`), "converter", "addr/a/utxo")) == 0 {
+		t.Fatal("addr/a/utxo object vs number must fail")
+	}
+	// A string is not the stock integer.
+	if failing(Compare(ref, j(t, `"5"`), "converter", "addr/a/balance")) == 0 {
+		t.Fatal("string body must fail")
+	}
+	// Both sides a bare integer compare by value.
+	if fs := Compare(j(t, `5`), j(t, `6`), "converter", "addr/a/balance"); failing(fs) == 0 {
+		t.Fatalf("differing integers must fail: %+v", fs)
+	}
+}
+
 func TestCompareUtxoSet(t *testing.T) {
 	ref := j(t, `[{"txid":"a","vout":0,"satoshis":5},{"txid":"b","vout":1,"satoshis":6}]`)
 	got := j(t, `[{"txid":"b","vout":1,"satoshis":6},{"txid":"a","vout":0,"satoshis":5}]`)

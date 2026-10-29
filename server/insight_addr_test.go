@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -370,5 +372,31 @@ func TestInsightHistoryStopsAtLastPage(t *testing.T) {
 				t.Fatalf("history pages %v, %d items", f.historyPages, len(out.Items))
 			}
 		})
+	}
+}
+
+// The single-address history stops loading full transactions once the client
+// has gone, as the multi-address routes do.
+func TestInsightHistoryClientGone(t *testing.T) {
+	for _, path := range []string{"/api/addrs/A/txs?from=0&to=100", "/insight-api/addrs/A/txs/0/100"} {
+		f := insightDeepFixture()
+		s := insightTestServer(t, f)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		f.txHook = func(string) {
+			if len(f.fetched) == 1 {
+				cancel()
+			}
+		}
+		r := httptest.NewRequest("GET", path, nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code == 200 {
+			t.Fatalf("%s served a cancelled request", path)
+		}
+		// the check runs every insightGoneEvery transactions: at most one more block is loaded
+		if len(f.fetched) > insightGoneEvery {
+			t.Fatalf("%s kept loading after the client went: %d fetches", path, len(f.fetched))
+		}
 	}
 }

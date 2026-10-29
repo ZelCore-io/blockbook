@@ -214,8 +214,8 @@ func TestInsightTxRoutes(t *testing.T) {
 		if w.Code != 200 || !strings.Contains(w.Body.String(), `"txid":"`+insightTestTxid+`"`) || !strings.Contains(w.Body.String(), `"spentTxId":"next"`) {
 			t.Fatalf("%s tx: %d %s", prefix, w.Code, w.Body)
 		}
-		if !reflect.DeepEqual(f.spending, []bool{true}) {
-			t.Fatalf("tx must request spending txs: %v", f.spending)
+		if !reflect.DeepEqual(f.spending, []bool{false}) {
+			t.Fatalf("tx must not request the per-output spending scan: %v", f.spending)
 		}
 		w = insightRequest(s, "GET", prefix+"/rawtx/"+insightTestTxid, "")
 		if w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"rawtx":"0100"}` {

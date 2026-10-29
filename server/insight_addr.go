@@ -150,14 +150,24 @@ func insightOwnTx(tx *api.Tx, owned map[string]bool) *api.Tx {
 }
 
 // historyItems loads and transforms the txs of an address history window.
-func (s *InsightServer) historyItems(address string, ids []string) ([]*insightTx, int, error) {
-	return s.ownedItems(map[string]bool{address: true}, ids)
+func (s *InsightServer) historyItems(route insightRoute, address string, ids []string) ([]*insightTx, int, error) {
+	return s.ownedItems(route, map[string]bool{address: true}, ids)
 }
 
+// insightGoneEvery is how many full transactions are loaded between checks
+// that the client is still there.
+const insightGoneEvery = 16
+
 // ownedItems loads and transforms txs, marking isOwn for the owned addresses.
-func (s *InsightServer) ownedItems(owned map[string]bool, ids []string) ([]*insightTx, int, error) {
+// It stops early, with the client-gone status, once the request is cancelled.
+func (s *InsightServer) ownedItems(route insightRoute, owned map[string]bool, ids []string) ([]*insightTx, int, error) {
 	items := make([]*insightTx, 0, len(ids))
-	for _, id := range ids {
+	for i, id := range ids {
+		if i%insightGoneEvery == 0 {
+			if err := route.gone(); err != nil {
+				return nil, insightClientGoneCode, err
+			}
+		}
 		tx, err := s.worker.GetTransaction(id, false, false)
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
@@ -184,7 +194,7 @@ func (s *InsightServer) history(route insightRoute, addr string) (interface{}, i
 	if err != nil {
 		return nil, code, err
 	}
-	items, code, err := s.historyItems(head.AddrStr, ids)
+	items, code, err := s.historyItems(route, head.AddrStr, ids)
 	if err != nil {
 		return nil, code, err
 	}
@@ -351,7 +361,7 @@ func (s *InsightServer) txsByAddress(route insightRoute) (interface{}, int, erro
 	if err != nil {
 		return nil, code, err
 	}
-	items, code, err := s.historyItems(head.AddrStr, ids)
+	items, code, err := s.historyItems(route, head.AddrStr, ids)
 	if err != nil {
 		return nil, code, err
 	}

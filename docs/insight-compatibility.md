@@ -76,13 +76,13 @@ a known path with the wrong method is 405 with `Allow`, and unknown paths are 40
 | `GET block/:hash` | Block with txids, reward (coinbase outputs minus block fees), confirmations and `isMainChain` |
 | `GET rawblock/:hash` | `{rawblock}` hex |
 | `GET block-index/:height` | `{blockHash}` |
-| `GET tx/:txid` | Transaction in the superset shape below |
+| `GET tx/:txid` | Transaction in the superset shape below. `spentTxId`, `spentIndex` and `spentHeight` come from the extended index when the coin has one (BTC); without it (ZEC) `spent` is still true/false but `spentTxId` is null, because finding a spender would walk the whole history of each spent output's address |
 | `GET rawtx/:txid` | `{rawtx}` hex |
 | `GET txs?block=<hash>&pageNum=N` | `{pagesTotal,txs}`, 10 transactions per page |
 | `GET txs?address=A&pageNum=N` | `{pagesTotal,txs}`, 10 per page, newest first with pending first |
 | `POST tx/send` | JSON or form `{rawtx:"..."}` to `{txid:"..."}` |
 | `GET addr/:address[/:noTxList]` | Balance summary with explicit zeros, string `balanceSat`, numeric other satoshi fields, `txApperances`, `unconfirmedTxApperances` and a `transactions` txid list (default window 0..1000) |
-| `GET addr/:address/balance`, `totalReceived`, `totalSent`, `unconfirmedBalance` | Bare satoshi integer |
+| `GET addr/:address/balance`, `totalReceived`, `totalSent`, `unconfirmedBalance` | Bare satoshi integer, as stock Insight. The converter answered the full address summary object on these paths; this is expected difference E11 in `contrib/insightcompare` |
 | `GET addr/:address/utxo` | Array of address, txid, vout, amount, satoshis, height, confirmations and coinbase when known; the full set, not capped |
 | `GET addrs/:address/txs?from=0&to=50` | `{totalItems,from,to,items}` for one address; exclusive-end offsets |
 | `GET addrs/A,B/txs`, `POST addrs/txs` | Merged history of at most 20 addresses, same shape |
@@ -139,7 +139,10 @@ appear in both.
 Duplicates and blanks collapse, preserving first occurrence. At most 20 distinct addresses for
 `txs` and 100 for `utxo`, `unspent` and `balance`; an empty list, an invalid address (the whole
 request is rejected) or a list over the bound gets 400. `txs` windows follow stock (`from`
-default 0, `to` default `from + 10`) with `to <= 1000`. `totalItems` is exact while the merged
+default 0, `to` default `from + 10`) with `to <= 1000`. The merged history is pending first, then
+confirmed by height descending; transactions of different addresses at the same height keep the
+request-address order (then the worker's order within an address), not their position in the
+block. The order is deterministic for the same input, so paging is stable. `totalItems` is exact while the merged
 read stays within a budget of 50000 txids; above it, it is the sum of per-address totals, an upper
 bound. Multi-address `utxo` and `unspent` answers are capped at 20000 rows in aggregate; above
 that the request gets 413 and the caller should query fewer addresses. The single-address `utxo`
@@ -196,8 +199,17 @@ certify a current index. Status is also gated because the inherited system-info 
 reads startup state that is changed during synchronization.
 
 At most 32 requests enter handlers concurrently. Excess work receives immediate 503 with
-`Retry-After: 1`; there is no waiting queue. HTTP limits are five seconds for headers, 30 seconds
-for reading, 60 seconds for writing and idle connections, and 1 MiB of headers.
+`Retry-After: 1`; there is no waiting queue. A POST body is read (at most 8 MiB, within a 10
+second body deadline) before a slot is taken, so a client that trickles a body occupies a
+connection but no slot; it gets 400 when the deadline passes. HTTP limits are five seconds for
+headers, 30 seconds for reading, 60 seconds for writing and idle connections, and 1 MiB of headers.
+
+The listener does not rate-limit by source. HAProxy in front of it should: set
+`option http-buffer-request` on the Insight frontend/backend so a request body is complete before
+it is forwarded (a slow client then ties up HAProxy, not the listener), a short
+`timeout http-request` (for example 10s) to cut slow headers and bodies, and a per-source
+connection and request rate limit (stick-table with `conn_cur` and `http_req_rate`) on the explorer
+frontends.
 
 Every main return after startup runs registered cleanup before the deferred database close.
 Normal signal shutdown drains Insight before closing the daemon. Admission closes first and
@@ -242,7 +254,19 @@ clients. Before a user-run canary:
    balance/history changes, BTG/GRS address handling and wallet display/export/spending contracts.
 4. Set `BLOCKBOOK_INSIGHT_HOST` in `/etc/blockbook/blockbook.env`, stop and disable the converter
    on that host (the deploy refuses while it holds the port) and verify the listener on port 9876 behind the trusted proxy: TLS, CORS, 503 readiness,
-   saturation, body limits and shutdown under active requests.
+   saturation, body limits and shutdown under active requests. Apply the HAProxy settings from
+   the limits section above (`option http-buffer-request`, `timeout http-request`, per-source
+   rate limits) before the listener is public.
+
+   First switch order. The deploy script checks the env file and that the address is assigned
+   to the host before it builds, but checks the port holder only after the build, just before it
+   stops Blockbook, so the converter keeps serving during the build. Build the package first (or
+   run the script once: it builds, then refuses at the port check with nothing stopped), then
+   stop and disable the converter, then deploy with `--skip-build`. Port 9876 is dark from the
+   converter stop until the new listener is ready, which can take a while since it returns 503
+   until `-sync` readiness. A script rollback restores the previous Blockbook but does not
+   restart the converter, so after a rolled-back first switch 9876 stays dark until the owner
+   re-enables the converter.
 5. Retain a recoverable snapshot and agree on canary/rollback steps. Matching schema and unit
    fixtures alone do not prove production database compatibility. No schema migration is added
    here; rollback across any other write migration requires restoring its pre-migration snapshot.

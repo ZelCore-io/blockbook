@@ -30,10 +30,20 @@
 # -insight=${BLOCKBOOK_INSIGHT_HOST}:PORT in the package unit. The host address comes from
 # /etc/blockbook/blockbook.env (override the path with BLOCKBOOK_ENV_FILE). The script refuses
 # to build or install, before stopping anything, when that file does not define a non-empty
-# dotted IPv4 BLOCKBOOK_INSIGHT_HOST other than 0.0.0.0, when that address is not assigned to the
-# host (ip -o -4 addr show), when the port is held by a process other than this coin's running
-# blockbook (ss -ltnp; stop and disable the Node converter first), and when the package in build/
-# lacks the Insight flag. After the restart the listener is probed (GET /api/status, 200 or 503);
+# dotted IPv4 BLOCKBOOK_INSIGHT_HOST other than 0.0.0.0 or when that address is not assigned to
+# the host (ip -o -4 addr show), when the package in build/ lacks the Insight flag, and, checked
+# only after the build and just before the stop, when the port is held by a process other than
+# this coin's running blockbook (ss -ltnp). --check runs all of these at once.
+#
+# First switch from the Node converter (it holds the port): the port check sits right before the
+# service stop, after the build, so the converter keeps serving through the build but must be gone
+# by then. Order: build (or run this script once, which builds and then refuses at the port check
+# with nothing stopped), stop and disable the converter, then deploy with --skip-build. The port
+# is dark from the converter stop until the new listener is ready (it answers 503 until -sync
+# readiness). A rollback of this script restores the previous Blockbook but does NOT restart the
+# converter, so the port stays dark until the owner re-enables the converter.
+#
+# After the restart the listener is probed (GET /api/status, 200 or 503);
 # a refused connection is a failed check and triggers the rollback. The check also runs with
 # --skip-build and --use-package-unit. Note that a host unit or ExecStart drop-in kept without
 # --use-package-unit never gets the flag.
@@ -239,17 +249,27 @@ insight_port_holders() {
         }'
 }
 
-# insight_runtime_check HOST PORT OWNPID: refuse a bind that cannot succeed, before anything is
-# stopped: HOST must be assigned to this machine, and PORT must be free or held by OWNPID (the
-# running blockbook of this coin on a redeploy). Needs ip and ss. Prints the reason on failure.
-insight_runtime_check() {
-    local host=$1 port=$2 own=$3 listeners holders
-    if ! command -v ip >/dev/null || ! command -v ss >/dev/null; then
-        echo 'ip and ss are required to check the Insight bind address and port.' >&2
+# insight_local_check HOST: refuse a bind that cannot succeed: HOST must be assigned to this
+# machine. Needs ip. Prints the reason on failure.
+insight_local_check() {
+    local host=$1
+    if ! command -v ip >/dev/null; then
+        echo 'ip is required to check the Insight bind address.' >&2
         return 1
     fi
     if ! ip -o -4 addr show | insight_host_assigned "$host"; then
         echo "BLOCKBOOK_INSIGHT_HOST=$host is not an address assigned to this host (ip -o -4 addr show); Blockbook would fail to bind. Nothing was stopped or installed." >&2
+        return 1
+    fi
+}
+
+# insight_port_check PORT OWNPID: PORT must be free or held by OWNPID (the running blockbook of
+# this coin on a redeploy). Needs ss. Prints the reason on failure. The deploy runs it just before
+# the service stop, after the build, so the converter can keep serving while the build runs.
+insight_port_check() {
+    local port=$1 own=$2 listeners holders
+    if ! command -v ss >/dev/null; then
+        echo 'ss is required to check the Insight port.' >&2
         return 1
     fi
     # ss must succeed: an empty listing from a failed ss would read as a free port.
@@ -259,9 +279,14 @@ insight_runtime_check() {
     fi
     holders=$(insight_port_holders "$port" "$own" <<<"$listeners" | paste -sd, -) || return 1
     if [[ -n $holders ]]; then
-        echo "Port $port is already held by $holders, so Blockbook's Insight listener could not bind. If that is the insight-to-blockbook converter (Node), stop and disable it first, then run this script again. Nothing was stopped or installed." >&2
+        echo "Port $port is already held by $holders, so Blockbook's Insight listener could not bind. If that is the insight-to-blockbook converter (Node), stop and disable it first, then run this script again (with --skip-build when the package is already built). Nothing was stopped or installed." >&2
         return 1
     fi
+}
+
+# insight_runtime_check HOST PORT OWNPID: both checks above, as --check reports them.
+insight_runtime_check() {
+    insight_local_check "$1" && insight_port_check "$2" "$3"
 }
 
 # insight_probe HOST PORT: succeed when the Insight listener answers /api/status with 200, or
@@ -418,8 +443,10 @@ else
     log "No $config_dist yet; the diff is printed after the install."
 fi
 
-# Insight: the env file must name a usable address (before any build), and that address and port
-# must be bindable (before any stop). insight_host and insight_port stay empty for other coins.
+# Insight: the env file must name a usable address that is assigned to this host (before any
+# build). The port check runs later, just before the service stop (step 5), so the converter keeps
+# serving during the build; --check runs both now. insight_host and insight_port stay empty for
+# other coins.
 insight_host=''
 insight_port=$(jq -r '(.ports.blockbook_insight // 0) | tostring' "$config")
 [[ $insight_port != 0 ]] || insight_port=''
@@ -427,9 +454,14 @@ insight_msg=''
 if [[ -n $insight_port ]]; then
     if insight_msg=$(insight_preflight "$config" "$insight_env_file" 2>&1); then
         insight_host=$(insight_env_value "$insight_env_file")
-        own_pid=$(num "$(systemctl show -p MainPID --value "$service")")
-        insight_msg=$(insight_runtime_check "$insight_host" "$insight_port" "$own_pid" 2>&1) &&
-            log "Insight: $insight_host:$insight_port is bindable (BLOCKBOOK_INSIGHT_HOST from $insight_env_file)"
+        if (( check_only )); then
+            own_pid=$(num "$(systemctl show -p MainPID --value "$service")")
+            insight_msg=$(insight_runtime_check "$insight_host" "$insight_port" "$own_pid" 2>&1) &&
+                log "Insight: $insight_host:$insight_port is bindable (BLOCKBOOK_INSIGHT_HOST from $insight_env_file)"
+        else
+            insight_msg=$(insight_local_check "$insight_host" 2>&1) &&
+                log "Insight: $insight_host is assigned to this host (BLOCKBOOK_INSIGHT_HOST from $insight_env_file); port $insight_port is checked before the stop"
+        fi
     fi
     if [[ -z $insight_host ]] || [[ -n $insight_msg ]]; then
         if (( check_only )); then log "Warning: $insight_msg"; else fail "$insight_msg"; fi
@@ -505,6 +537,13 @@ verify_failed() {
 }
 
 # 5. Install
+# The Insight port check runs here, after the build and just before the stop, so the converter on
+# a first switch keeps serving through the build. A failure leaves everything running.
+if [[ -n $insight_host ]]; then
+    own_pid=$(num "$(systemctl show -p MainPID --value "$service")")
+    if ! insight_msg=$(insight_port_check "$insight_port" "$own_pid" 2>&1); then fail "$insight_msg"; fi
+    log "Insight: port $insight_port is free or held by $service"
+fi
 log "Stopping $service"
 systemctl stop "$service"
 log 'Installing (existing blockchaincfg.json is kept)'

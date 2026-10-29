@@ -302,7 +302,7 @@ func (s *InsightServer) multiTxs(route insightRoute) (interface{}, int, error) {
 		total = len(seen)
 	}
 	ids := merged[min(from, len(merged)):min(to, len(merged))]
-	items, code, err := s.ownedItems(owned, ids)
+	items, code, err := s.ownedItems(route, owned, ids)
 	if err != nil {
 		return nil, code, err
 	}

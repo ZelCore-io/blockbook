@@ -144,7 +144,9 @@ Findings have a kind. `missing` (key in ref, absent in new) and `changed` fail t
   brief or spec): E1 asm address text, E2 vin asm absent, E3 history count/`to`/`totalItems`, E4
   blocks rows without `difficulty`, E5 `immature` absent, E6 `minedBy` absent, E7 zero vin
   `vout`/`sequence`, E8 deep paging from >= 1000, E9 ZEC estimatefee -1 and messages/verify 501 (only with `-zebra-new`), E10 list
-  drift between the two requests.
+  drift between the two requests, E11 `addr/:a/balance|totalReceived|totalSent|unconfirmedBalance`
+  (the converter answers the full address summary, the listener the stock bare satoshi integer; the
+  seeds request all four for every address).
 
 ## Limits to know
 
