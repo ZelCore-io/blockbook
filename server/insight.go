@@ -173,9 +173,14 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		route.body = body
 	}
+	route.ctx = r.Context()
 	value, code, err := s.handle(route)
 	if err != nil {
 		code, message := insightErrorStatus(code)
+		var clientErr *insightClientError
+		if errors.As(err, &clientErr) && clientErr.code == code {
+			message = clientErr.message
+		}
 		insightError(w, code, message)
 		return
 	}
@@ -184,6 +189,15 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // insightErrorStatus maps a handler status to the generic public message.
 // Unknown statuses, including 0, become 500.
+// insightClientError is a handler error whose fixed, client-safe message
+// replaces the generic one for its status code.
+type insightClientError struct {
+	code    int
+	message string
+}
+
+func (e *insightClientError) Error() string { return e.message }
+
 func insightErrorStatus(code int) (int, string) {
 	switch code {
 	case http.StatusBadRequest:

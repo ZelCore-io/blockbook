@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -407,5 +408,80 @@ func TestInsightMultiAddressInputs(t *testing.T) {
 	f, s = insightMultiServer(t, insightMultiUtxoAddrs())
 	if w := insightRequest(s, "GET", "/api/addrs/bad,A/utxo", ""); w.Code != 400 || !reflect.DeepEqual(f.utxoCalls, []string{"bad"}) {
 		t.Fatal(w.Code, f.utxoCalls)
+	}
+}
+
+// insightMultiHistory returns n confirmed light txs of address, newest first.
+func insightMultiHistory(prefix string, n int, address string) []*api.Tx {
+	out := make([]*api.Tx, n)
+	for i := range out {
+		out[i] = &api.Tx{Txid: fmt.Sprintf("%s%d", prefix, i), Blockheight: n - i, Confirmations: 1}
+	}
+	return out
+}
+
+func TestInsightMultiTxsTotalBudget(t *testing.T) {
+	// Long histories within the budget: exact union (B repeats A's newest).
+	a := insightMultiHistory("a", 25000, "A")
+	b := append([]*api.Tx{a[0]}, insightMultiHistory("b", 24999, "B")...)
+	f, s := insightMultiServer(t, map[string]*insightMultiAddr{"A": {txs: a}, "B": {txs: b}})
+	p, ids := insightMultiDecode(t, insightRequest(s, "GET", "/api/addrs/A,B/txs?from=0&to=2", ""))
+	if p.TotalItems != 49999 || !reflect.DeepEqual(f.txidCalls, []string{"A", "B"}) || len(ids) != 2 {
+		t.Fatal(p.TotalItems, f.txidCalls, ids)
+	}
+	// Over the budget: no full list is read; totalItems is the sum of the
+	// per-address totals (an upper bound), short addresses included.
+	b = append([]*api.Tx{a[0]}, insightMultiHistory("b", 25000, "B")...)
+	c := []*api.Tx{insightMultiTx("c1", 1, "C")}
+	f, s = insightMultiServer(t, map[string]*insightMultiAddr{"A": {txs: a}, "B": {txs: b}, "C": {txs: c}})
+	p, ids = insightMultiDecode(t, insightRequest(s, "GET", "/api/addrs/A,B,C/txs?from=0&to=2", ""))
+	if p.TotalItems != 50002 || len(f.txidCalls) != 0 || !reflect.DeepEqual(ids, []string{"a0", "b0"}) {
+		t.Fatal(p.TotalItems, f.txidCalls, ids)
+	}
+}
+
+func TestInsightMultiUtxoCap(t *testing.T) {
+	rows := func(prefix string, n int) api.Utxos {
+		out := make(api.Utxos, n)
+		for i := range out {
+			out[i] = api.Utxo{Txid: fmt.Sprintf("%s%d", prefix, i), AmountSat: insightAmount(1), Confirmations: 1}
+		}
+		return out
+	}
+	addrs := map[string]*insightMultiAddr{"A": {utxos: rows("a", 15000)}, "B": {utxos: rows("b", 5000)}, "C": {utxos: rows("c", 1)}}
+	_, s := insightMultiServer(t, addrs)
+	if w := insightRequest(s, "GET", "/api/addrs/A,B/utxo", ""); w.Code != 200 || len(insightUtxoKeys(t, w.Body.Bytes())) != 20000 {
+		t.Fatal(w.Code)
+	}
+	for _, path := range []string{"/api/addrs/A,B,C/utxo", "/api/addrs/A,B,C/unspent"} {
+		f, s := insightMultiServer(t, addrs)
+		w := insightRequest(s, "GET", path, "")
+		if w.Code != 413 || w.Body.String() != "{\"status\":\"error\",\"error\":\"Too many unspent outputs, query fewer addresses\"}\n" || len(f.utxoCalls) != 3 {
+			t.Fatal(path, w.Code, w.Body.Len())
+		}
+	}
+	_, s = insightMultiServer(t, addrs)
+	if w := insightMultiPost(s, "/api/addrs/utxo", insightForm, "addrs=A,B,C"); w.Code != 413 {
+		t.Fatal(w.Code)
+	}
+	// The single-address route keeps the full set.
+	f := insightFixture()
+	f.utxos = rows("x", 20001)
+	if w := insightRequest(insightTestServer(t, f), "GET", "/api/addr/A/utxo", ""); w.Code != 200 || len(insightUtxoKeys(t, w.Body.Bytes())) != 20001 {
+		t.Fatal(w.Code)
+	}
+}
+
+func TestInsightMultiClientGone(t *testing.T) {
+	for _, path := range []string{"/api/addrs/A,B/utxo", "/api/addrs/A,B/unspent", "/api/addrs/A,B/balance", "/api/addrs/A,B/txs"} {
+		f, s := insightMultiServer(t, insightMultiMergeAddrs())
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		r := httptest.NewRequest("GET", path, nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code == 200 || len(f.utxoCalls) != 0 || len(f.lightSizes) != 0 || len(f.pages) != 0 {
+			t.Fatal(path, w.Code, f.utxoCalls, f.lightSizes)
+		}
 	}
 }

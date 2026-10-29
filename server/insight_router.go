@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -25,6 +26,16 @@ type insightRoute struct {
 	from, to  string
 	query     url.Values
 	body      []byte
+	// ctx is the request context (nil when a test calls handle directly).
+	ctx context.Context
+}
+
+// gone reports whether the client has gone away (request context done).
+func (route insightRoute) gone() error {
+	if route.ctx == nil {
+		return nil
+	}
+	return route.ctx.Err()
 }
 
 var (

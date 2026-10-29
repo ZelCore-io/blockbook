@@ -20,7 +20,21 @@ const (
 	insightMultiTxsMax = 20
 	// insightMultiDefaultSpan is stock multitxs' default window length.
 	insightMultiDefaultSpan = 10
+	// insightMultiTotalBudget bounds the txids one multitxs request may read
+	// to make totalItems exact (controller ruling). Above it totalItems is the
+	// sum of the per-address totals, an upper bound.
+	insightMultiTotalBudget = 50000
+	// insightMultiUtxoMax bounds the rows of one multi-address utxo/unspent
+	// answer; above it the request gets 413. The single-address route is
+	// not capped (the wallet needs the full set).
+	insightMultiUtxoMax = 20000
 )
+
+var errInsightTooManyUtxos = &insightClientError{http.StatusRequestEntityTooLarge, "Too many unspent outputs, query fewer addresses"}
+
+// insightClientGoneCode ends a multi-address loop once the client has gone
+// (nobody reads the answer).
+const insightClientGoneCode = http.StatusServiceUnavailable
 
 // insightMultiInput is a decoded multi-address request: the addresses from
 // the path, or from the POST body's addrs (JSON or form), and the body's
@@ -101,9 +115,15 @@ func (s *InsightServer) multiUtxo(route insightRoute, onlyConfirmed bool) (inter
 	}
 	out := make([]insightUtxo, 0)
 	for _, a := range in.addresses {
+		if err := route.gone(); err != nil {
+			return nil, insightClientGoneCode, err
+		}
 		var code int
 		if out, code, err = s.appendUtxos(out, a, onlyConfirmed); err != nil {
 			return nil, code, err
+		}
+		if len(out) > insightMultiUtxoMax {
+			return nil, errInsightTooManyUtxos.code, errInsightTooManyUtxos
 		}
 	}
 	return out, 0, nil
@@ -119,6 +139,9 @@ func (s *InsightServer) multiBalance(route insightRoute) (interface{}, int, erro
 	}
 	var balance, pending big.Int
 	for _, a := range in.addresses {
+		if err := route.gone(); err != nil {
+			return nil, insightClientGoneCode, err
+		}
 		address, err := s.worker.GetAddress(a, 1, 1, api.AccountDetailsTokens, insightHistoryFilter, "")
 		if err != nil {
 			return nil, insightAddressErrorCode(err), err
@@ -192,7 +215,9 @@ func insightMultiWindow(route insightRoute, in insightMultiInput) (int, int, err
 // is enough for an exact merge of the window. totalItems is the size of the
 // deduplicated union: when every history fits in `to` it is the merged
 // count; otherwise the full txid list of each longer history is read and the
-// union counted (spec Call 3).
+// union counted (spec Call 3), provided those lists hold at most
+// insightMultiTotalBudget txids in all. Above the budget no full list is read
+// and totalItems is the sum of the per-address totals, an upper bound.
 func (s *InsightServer) multiTxs(route insightRoute) (interface{}, int, error) {
 	in, err := insightMultiParse(route, insightMultiTxsMax)
 	if err != nil {
@@ -212,7 +237,11 @@ func (s *InsightServer) multiTxs(route insightRoute) (interface{}, int, error) {
 		total   int
 	}
 	var long []history
+	sumTotal, longTotal := 0, 0
 	for _, a := range in.addresses {
+		if err := route.gone(); err != nil {
+			return nil, insightClientGoneCode, err
+		}
 		address, err := s.worker.GetAddress(a, 1, size, api.AccountDetailsTxHistoryLight, insightHistoryFilter, "")
 		if err != nil {
 			return nil, insightAddressErrorCode(err), err
@@ -221,8 +250,11 @@ func (s *InsightServer) multiTxs(route insightRoute) (interface{}, int, error) {
 			return nil, http.StatusInternalServerError, errors.New("missing address")
 		}
 		owned[address.AddrStr] = true
-		if n := address.Txs + address.UnconfirmedTxs; n > size {
+		n := address.Txs + address.UnconfirmedTxs
+		sumTotal += n
+		if n > size {
 			long = append(long, history{a, n})
+			longTotal += n
 		}
 		for _, tx := range address.Transactions {
 			if tx == nil {
@@ -250,8 +282,15 @@ func (s *InsightServer) multiTxs(route insightRoute) (interface{}, int, error) {
 	case len(in.addresses) == 1:
 		// One distinct address: its own count, as the single-address route.
 		total = long[0].total
+	case longTotal > insightMultiTotalBudget:
+		// Too many txids to count the union exactly: report the sum of the
+		// per-address totals, an upper bound, and read no full list.
+		total = max(sumTotal, len(merged))
 	default:
 		for _, h := range long {
+			if err := route.gone(); err != nil {
+				return nil, insightClientGoneCode, err
+			}
 			full, err := s.worker.GetAddress(h.address, 1, h.total, api.AccountDetailsTxidHistory, insightHistoryFilter, "")
 			if err != nil {
 				return nil, insightAddressErrorCode(err), err
