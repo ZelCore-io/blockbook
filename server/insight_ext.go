@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/trezor/blockbook/api"
 )
 
@@ -116,7 +118,7 @@ func (c *insightCached) get(ctx context.Context, ttl time.Duration, load func() 
 }
 
 func (c *insightCached) run(call *insightCacheCall, load func() (interface{}, error)) {
-	value, err := load()
+	value, err := c.load(load)
 	c.mu.Lock()
 	if err == nil {
 		c.value, c.at, c.err = value, insightNow(), nil
@@ -130,4 +132,16 @@ func (c *insightCached) run(call *insightCacheCall, load func() (interface{}, er
 	c.call = nil
 	c.mu.Unlock()
 	close(call.done)
+}
+
+// load runs the loader in the background goroutine, where a panic would end
+// the process instead of one request; it becomes the waiters' error.
+func (c *insightCached) load(load func() (interface{}, error)) (value interface{}, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			glog.Error("insight: cache loader panic: ", r, "\n", string(debug.Stack()))
+			value, err = nil, fmt.Errorf("internal error")
+		}
+	}()
+	return load()
 }

@@ -596,3 +596,17 @@ func TestInsightFiroSparkNameOutputJSON(t *testing.T) {
 		t.Errorf("other output changed %s", body)
 	}
 }
+
+func TestInsightCachedLoaderPanic(t *testing.T) {
+	var c insightCached
+	_, err := c.get(context.Background(), time.Minute, func() (interface{}, error) {
+		panic("boom")
+	})
+	if err == nil {
+		t.Fatal("loader panic did not become an error")
+	}
+	v, err := c.get(context.Background(), time.Minute, func() (interface{}, error) { return 1, nil })
+	if err == nil && v != nil {
+		t.Fatal("error was not remembered for insightCacheErrTTL")
+	}
+}
