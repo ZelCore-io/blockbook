@@ -129,3 +129,35 @@ func TestComputeAccountPagingWalksWholeSequence(t *testing.T) {
 		}
 	}
 }
+
+// The Insight listener (server/insight_addr.go) detects a page past the end
+// by Paging.Page differing from the requested 1-based page: the worker clamps
+// such a page to the last one. page here is GetAddress's 0-based page.
+func TestComputeAccountPagingClampsPastEnd(t *testing.T) {
+	for _, tc := range []struct {
+		mempool, confirmed, page, size int
+		wantPage, wantFrom, wantTo     int
+	}{
+		{2, 2500, 250, 10, 251, 2500, 2502}, // last page: Page is the requested one
+		{2, 2500, 251, 10, 251, 2500, 2502}, // one past the end: clamped
+		{2, 2500, 300, 10, 251, 2500, 2502}, // far past the end: clamped
+		{0, 0, 1, 1000, 1, 0, 0},            // empty address, page 2: clamped to 1
+		{0, 4, 1, 1000, 1, 0, 4},
+	} {
+		pg, mFrom, mTo, cFrom, cTo, _ := computeAccountPaging(tc.mempool, tc.confirmed, tc.page, tc.size)
+		// merged offsets of the returned slice
+		from, to := tc.mempool+cFrom, tc.mempool+cTo
+		if mTo > mFrom {
+			from = mFrom
+		}
+		if cTo == cFrom {
+			to = mTo
+		}
+		if pg.Page != tc.wantPage || from != tc.wantFrom || to != tc.wantTo {
+			t.Errorf("%+v: Page %d, merged [%d,%d)", tc, pg.Page, from, to)
+		}
+		if (pg.Page == tc.page+1) != (tc.page+1 == tc.wantPage) {
+			t.Errorf("%+v: clamp not visible in Page %d", tc, pg.Page)
+		}
+	}
+}

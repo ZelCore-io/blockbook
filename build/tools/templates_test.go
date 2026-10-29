@@ -729,6 +729,10 @@ func TestInsightServiceConfiguration(t *testing.T) {
 			}{
 				{"disabled", "", "", false},
 				{"enabled", `,"blockbook_insight":9876`, `,"insight_binding_template":"127.0.0.1:{{.Ports.BlockbookInsight}}"`, false},
+				{"env host", `,"blockbook_insight":9876`, `,"insight_binding_template":"${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookInsight}}"`, false},
+				{"other env var", `,"blockbook_insight":9876`, `,"insight_binding_template":"${HOME}:{{.Ports.BlockbookInsight}}"`, true},
+				{"env plus suffix", `,"blockbook_insight":9876`, `,"insight_binding_template":"${BLOCKBOOK_INSIGHT_HOST}x:{{.Ports.BlockbookInsight}}"`, true},
+				{"bare dollar", `,"blockbook_insight":9876`, `,"insight_binding_template":"$BLOCKBOOK_INSIGHT_HOST:{{.Ports.BlockbookInsight}}"`, true},
 				{"port only", `,"blockbook_insight":9876`, "", true},
 				{"template only", "", `,"insight_binding_template":"127.0.0.1:9876"`, true},
 				{"bad port", `,"blockbook_insight":65536`, `,"insight_binding_template":"127.0.0.1:{{.Ports.BlockbookInsight}}"`, true},
@@ -783,12 +787,69 @@ func TestInsightServiceConfiguration(t *testing.T) {
 						if !strings.Contains(string(data), " -insight=127.0.0.1:9876 ") {
 							t.Fatalf("Insight flag missing from actual service: %s", data)
 						}
+					} else if tc.name == "env host" {
+						if !strings.Contains(service, " -insight=${BLOCKBOOK_INSIGHT_HOST}:9876 ") {
+							t.Fatalf("env-host Insight flag missing from actual service: %s", data)
+						}
+						if !strings.Contains(service, "EnvironmentFile=-/etc/blockbook/blockbook.env") {
+							t.Fatal("service does not load the env file that defines BLOCKBOOK_INSIGHT_HOST")
+						}
 					} else if strings.Contains(string(data), "-insight") {
 						t.Fatal("Insight enabled by default")
 					}
 				})
 			}
 		})
+	}
+}
+
+func TestInsightProductionCoinConfigs(t *testing.T) {
+	for _, alias := range []string{"bitcoin", "zcash"} {
+		t.Run(alias, func(t *testing.T) {
+			cfg, err := LoadConfig("../../configs", alias)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Ports.BlockbookInsight != 9876 {
+				t.Fatalf("insight port = %d, want 9876", cfg.Ports.BlockbookInsight)
+			}
+			if err := cfg.validateInsight(); err != nil {
+				t.Fatal(err)
+			}
+			if want := "${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookInsight}}"; cfg.Blockbook.InsightBindingTemplate != want {
+				t.Fatalf("binding template = %q, want %q", cfg.Blockbook.InsightBindingTemplate, want)
+			}
+			out := t.TempDir()
+			if err := GeneratePackageDefinitions(cfg, "../templates", out); err != nil {
+				t.Fatal(err)
+			}
+			unit, err := os.ReadFile(filepath.Join(out, "blockbook/debian/service"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(unit), " -insight=${BLOCKBOOK_INSIGHT_HOST}:9876 ") {
+				t.Fatalf("%s unit lacks the Insight flag:\n%s", alias, unit)
+			}
+		})
+	}
+	// Coins that do not opt in must keep rendering without any Insight flag.
+	cfg, err := LoadConfig("../../configs", "ethereum")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Ports.BlockbookInsight != 0 || cfg.Blockbook.InsightBindingTemplate != "" {
+		t.Fatal("ethereum unexpectedly enables Insight")
+	}
+	out := t.TempDir()
+	if err := GeneratePackageDefinitions(cfg, "../templates", out); err != nil {
+		t.Fatal(err)
+	}
+	unit, err := os.ReadFile(filepath.Join(out, "blockbook/debian/service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(unit), "insight") || strings.Contains(string(unit), "INSIGHT") {
+		t.Fatalf("ethereum unit mentions Insight:\n%s", unit)
 	}
 }
 

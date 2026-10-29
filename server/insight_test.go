@@ -17,6 +17,7 @@ import (
 	"github.com/trezor/blockbook/api"
 	"github.com/trezor/blockbook/bchain"
 	"github.com/trezor/blockbook/common"
+	"github.com/trezor/blockbook/db"
 )
 
 type insightFake struct {
@@ -30,6 +31,48 @@ type insightFake struct {
 	fetched []string
 	enter   chan struct{}
 	release chan struct{}
+	blocks  *api.Blocks
+	// blocksPage and blocksSize record the last GetBlocks call.
+	blocksPage, blocksSize int
+	// chain, when set, backs GetBlocks like the real index: page p of one-row
+	// pages is height best-(p-1). blocksCalls counts those calls.
+	chain       []db.BlockInfo
+	blocksCalls int
+	// shiftReads makes that many index reads beyond the tip row report the
+	// wrong height, as if the tip moved between two reads.
+	shiftReads int
+	// blockCalls counts GetBlock calls.
+	blockCalls int
+	// blockByHash backs GetBlock (paged like the worker); rawBlock and rawErr
+	// back GetBlockRaw.
+	blockByHash map[string]*api.Block
+	rawBlock    *api.BlockRaw
+	rawErr      error
+	// spending records the spendingTxs flag of each GetTransaction call;
+	// txErr fails single txids. clampPages makes GetBlock clamp a page
+	// beyond the end to the last page, as the worker does.
+	spending []bool
+	txErr    map[string]error
+	// txHook runs on every GetTransaction call (e.g. to cancel a request).
+	txHook     func(id string)
+	clampPages bool
+	// pages records the page of every GetAddress call, historyPages only
+	// those of txid-history calls; pageHook rewrites the txids of a history
+	// page (e.g. to inject a duplicate).
+	pages        []int
+	historyPages []int
+	pageHook     func(page, size int, ids []string) []string
+	// fees backs EstimateFee in sat/kB per block target, feeErr fails a
+	// target, feeCalls records the targets and the conservative flag.
+	fees     map[int]int64
+	feeErr   map[int]error
+	feeCalls []int
+	feeCons  []bool
+	// fiat and fiatErr back GetCurrentFiatRates; fiatArgs records the
+	// currencies and token of the last call.
+	fiat     *api.FiatTicker
+	fiatErr  error
+	fiatArgs []string
 }
 
 func (f *insightFake) GetSystemInfo(bool) (*api.SystemInfo, error) {
@@ -42,10 +85,39 @@ func (f *insightFake) GetSystemInfo(bool) (*api.SystemInfo, error) {
 func (f *insightFake) GetAddress(_ string, page, size int, d api.AccountDetails, filter *api.AddressFilter, _ string) (*api.Address, error) {
 	f.detail = d
 	f.prefix = size
-	if page != 1 || filter == nil || filter.Vout != api.AddressFilterVoutOff {
+	if page < 1 || size < 1 || filter == nil || filter.Vout != api.AddressFilterVoutOff {
 		panic("wrong worker query")
 	}
-	return f.address, f.err
+	f.pages = append(f.pages, page)
+	if f.err != nil || f.address == nil {
+		return f.address, f.err
+	}
+	out := *f.address
+	out.Txids = nil
+	if d < api.AccountDetailsTxidHistory {
+		return &out, nil
+	}
+	f.historyPages = append(f.historyPages, page)
+	// address.Txids is the merged pending+confirmed sequence; page it like
+	// computeAccountPaging, which clamps a page past the end to the last page.
+	ids := f.address.Txids
+	last := 1
+	if len(ids) > 0 {
+		last = (len(ids)-1)/size + 1
+	}
+	if page > last {
+		page = last
+	}
+	lo, hi := (page-1)*size, page*size
+	if hi > len(ids) {
+		hi = len(ids)
+	}
+	out.Txids = append([]string{}, ids[lo:hi]...)
+	if f.pageHook != nil {
+		out.Txids = f.pageHook(page, size, out.Txids)
+	}
+	out.Paging = api.Paging{Page: page, TotalPages: last, ItemsOnPage: size}
+	return &out, nil
 }
 func (f *insightFake) GetAddressUtxo(_ string, confirmed bool) (api.Utxos, error) {
 	if confirmed {
@@ -53,9 +125,73 @@ func (f *insightFake) GetAddressUtxo(_ string, confirmed bool) (api.Utxos, error
 	}
 	return f.utxos, f.err
 }
-func (f *insightFake) GetTransaction(id string, _ bool, _ bool) (*api.Tx, error) {
+func (f *insightFake) GetTransaction(id string, spending bool, _ bool) (*api.Tx, error) {
 	f.fetched = append(f.fetched, id)
+	f.spending = append(f.spending, spending)
+	if f.txHook != nil {
+		f.txHook(id)
+	}
+	if err := f.txErr[id]; err != nil {
+		return nil, err
+	}
+	if f.err == nil && f.txs[id] == nil {
+		return nil, api.NewAPIError("Transaction '"+id+"' not found", true)
+	}
 	return f.txs[id], f.err
+}
+func (f *insightFake) GetBlocks(page int, size int) (*api.Blocks, error) {
+	f.blocksPage, f.blocksSize = page, size
+	f.blocksCalls++
+	if f.chain != nil {
+		out := &api.Blocks{}
+		for i := (page - 1) * size; i < page*size && i < len(f.chain); i++ {
+			out.Blocks = append(out.Blocks, f.chain[len(f.chain)-1-i])
+		}
+		if page > 1 && f.shiftReads > 0 {
+			f.shiftReads--
+			for i := range out.Blocks {
+				out.Blocks[i].Height++
+			}
+		}
+		return out, f.err
+	}
+	return f.blocks, f.err
+}
+func (f *insightFake) GetBlock(bid string, page int, size int) (*api.Block, error) {
+	f.blockCalls++
+	b := f.blockByHash[bid]
+	if b == nil {
+		return nil, api.NewAPIError("Block not found", true)
+	}
+	out := *b
+	if f.clampPages && size > 0 && b.TxCount > 0 && (page-1)*size >= b.TxCount {
+		page = (b.TxCount + size - 1) / size
+	}
+	from, to := (page-1)*size, page*size
+	if to > len(b.Transactions) {
+		to = len(b.Transactions)
+	}
+	out.Transactions = nil
+	if from < to {
+		out.Transactions = b.Transactions[from:to]
+	}
+	out.Page, out.TotalPages = page, (b.TxCount+size-1)/size
+	return &out, f.err
+}
+func (f *insightFake) GetBlockRaw(bid string) (*api.BlockRaw, error) {
+	return f.rawBlock, f.rawErr
+}
+func (f *insightFake) EstimateFee(blocks int, conservative bool) (big.Int, error) {
+	f.feeCalls = append(f.feeCalls, blocks)
+	f.feeCons = append(f.feeCons, conservative)
+	if err := f.feeErr[blocks]; err != nil {
+		return big.Int{}, err
+	}
+	return *big.NewInt(f.fees[blocks]), nil
+}
+func (f *insightFake) GetCurrentFiatRates(currencies []string, token string) (*api.FiatTicker, error) {
+	f.fiatArgs = append(append([]string{}, currencies...), token)
+	return f.fiat, f.fiatErr
 }
 func insightAmount(n int64) *api.Amount { return (*api.Amount)(big.NewInt(n)) }
 func insightFixture() *insightFake {
@@ -63,7 +199,8 @@ func insightFixture() *insightFake {
 		address: &api.Address{AddrStr: "A", BalanceSat: insightAmount(1), UnconfirmedBalanceSat: insightAmount(-1), Txs: 3, UnconfirmedTxs: 1, Txids: []string{"pending", "a", "b", "c"}},
 		utxos:   api.Utxos{{Txid: "a", AmountSat: insightAmount(1), Coinbase: true}},
 		txs:     map[string]*api.Tx{"pending": {Txid: "pending"}, "a": {Txid: "a", FeesSat: insightAmount(1), Vin: []api.Vin{{Coinbase: "abc"}}, Vout: []api.Vout{{ValueSat: insightAmount(1), Hex: "6a026869", Addresses: []string{"OP_RETURN (hi)"}}}}, "b": {Txid: "b"}, "c": {Txid: "c"}},
-		info:    &api.SystemInfo{Backend: &common.BackendInfo{Blocks: 10, Version: "123", ProtocolVersion: "456", Difficulty: "2.5"}},
+		info:    &api.SystemInfo{Blockbook: &api.BlockbookInfo{InSync: true, BestHeight: 10}, Backend: &common.BackendInfo{Blocks: 10, Version: "123", ProtocolVersion: "456", Difficulty: "2.5", BestBlockHash: "bb"}},
+		blocks:  &api.Blocks{Blocks: []db.BlockInfo{{Hash: "tip"}}},
 	}
 }
 func insightTestServer(t *testing.T, f *insightFake) *InsightServer {
@@ -89,7 +226,7 @@ func TestInsightContracts(t *testing.T) {
 		{"status", "/api/status", []string{`"blocks":10`, `"version":123`, `"protocolversion":456`, `"errors":""`}},
 		{"utxo", "/api/addr/A/utxo", []string{`"amount":0.00000001`, `"satoshis":1`, `"coinbase":true`}},
 		{"summary", "/api/addr/A", []string{`"balanceSat":"1"`, `"unconfirmedBalance":-0.00000001`, `"totalReceived":0`, `"totalSentSat":0`, `"txApperances":3`}},
-		{"history", "/api/addrs/A/txs?from=1&to=3", []string{`"totalItems":4`, `"from":1`, `"to":3`, `"txid":"a"`, `"txid":"b"`, `"asm":"OP_RETURN 6869"`, `"value":0.00000001`, `"coinbase":"abc"`}},
+		{"history", "/api/addrs/A/txs?from=1&to=3", []string{`"totalItems":4`, `"from":1`, `"to":3`, `"txid":"a"`, `"txid":"b"`, `"asm":"OP_RETURN 6869"`, `"value":0.00000001`, `"coinbase":"abc"`, `"isCoinBase":true`, `"blockHeight":0`, `"blockheight":0`, `"blockTime":0`, `"valueOut":0`, `"fees":0.00000001`, `"addresses":["OP_RETURN (hi)"]`}},
 		{"query summary", "/api/addr?address=A", []string{`"addrStr":"A"`}},
 		{"noTxList", "/api/addr/A/true", []string{`"addrStr":"A"`}},
 		{"query utxo", "/api/addr/utxo?address=A", []string{`"satoshis":1`}},
@@ -109,11 +246,11 @@ func TestInsightContracts(t *testing.T) {
 					t.Errorf("missing %s in %s", v, w.Body)
 				}
 			}
-			if tc.name == "history" && (!reflect.DeepEqual(f.fetched, []string{"a", "b"}) || f.prefix != 3 || f.detail != api.AccountDetailsTxidHistory) {
+			if tc.name == "history" && (!reflect.DeepEqual(f.fetched, []string{"a", "b"}) || f.prefix != 2 || f.detail != api.AccountDetailsTxidHistory) {
 				t.Fatalf("query/enrichment: %+v", f)
 			}
-			if tc.name == "summary" && f.detail != api.AccountDetailsTokens {
-				t.Fatal("pending balance must be requested")
+			if tc.name == "summary" && f.detail != api.AccountDetailsTxidHistory {
+				t.Fatal("summary and its transactions list must come from one history query")
 			}
 		})
 	}
@@ -124,9 +261,15 @@ func TestInsightInvalidRequests(t *testing.T) {
 		code               int
 	}{
 		{"GET", "/unknown", "", 404}, {"OPTIONS", "/unknown", "", 404}, {"POST", "/api/status", "", 405}, {"GET", "/api/tx/send", "", 405},
-		{"GET", "/api/addr", "", 400}, {"GET", "/api/addrs/A,B/txs", "", 400},
-		{"GET", "/api/addrs/A/txs?from=-1", "", 400}, {"GET", "/api/addrs/A/txs?to=1001", "", 400},
-		{"GET", "/api/addrs/A/txs?from=2&to=1", "", 400}, {"GET", "/api/addrs/A/txs?from=1.5", "", 400},
+		{"POST", "/api/sync", "", 405}, {"OPTIONS", "/insight-api/status", "", 204},
+		{"GET", "/api/addr", "", 400}, {"GET", "/api/addrs/A,B/txs", "", 200}, {"GET", "/api/addrs/A,B/txs?to=1001", "", 400},
+		{"GET", "/api/addrs/A/txs?from=-1&to=5", "", 400}, {"GET", "/api/addrs/A/txs?from=0&to=1001", "", 400},
+		{"GET", "/api/addrs/A/txs?to=1001", "", 200}, {"GET", "/api/addrs/A/txs?from=-1", "", 200},
+		{"GET", "/api/addrs/A/txs?from=0&to=1000", "", 200}, {"GET", "/api/addrs/A/txs?from=2000&to=3000", "", 200}, {"GET", "/api/addrs/A/txs//5", "", 200}, {"GET", "/api/addrs/A/txs/0/", "", 200},
+		{"GET", "/api/addrs/A/txs/0//", "", 200}, {"GET", "/api/addrs/A/txs/1/x", "", 400}, {"GET", "/api/addr//balance", "", 400}, {"GET", "/api/txs?address=", "", 400},
+		{"GET", "/api/txs?address=A,B", "", 400}, {"GET", "/api/addr/A?from=x&to=1", "", 400}, {"GET", "/api/addr/A?from=x", "", 200}, {"GET", "/api/addr/A?from=0&to=1000", "", 200},
+		{"GET", "/api/addr/A?from=0&to=1001", "", 400},
+		{"GET", "/api/addrs/A/txs?from=2&to=1", "", 400}, {"GET", "/api/addrs/A/txs?from=1.5&to=3", "", 400},
 		{"POST", "/api/tx/send", `{}`, 400}, {"POST", "/api/tx/send", `{"rawtx":1}`, 400},
 		{"POST", "/api/tx/send", `{"rawtx":"a"}`, 400}, {"POST", "/api/tx/send", `{"rawtx":"gg"}`, 400},
 		{"POST", "/api/tx/send", `{"rawtx":""}`, 400}, {"POST", "/api/tx/send", `{"rawtx":"aa"} {}`, 400},
@@ -227,27 +370,36 @@ func TestInsightInvalidAddress(t *testing.T) {
 		}
 	}
 }
+
+// Offsets index the worker's paged sequence, so a window that holds the same
+// txid twice returns it once and later windows keep their positions.
 func TestInsightHistoryDedup(t *testing.T) {
 	f := insightFixture()
 	f.address.Txids = []string{"pending", "a", "a", "b", "c"}
-	w := insightRequest(insightTestServer(t, f), "GET", "/api/addrs/A/txs?from=1&to=3", "")
-	if w.Code != 200 || !reflect.DeepEqual(f.fetched, []string{"a", "b"}) {
+	w := insightRequest(insightTestServer(t, f), "GET", "/api/addrs/A/txs?from=1&to=4", "")
+	if w.Code != 200 || !reflect.DeepEqual(f.fetched, []string{"a", "b"}) || !strings.Contains(w.Body.String(), `"from":1,"to":3,`) {
 		t.Fatal(w, f.fetched)
 	}
 }
 
 func TestInsightHistoryWindows(t *testing.T) {
 	for _, tc := range []struct {
-		query            string
-		from, to, prefix int
-		ids              []string
+		query    string
+		from, to int
+		detail   api.AccountDetails
+		history  []int
+		ids      []string
 	}{
-		{"", 0, 4, 50, []string{"pending", "a", "b", "c"}},
-		{"?from=0&to=1", 0, 1, 1, []string{"pending"}},
-		{"?from=1&to=2", 1, 2, 2, []string{"a"}},
-		{"?from=2&to=4", 2, 4, 4, []string{"b", "c"}},
-		{"?from=0&to=0", 0, 0, 1, nil},
-		{"?from=1000&to=1000", 1000, 1000, 1000, nil},
+		// The worker page size is the window size, so the window lies in at
+		// most two worker pages; an empty window reads the totals alone.
+		{"", 0, 4, api.AccountDetailsTxidHistory, []int{1}, []string{"pending", "a", "b", "c"}},
+		{"?from=0&to=1", 0, 1, api.AccountDetailsTxidHistory, []int{1}, []string{"pending"}},
+		{"?from=1&to=2", 1, 2, api.AccountDetailsTxidHistory, []int{2}, []string{"a"}},
+		{"?from=2&to=4", 2, 4, api.AccountDetailsTxidHistory, []int{2}, []string{"b", "c"}},
+		{"?from=0&to=0", 0, 0, api.AccountDetailsTokens, nil, nil},
+		{"?from=1000&to=1000", 1000, 1000, api.AccountDetailsTokens, nil, nil},
+		{"?from=3", 0, 4, api.AccountDetailsTxidHistory, []int{1}, []string{"pending", "a", "b", "c"}},
+		{"?to=3", 0, 4, api.AccountDetailsTxidHistory, []int{1}, []string{"pending", "a", "b", "c"}},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
 			f := insightFixture()
@@ -259,8 +411,8 @@ func TestInsightHistoryWindows(t *testing.T) {
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil {
 				t.Fatal(w)
 			}
-			if out.TotalItems != 4 || out.From != tc.from || out.To != tc.to || f.prefix != tc.prefix || !reflect.DeepEqual(f.fetched, tc.ids) {
-				t.Fatalf("response=%s prefix=%d enriched=%v", w.Body, f.prefix, f.fetched)
+			if out.TotalItems != 4 || out.From != tc.from || out.To != tc.to || f.detail != tc.detail || !reflect.DeepEqual(f.historyPages, tc.history) || !reflect.DeepEqual(f.fetched, tc.ids) {
+				t.Fatalf("response=%s detail=%d history pages=%v enriched=%v", w.Body, f.detail, f.historyPages, f.fetched)
 			}
 		})
 	}
@@ -279,13 +431,18 @@ func TestInsightTransactionWalletFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"time":123`, `"blockheight":20`, `"blockhash":"block"`, `"confirmations":2`, `"hex":"abcd"`, `"fees":0.00000001`, `"addr":"A"`, `"valueSat":1`, `"coinbase":"coinbase"`, `"n":2`, `"addresses":["B"]`, `"asm":"1"`} {
+	for _, field := range []string{`"time":123`, `"blockheight":20`, `"blockhash":"block"`, `"confirmations":2`, `"hex":"abcd"`, `"fees":0.00000001`, `"addr":"A"`, `"valueSat":1`, `"coinbase":"coinbase"`, `"n":2`, `"addresses":["B"]`, `"asm":"1"`, `"blockHeight":20`, `"blockHash":"block"`, `"blockTime":123`, `"blocktime":123`, `"value":"0"`, `"valueOut":0`} {
 		if !strings.Contains(string(data), field) {
 			t.Fatalf("missing %s in %s", field, data)
 		}
 	}
-	if out.Vin[1].Addr != nil || out.Vout[1].ScriptPubKey.Asm != "" || len(out.Vout[1].ScriptPubKey.Addresses) != 0 {
+	// The converter puts the vout addresses (including OP_RETURN text) into
+	// scriptPubKey.addresses; asm still comes only from script bytes.
+	if out.Vin[1].Addr != nil || out.Vout[1].ScriptPubKey.Asm != "" || !reflect.DeepEqual(out.Vout[1].ScriptPubKey.Addresses, []string{"OP_RETURN (fake)"}) {
 		t.Fatal("fabricated script or input address")
+	}
+	if strings.Contains(string(data), `"isCoinBase"`) || strings.Contains(string(data), `"valueIn"`) {
+		t.Fatalf("isCoinBase/valueIn: %s", data)
 	}
 	tx.Vin[0].ValueSat = insightAmount(9007199254740992)
 	if _, err = insightTransaction(tx); err == nil {

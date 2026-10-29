@@ -157,5 +157,103 @@ check 'unit_redact: masks a quoted password' grep -qx 'Environment="RPC_PASS=<re
 check 'unit_redact: keeps other values' grep -qx 'Environment=MALLOC_CONF=narenas:8' <<< "$red"
 check 'unit_redact: no secret left' bash -c '! grep -q "abc\|RPC_PASS=x" <<< "$1"' _ "$red"
 
+# Insight bind host preflight: refuse an Insight-enabled install without BLOCKBOOK_INSIGHT_HOST
+mkdir -p "$work/insight"
+printf '{"ports":{"blockbook_public":9130,"blockbook_insight":9876}}\n' > "$work/insight/on.json"
+printf '{"ports":{"blockbook_public":9130}}\n' > "$work/insight/off.json"
+envf=$work/insight/blockbook.env
+refuses() { ! insight_preflight "$1" "$2" 2>/dev/null; } # refuses CONFIG ENVFILE
+check 'insight preflight: missing env file is refused' refuses "$work/insight/on.json" "$work/insight/none.env"
+printf 'MALLOC_CONF=x\n' > "$envf"
+check 'insight preflight: variable absent is refused' refuses "$work/insight/on.json" "$envf"
+printf 'BLOCKBOOK_INSIGHT_HOST=\n' > "$envf"
+check 'insight preflight: empty value is refused' refuses "$work/insight/on.json" "$envf"
+printf '# BLOCKBOOK_INSIGHT_HOST=10.100.0.5\n; BLOCKBOOK_INSIGHT_HOST=10.100.0.6\n' > "$envf"
+check 'insight preflight: commented value is refused' refuses "$work/insight/on.json" "$envf"
+printf 'BLOCKBOOK_INSIGHT_HOST=0.0.0.0\n' > "$envf"
+check 'insight preflight: wildcard is refused' refuses "$work/insight/on.json" "$envf"
+printf 'BLOCKBOOK_INSIGHT_HOST=10.100.0.300\n' > "$envf"
+check 'insight preflight: bad octet is refused' refuses "$work/insight/on.json" "$envf"
+printf 'BLOCKBOOK_INSIGHT_HOST=example.com\n' > "$envf"
+check 'insight preflight: hostname is refused' refuses "$work/insight/on.json" "$envf"
+printf 'BLOCKBOOK_INSIGHT_HOST=10.100.0.5\n' > "$envf"
+check 'insight preflight: valid value passes' insight_preflight "$work/insight/on.json" "$envf"
+printf 'MALLOC_CONF=x\nBLOCKBOOK_INSIGHT_HOST="10.100.0.7"\n' > "$envf"
+check 'insight preflight: quoted value is unquoted' [ "$(insight_env_value "$envf")" = 10.100.0.7 ]
+printf 'BLOCKBOOK_INSIGHT_HOST=10.100.0.5\nBLOCKBOOK_INSIGHT_HOST=\n' > "$envf"
+check 'insight preflight: last assignment wins (empty)' refuses "$work/insight/on.json" "$envf"
+check 'insight preflight: coin without the port ignores the env file' insight_preflight "$work/insight/off.json" "$work/insight/none.env"
+check 'insight preflight: real bitcoin config enables it' refuses "$here/../../configs/coins/bitcoin.json" "$work/insight/none.env"
+check 'insight preflight: real ethereum config is unaffected' insight_preflight "$here/../../configs/coins/ethereum.json" "$work/insight/none.env"
+
+# Insight bind address and port: parsed from ip/ss output, checked through fake ip/ss/curl
+ip_out='2: eth0    inet 10.100.0.5/24 brd 10.100.0.255 scope global eth0
+1: lo    inet 127.0.0.1/8 scope host lo'
+check 'insight host: assigned address matches' bash -c 'source "$1"; insight_host_assigned 10.100.0.5 <<< "$2"' _ "$here/deploy-blockbook.sh" "$ip_out"
+check 'insight host: other address is refused' bash -c 'source "$1"; ! insight_host_assigned 10.100.0.6 <<< "$2"' _ "$here/deploy-blockbook.sh" "$ip_out"
+check 'insight host: prefix of an address is refused' bash -c 'source "$1"; ! insight_host_assigned 10.100.0.50 <<< "$2"' _ "$here/deploy-blockbook.sh" "$ip_out"
+ss_out='State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+LISTEN 0      4096   10.100.0.5:9876   0.0.0.0:*   users:(("node",pid=4242,fd=19))
+LISTEN 0      4096   10.100.0.5:19876  0.0.0.0:*   users:(("other",pid=7,fd=3))
+LISTEN 0      4096            *:9130   *:*   users:(("blockbook",pid=99,fd=5),("blockbook",pid=98,fd=6))
+LISTEN 0      4096         [::]:8080   [::]:*
+LISTEN 0      128          [::]:9877   [::]:*   users:(("x",pid=5,fd=1))'
+holders() { insight_port_holders "$1" "$2" <<< "$ss_out"; } # holders PORT OWNPID
+check 'insight port: converter on the port is reported' [ "$(holders 9876 99)" = 'node(4242)' ]
+check 'insight port: own process is not a conflict' [ -z "$(holders 9876 4242)" ]
+check 'insight port: free port is not a conflict' [ -z "$(holders 9999 1)" ]
+check 'insight port: a longer port number is not a match' [ "$(holders 9877 1)" = 'x(5)' ]
+check 'insight port: every pid of a shared socket counts' [ "$(holders 9130 99)" = 'blockbook(98)' ]
+check 'insight port: no process info is unknown' [ "$(holders 8080 1)" = unknown ]
+
+refused() { ! "$@" 2>/dev/null; } # succeeds when the command fails
+fakebin=$work/fakebin
+mkdir -p "$fakebin"
+printf '#!/bin/sh\nprintf "%%s\\n" "$FAKE_IP_OUT"\n' > "$fakebin/ip"
+printf '#!/bin/sh\nprintf "%%s\\n" "$FAKE_SS_OUT"\n' > "$fakebin/ss"
+printf '#!/bin/sh\nprintf "%%s" "$FAKE_CURL_CODE"\n[ "$FAKE_CURL_CODE" != 000 ]\n' > "$fakebin/curl"
+chmod +x "$fakebin"/ip "$fakebin"/ss "$fakebin"/curl
+fake() { PATH=$fakebin:$PATH FAKE_IP_OUT=$ip_out FAKE_SS_OUT=$ss_out FAKE_CURL_CODE=${CURL_CODE:-200} "$@"; }
+check 'insight runtime: free port on a local address passes' fake insight_runtime_check 10.100.0.5 9999 1
+check 'insight runtime: own listener passes on redeploy' fake insight_runtime_check 10.100.0.5 9876 4242
+check 'insight runtime: foreign address is refused' refused fake insight_runtime_check 10.100.0.9 9999 1
+check 'insight runtime: converter on the port is refused' refused fake insight_runtime_check 10.100.0.5 9876 1
+msg=$(fake insight_runtime_check 10.100.0.5 9876 1 2>&1 || true)
+check 'insight runtime: message names the holder and the converter' bash -c 'grep -q "node(4242)" <<< "$1" && grep -q "converter" <<< "$1"' _ "$msg"
+msg=$(fake insight_runtime_check 10.100.0.9 9999 1 2>&1 || true)
+check 'insight runtime: message names the address' bash -c 'grep -q "10.100.0.9 is not an address" <<< "$1"' _ "$msg"
+failbin=$work/failbin
+mkdir -p "$failbin"
+cp "$fakebin/ip" "$failbin/ip"
+printf '#!/bin/sh\nexit 1\n' > "$failbin/ss"
+chmod +x "$failbin"/ip "$failbin"/ss
+# deploy calls the check inside an && list, where errexit is off: run it the same way
+ss_failed() { PATH=$failbin:$PATH FAKE_IP_OUT=$ip_out bash -c 'source "$1"; if insight_runtime_check 10.100.0.5 9999 1; then echo passed; else echo refused; fi' _ "$here/deploy-blockbook.sh" 2>/dev/null; }
+check 'insight runtime: a failing ss fails the check' [ "$(ss_failed)" = refused ]
+check 'insight probe: 200 passes' fake insight_probe 10.100.0.5 9876
+CURL_CODE=503; check 'insight probe: 503 (not ready) passes' fake insight_probe 10.100.0.5 9876
+CURL_CODE=000; check 'insight probe: refused connection fails' refused fake insight_probe 10.100.0.5 9876
+CURL_CODE=404; check 'insight probe: 404 fails' refused fake insight_probe 10.100.0.5 9876
+unset CURL_CODE
+
+# insight_unit_ok: a fake dpkg-deb streams a tar of the unit; needs GNU tar (--wildcards)
+if tar --version 2>/dev/null | grep -q GNU; then
+    unitdir=$work/unit/lib/systemd/system
+    mkdir -p "$unitdir"
+    printf '[Service]\nExecStart=/bin/blockbook -public=:9130 -insight=${BLOCKBOOK_INSIGHT_HOST}:9876 -explorer=\n' > "$unitdir/blockbook-bitcoin.service"
+    printf '[Service]\nExecStart=/bin/blockbook -public=:9130 -insight=127.0.0.1:9876\n' > "$unitdir/blockbook-literal.service"
+    printf '[Service]\nExecStart=/bin/blockbook -public=:9130\n' > "$unitdir/blockbook-plain.service"
+    tar -C "$work/unit" -cf "$work/unit.tar" ./lib
+    printf '#!/bin/sh\ncat "$FAKE_TAR"\n' > "$fakebin/dpkg-deb"
+    chmod +x "$fakebin/dpkg-deb"
+    unitok() { PATH=$fakebin:$PATH FAKE_TAR=$work/unit.tar insight_unit_ok x.deb "$1"; }
+    check 'insight unit: env-host flag is found' unitok blockbook-bitcoin
+    check 'insight unit: a literal host does not count' refused unitok blockbook-literal
+    check 'insight unit: a unit without the flag is refused' refused unitok blockbook-plain
+    check 'insight unit: a missing unit is refused' refused unitok blockbook-missing
+else
+    echo 'skip - insight_unit_ok tests need GNU tar'
+fi
+
 echo "$passed passed, $failed failed"
 [[ $failed == 0 ]]

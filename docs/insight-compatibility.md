@@ -2,9 +2,10 @@
 
 The optional native Go listener reuses Blockbook's query worker, mempool, transaction cache and
 single database owner. It opens no second RocksDB index and makes no calls to the public HTTP
-API. The V1/V2 APIs and explorer keep their existing bindings and behavior. This profile follows
-the five route families of Zelcore's MIT-licensed `insight-to-blockbook` adapter; its notice is
-retained in [COPYING.insight-to-blockbook](../COPYING.insight-to-blockbook).
+API. The V1/V2 APIs and explorer keep their existing bindings and behavior. This profile
+serves every bitcore Insight route Zelcore's wallets use. Each response is a superset of what Zelcore's MIT-licensed `insight-to-blockbook` adapter (the converter) returns today: no
+converter path, field name or value changes, and stock Insight fields are added alongside. Its
+notice is retained in [COPYING.insight-to-blockbook](../COPYING.insight-to-blockbook).
 
 Every response, including errors and OPTIONS, includes an HTTP `Link` header with `rel="source"`.
 `Access-Control-Expose-Headers: Link` allows browser API clients to read it across origins.
@@ -16,75 +17,181 @@ does not claim that unpublished local changes satisfy corresponding-source oblig
 
 Insight is disabled unless `-insight=host:port` is supplied. It accepts only Bitcoin-type chains
 with eight decimal places, including BTG and GRS; startup fails for unsupported parsers or a port
-collision. No production coin definitions enable it in this patch.
+collision.
 
-An operator may pair these optional coin-specification fields:
+## Enabling it
+
+A coin config opts in with a pair of fields, and both must be present (the rendered numeric port
+must match `blockbook_insight`):
 
 ```json
 {
   "ports": { "blockbook_insight": 9876 },
-  "blockbook": { "insight_binding_template": "127.0.0.1:{{.Ports.BlockbookInsight}}" }
+  "blockbook": { "insight_binding_template": "${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookInsight}}" }
 }
 ```
 
-Merge these fields into a complete coin definition; the example is not a standalone definition.
-The generated service includes `-insight=127.0.0.1:9876`. Both fields must be present and the
-rendered numeric port must match. Port 9876 is an example requiring allocation, not an assumed
-free port. An explicit bind host is mandatory. Loopback works only with a proxy on the same host;
-for a proxy on another host, choose a reachable private interface and restrict access to the
-trusted proxy. The listener serves plain HTTP; public TLS and perimeter request policy belong
-at the existing proxy. This change makes no host or proxy configuration changes.
+`configs/coins/bitcoin.json` and `configs/coins/zcash.json` carry exactly this. The generated
+service has `-insight=${BLOCKBOOK_INSIGHT_HOST}:9876` in `ExecStart`, and systemd expands the
+variable from `EnvironmentFile=-/etc/blockbook/blockbook.env` when the service starts. The host
+is a deploy-time value and is never committed: set `BLOCKBOOK_INSIGHT_HOST` to the host's private
+`10.100.0.x` address in that file (see [env.md](env.md)). The template check accepts the exact
+token `${BLOCKBOOK_INSIGHT_HOST}` as the host and nothing else containing `$`; any other
+environment reference is rejected at build time. Other coins may use a literal host such as
+`127.0.0.1:{{.Ports.BlockbookInsight}}`. An explicit bind host is mandatory: an empty host (the
+variable unset) makes Blockbook refuse to start.
+
+`contrib/scripts/deploy-blockbook.sh` therefore refuses an install of an Insight-enabled coin
+before it builds or stops anything when the env file does not define `BLOCKBOOK_INSIGHT_HOST`
+as a dotted IPv4 address other than `0.0.0.0`, when that address is not assigned to the host
+(`ip -o -4 addr show`), or when the port is held by a process other than this coin's running
+Blockbook (`ss -ltnp`). On the first BTC and ZEC switch the port is held by the converter, so
+stop and disable it first; the refusal says so. It also refuses a package whose unit lacks the
+flag (for example a stale `--skip-build` package). After the restart it probes
+`http://<host>:<port>/api/status` (200, or 503 while not ready); a refused connection is a failed
+check and rolls the install back. All of this holds with `--skip-build` and
+`--use-package-unit`, which the production deploys use. Without `--use-package-unit`, a host
+unit or `ExecStart` drop-in keeps its own command line and the listener is not started.
+Coins without `ports.blockbook_insight` are not checked or changed.
+
+On BTC and ZEC hosts the listener takes over port 9876 from the converter (the converter is
+stopped and disabled, not removed), so HAProxy needs no change. Port 9876 is registered for both
+coins in the "blockbook insight" column of [ports.md](ports.md); two coins may share it because
+they run on separate hosts. The listener serves plain HTTP; public TLS and perimeter request
+policy belong at the existing proxy, and the private interface should be reachable only by the
+trusted proxy.
 
 ## HTTP contract
 
+Every route is served under both `/api/` and `/insight-api/`. OPTIONS on any known path is 204,
+a known path with the wrong method is 405 with `Allow`, and unknown paths are 404.
+
 | Method and path | Response |
 | --- | --- |
-| `GET /api/status` | `{info:{blocks,version,protocolversion,difficulty,errors}}`; numeric backend fields, empty `errors` on success |
-| `GET /api/addr/:address/utxo` | Array of address, txid, vout, amount, satoshis, height, confirmations and coinbase when known |
-| `GET /api/addr/:address[/:noTxList]` | Balance summary with explicit zeros, string `balanceSat`, numeric other satoshi fields, `txApperances` and `unconfirmedTxApperances`; no transaction list |
-| `GET /api/addrs/:address/txs?from=0&to=50` | `{totalItems,from,to,items}`; exclusive-end offsets |
-| `POST /api/tx/send` | JSON `{rawtx:"..."}` to `{txid:"..."}` |
+| `GET status` | `{info:{blocks,version,protocolversion,difficulty,errors}}`. `?q=getDifficulty` gives `{difficulty}`, `?q=getBestBlockHash` the backend best hash, `?q=getLastBlockHash` `{syncTipHash,lastblockhash}` from the index tip |
+| `GET sync` | `{status,blockChainHeight,syncPercentage,height,error,type}`; `finished` only when Blockbook is in sync, `blockChainHeight` is the daemon height and `height` the index height |
+| `GET peer` | `{connected:true,host:"127.0.0.1",port:null}` |
+| `GET version` | `{version}` of this build |
+| `GET blocks?blockDate=YYYY-MM-DD&limit=N&startTimestamp=T` | `{blocks,length,pagination}`; default and maximum `limit` 200 |
+| `GET block/:hash` | Block with txids, reward (coinbase outputs minus block fees), confirmations and `isMainChain` |
+| `GET rawblock/:hash` | `{rawblock}` hex |
+| `GET block-index/:height` | `{blockHash}` |
+| `GET tx/:txid` | Transaction in the superset shape below. `spentTxId`, `spentIndex` and `spentHeight` come from the extended index when the coin has one (BTC); without it (ZEC) `spent` is still true/false but `spentTxId` is null, because finding a spender would walk the whole history of each spent output's address |
+| `GET rawtx/:txid` | `{rawtx}` hex |
+| `GET txs?block=<hash>&pageNum=N` | `{pagesTotal,txs}`, 10 transactions per page |
+| `GET txs?address=A&pageNum=N` | `{pagesTotal,txs}`, 10 per page, newest first with pending first |
+| `POST tx/send` | JSON or form `{rawtx:"..."}` to `{txid:"..."}` |
+| `GET addr/:address[/:noTxList]` | Balance summary with explicit zeros, string `balanceSat`, numeric other satoshi fields, `txApperances`, `unconfirmedTxApperances` and a `transactions` txid list (default window 0..1000) |
+| `GET addr/:address/balance`, `totalReceived`, `totalSent`, `unconfirmedBalance` | Bare satoshi integer, as stock Insight. The converter answered the full address summary object on these paths; this is expected difference E11 in `contrib/insightcompare` |
+| `GET addr/:address/utxo` | Array of address, txid, vout, amount, satoshis, height, confirmations and coinbase when known; the full set, not capped |
+| `GET addrs/:address/txs?from=0&to=50` | `{totalItems,from,to,items}` for one address; exclusive-end offsets |
+| `GET addrs/A,B/txs`, `POST addrs/txs` | Merged history of at most 20 addresses, same shape |
+| `GET addrs/A,B/utxo`, `GET addrs/A,B/unspent`, `POST addrs/utxo` | Concatenated unspent rows of at most 100 addresses; `unspent` returns confirmed outputs only |
+| `GET addrs/A,B/balance` | `{balance,unconfirmedBalance}` in satoshis, summed over at most 100 addresses |
+| `GET utils/estimatefee?nbBlocks=2,3` | `{"2":<coins/kB>,...}`; `-1` when the daemon cannot estimate |
+| `GET currency` | `{status:200,data:{rate:<USD>,short:"<TICKER>"}}`; rate 0 without a fiat source |
+| `GET`/`POST messages/verify` | `{result:<bool>}` from the daemon's `verifymessage` |
 
-For adapter compatibility, address can instead be supplied by `?address=...` on `/api/addr`,
-`/api/addr/utxo` and `/api/addrs/txs`. History also accepts `/api/addrs/:address/txs/:from[/:to]`;
-path offsets take precedence over query offsets. `noTxList` is accepted and ignored.
+For adapter compatibility, a single address can instead be supplied by `?address=...` on `addr`,
+`addr/utxo` and `addrs/txs`. History also accepts `addrs/:address/txs/:from[/:to]` and
+`addrs/txs/:from[/:to]?address=`; path offsets take precedence over query offsets. A single-address
+route given a comma-separated value gets 400. POST bodies may be JSON or
+`application/x-www-form-urlencoded`; both are treated the same.
 
-History supports one address with integer `0 <= from <= to <= 1000`; defaults are 0 and 50.
-Multiple addresses and larger windows receive 400. It requests page one of a bounded txid
-prefix, includes pending transactions in worker order, deduplicates preserving first occurrence,
-slices offsets, and fetches full transactions only for returned IDs. An offset beyond available
-history returns an empty `items` array; actual `to` is `from + len(items)`. `totalItems` is the
-worker's confirmed plus unconfirmed transaction counters. Counters and rows are not an atomic
-chain snapshot and can drift during confirmation or reorgs. Overlapping client windows can
-therefore change while the chain changes.
+### Transaction shape (superset rule)
 
-The prefix bounds the confirmed-history request and this handler's full-transaction enrichment.
-The legacy worker still scans all pending address transactions, and the UTXO method returns the
-full set for an address. These backend-work costs remain even for a small requested window.
+`tx`, history items and `txs` items share one transform. Every field the converter returns keeps
+its name and value, and stock Insight fields are added next to them (extra fields are allowed).
+Top level: `txid`, `version`, `confirmations`, `locktime` and `lockTime`, `blockhash` and
+`blockHash`, `blockheight` and `blockHeight` (-1 while pending), `blocktime`, `blockTime` and
+`time`, `size`, `vsize`, `hex`, `value` and `valueIn` (satoshi strings), `valueOut` and `fees` (coins,
+numbers; `fees` is 0 when unknown), `isCoinBase` (only for a coinbase) and optional
+`confirmationETABlocks`, `confirmationETASeconds`, `rbf`, `coinSpecificData`, `chainExtraData`.
+`vin` entries keep the converter keys (`txid`, `vout`, `sequence`, `n`, `addresses`, `isAddress`,
+`value`, `valueSat`, `hex`, `coinbase`) and add `addr`, `scriptSig{hex,asm}`, `doubleSpentTxID`
+and a `scriptPubKey` clone of the vin keys. `vout` entries keep `value`, `n`, `hex`, `addresses`
+(OP_RETURN text included, null when absent), `isAddress`, `type`, spent fields, and add
+`scriptPubKey{value,n,spent,hex,addresses,isAddress,type,asm}`. History items also set `isOwn` on
+inputs and outputs that belong to the requested address, or to any requested address for the
+merged routes.
+
+**ASM decision.** `asm` is the disassembly of the script bytes, never address text. This matches
+stock Insight and gives the wallet's OP_RETURN memo parser the same text as the converter for
+ASCII memos and correct text for binary ones; the converter instead writes address text into
+`asm` and double-encodes non-ASCII data. It is an expected difference from the converter.
+
+### History windows and deep paging
+
+For one address, `from` and `to` are integers with `0 <= from <= to` and `to - from <= 1000`.
+There is no upper bound on `to` itself, so a wallet can page past 1000 transactions: the handler
+reads the worker pages that cover the window (at most two), slices by offset in the worker's
+sequence (pending first, then newest first), deduplicates preserving first occurrence, and fetches
+full transactions only for the returned ids. The default window is 0..50 for `addrs`, 0..1000 for
+`addr`; as in stock, `from` and `to` are used only when both are given. Anything malformed or
+over the bound gets 400. An offset beyond the end returns an empty `items` array and does not scan
+the history (one balance read); the actual `to` is `from + len(items)`. `totalItems` is the
+worker's confirmed plus unconfirmed counters. Counters and rows are not an atomic chain snapshot
+and can drift during confirmation or reorgs, and a duplicate that straddles two windows can
+appear in both.
+
+### Multi-address bounds
+
+Duplicates and blanks collapse, preserving first occurrence. At most 20 distinct addresses for
+`txs` and 100 for `utxo`, `unspent` and `balance`; an empty list, an invalid address (the whole
+request is rejected) or a list over the bound gets 400. `txs` windows follow stock (`from`
+default 0, `to` default `from + 10`) with `to <= 1000`. The merged history is pending first, then
+confirmed by height descending; transactions of different addresses at the same height keep the
+request-address order (then the worker's order within an address), not their position in the
+block. The order is deterministic for the same input, so paging is stable. `totalItems` is exact while the merged
+read stays within a budget of 50000 txids; above it, it is the sum of per-address totals, an upper
+bound. Multi-address `utxo` and `unspent` answers are capped at 20000 rows in aggregate; above
+that the request gets 413 and the caller should query fewer addresses. The single-address `utxo`
+route is not capped.
+
+### Block routes
+
+`blocks` binary-searches heights by time through the index and never scans the chain. A day with
+no blocks, a future day or a day before genesis gives an empty `blocks` with a full `pagination`;
+a malformed date gives 400. Block times are not strictly monotonic, so a block within about two
+hours of a day boundary can be placed on the neighbouring day. `block` loads every transaction of
+the block once (cached in a small LRU) to compute `reward`. `rawblock` uses the worker's raw block
+and, when the backend does not provide it, falls back to the daemon's `getblock <hash> 0`; the
+daemon "not found" code gives 404. The `rawtx` route likewise falls back to `getrawtransaction`.
+
+### Fee, currency and message verification
+
+`utils/estimatefee` takes at most 10 comma-separated targets, each 1 to 1008, default `2`, and
+asks the backend for a conservative estimate. A backend that cannot estimate gives `-1` for that
+target. This is the normal answer on ZEC, whose Zebra daemon has no `estimatesmartfee`.
+`currency` reads only Blockbook's own fiat layer and never calls out; `short` is the coin
+shortcut. `messages/verify` needs `address`, `signature` and `message` (body values win over
+query values) and answers `{result:true|false}`; a daemon that rejects the input gives
+`{result:false}`. When the daemon has no `verifymessage` (ZEC on Zebra) the route answers 501
+`Not supported` instead of leaking the daemon message. A route whose backend call is unavailable
+for any other reason answers a generic 500 or 503.
+
+### Amounts, errors and limits
 
 All monetary JSON tokens are formatted from integer satoshis with eight-decimal precision and
 no floating-point amount arithmetic. Numeric spending fields beyond JavaScript's safe integer
-range (`-9007199254740991..9007199254740991`) fail explicitly with a generic 500 response.
-Nil amounts become zero. History keeps txid, time, confirmations, fees, vin addr/value/valueSat
-and coinbase, vout n/value/scriptPubKey addresses/hex/asm, blockheight/blockhash and transaction
-hex where available. Missing input addresses are null. Output ASM is derived from script bytes
-when present, including OP_RETURN; displayed address text is never converted into script ASM.
+range (`-9007199254740991..9007199254740991`) fail explicitly with a generic 500 response; satoshi
+strings such as `value`, `valueIn` and `balanceSat` are not capped. Nil amounts become zero.
 
-Broadcast requires a nonempty, even-length hexadecimal string and a JSON body at most 8 MiB,
-including chunked bodies. Malformed, trailing or non-string JSON input receives 400; oversized
+Broadcast requires a nonempty, even-length hexadecimal string and a body at most 8 MiB,
+including chunked bodies. Malformed, trailing or non-string input receives 400; oversized
 bodies receive 413. The daemon decides transaction acceptance. Rejection and unexpected RPC
 errors use a generic 500 response; raw daemon messages, URLs, credentials and stack traces are
 never returned. A backend error reported inside system-info with no Go error still receives a
-generic 503. Error JSON has shape `{status:"error",error:"..."}`.
+generic 503. Error JSON has shape `{status:"error",error:"..."}`. Only the exact worker
+"not found" texts give 404; any other worker failure is a generic 500.
 
-Known paths enforce GET or POST (405 otherwise), allow OPTIONS preflight (204), and set public
-CORS headers on every response. Unknown routes receive 404. This is a compatibility profile,
-not full Insight: Socket.IO, events, multi-address aggregation, history beyond the bound,
-block routes and special/shielded asset semantics need separate contract work before migration.
+All known paths set public CORS headers on every response. Socket.IO and events are not served.
+Stock fields the converter never returned (for example a block's `minedBy`) are not emitted.
+For a ZEC node only the transparent pool is indexed, so shielded asset semantics are not covered.
 
 ## Readiness and shutdown
 
-The bind occurs synchronously before startup succeeds. All five routes return 503 until an owned
+The bind occurs synchronously before startup succeeds. All routes return 503 until an owned
 atomic readiness flag is set. With `-sync`, this follows initial index sync, mempool initialization
 and its first resync. Known-route OPTIONS remains 204 and method validation remains 405.
 Without `-sync`, readiness follows the existing full public API startup point; it does not
@@ -92,8 +199,18 @@ certify a current index. Status is also gated because the inherited system-info 
 reads startup state that is changed during synchronization.
 
 At most 32 requests enter handlers concurrently. Excess work receives immediate 503 with
-`Retry-After: 1`; there is no waiting queue. HTTP limits are five seconds for headers, 30 seconds
-for reading, 60 seconds for writing and idle connections, and 1 MiB of headers.
+`Retry-After: 1`; there is no waiting queue. A POST body is read (at most 8 MiB, within a 10
+second body deadline) before a slot is taken, so a client that trickles a body occupies a
+connection but no slot; it gets 400 when the deadline passes. At most 16 bodies are read at once
+(503 beyond that), and a declared `Content-Length` above 8 MiB gets 413 before any read. HTTP limits are five seconds for
+headers, 30 seconds for reading, 60 seconds for writing and idle connections, and 1 MiB of headers.
+
+The listener does not rate-limit by source. HAProxy in front of it should: set
+`option http-buffer-request` on the Insight frontend/backend so a request body is complete before
+it is forwarded (a slow client then ties up HAProxy, not the listener), a short
+`timeout http-request` (for example 10s) to cut slow headers and bodies, and a per-source
+connection and request rate limit (stick-table with `conn_cur` and `http_req_rate`) on the explorer
+frontends.
 
 Every main return after startup runs registered cleanup before the deferred database close.
 Normal signal shutdown drains Insight before closing the daemon. Admission closes first and
@@ -105,34 +222,23 @@ operator consideration.
 
 ## Recorded local verification
 
-This is the current-master forward port of reviewed Insight commit
-`dda65ea2ee6ddce23966c2804483b6337f3ad771`, on reviewed branding/policy base
-`3624fa8e4230193599be56d532350112fb8b9fda`, including upstream
-`b427738f`. Root/server/build-tool checks passed normally and with focused
-Insight/lifecycle race detection on native macOS arm64 using Go 1.25.4,
-RocksDB 9.10 and ZeroMQ 4.3.5. The offline full unit runner also passed,
-and the native binary built and printed help without starting a daemon.
-These checks do not exercise BTG/GRS daemons or qualify Linux packaging.
+The routes are covered by fake-worker server tests (`go test -tags unittest ./server/ -run
+Insight`, run in the `blockbook-build` image) and by template tests (`go test ./build/tools/`),
+which render the actual service output in dev and prod, preserving optional runtime environment
+loading, jemalloc settings, backend dependency gating and dev-only pprof, and check that the
+BTC and ZEC definitions enable the listener on 9876.
 
-Current master's signal fan-out and explicit shutdown signal channel are retained,
-along with synchronized initial-sync access, sync metrics, and shutdown joins for
-state storage, index, mempool and internal-data healing. The broadcast closure passes
-`false` for the current daemon API's alternative-RPC flag, matching the public API.
-Configuration tests render actual service output in both dev and prod, preserving
-optional runtime environment loading, jemalloc settings, backend dependency gating
-and dev-only pprof. No production coin definition enables Insight.
-
-Race checks use a fake query worker. They establish the exercised listener and
-lifecycle behavior, not race freedom of every inherited worker path. Current
-`api/worker.go` system-info still reads historical fiat timestamps directly while
-`fiat/fiat_rates.go` updates them; startup gating does not establish safety for
-those inherited concurrent accesses. Qualify a real worker with fiat updates
-separately. No worker/fiat synchronization change is included here.
+Race checks use a fake query worker, so they establish the exercised listener and lifecycle
+behavior, not race freedom of every inherited worker path. Qualifying a real worker with fiat
+updates running found a data race: `GetSystemInfo` read the historical fiat timestamps while
+`fiat/fiat_rates.go` wrote them. It was found and fixed in `69e8bc1e`: the timestamps are now
+accessed through `InternalState` setters and a getter under its existing mutex, and the fix is
+guarded by two `-race` tests (`TestGetSystemInfo_FiatTimestampsRace` and
+`TestRunHistoricalCycle_InternalStateTimestampsRace`).
 
 ## Qualification before production use
 
-Local fake-worker and template tests cover the contract and lifecycle. Linux packaging
-and jemalloc runtime linkage remain unverified because Docker is unavailable. They do not
+Local fake-worker and template tests cover the contract and lifecycle. They do not
 qualify an existing production database, the BTG/GRS daemons, a public proxy or real wallet
 clients. Before a user-run canary:
 
@@ -147,8 +253,21 @@ clients. Before a user-run canary:
    at one live database.
 3. Exercise daemon broadcast rejection/acceptance, coinbase and OP_RETURN transactions, pending
    balance/history changes, BTG/GRS address handling and wallet display/export/spending contracts.
-4. Allocate a listener port, choose the private bind interface, configure the trusted proxy and
-   verify TLS, CORS, 503 readiness, saturation, body limits and shutdown under active requests.
+4. Set `BLOCKBOOK_INSIGHT_HOST` in `/etc/blockbook/blockbook.env`, stop and disable the converter
+   on that host (the deploy refuses while it holds the port) and verify the listener on port 9876 behind the trusted proxy: TLS, CORS, 503 readiness,
+   saturation, body limits and shutdown under active requests. Apply the HAProxy settings from
+   the limits section above (`option http-buffer-request`, `timeout http-request`, per-source
+   rate limits) before the listener is public.
+
+   First switch order. The deploy script checks the env file and that the address is assigned
+   to the host before it builds, but checks the port holder only after the build, just before it
+   stops Blockbook, so the converter keeps serving during the build. Build the package first (or
+   run the script once: it builds, then refuses at the port check with nothing stopped), then
+   stop and disable the converter, then deploy with `--skip-build`. Port 9876 is dark from the
+   converter stop until the new listener is ready, which can take a while since it returns 503
+   until `-sync` readiness. A script rollback restores the previous Blockbook but does not
+   restart the converter, so after a rolled-back first switch 9876 stays dark until the owner
+   re-enables the converter.
 5. Retain a recoverable snapshot and agree on canary/rollback steps. Matching schema and unit
    fixtures alone do not prove production database compatibility. No schema migration is added
    here; rollback across any other write migration requires restoring its pre-migration snapshot.

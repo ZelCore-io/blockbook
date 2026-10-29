@@ -2,14 +2,12 @@ package server
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"math/big"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,11 +21,24 @@ import (
 
 const insightBodyLimit = 8 << 20
 
+// insightBodyTimeout bounds reading a POST body, which happens before a
+// concurrency slot is taken.
+const insightBodyTimeout = 10 * time.Second
+
+// insightBodyReaders caps POST bodies read at once (with insightBodyLimit,
+// at most 128 MiB buffered), since body reads hold no concurrency slot.
+const insightBodyReaders = 16
+
 type insightWorker interface {
 	GetSystemInfo(bool) (*api.SystemInfo, error)
 	GetAddress(string, int, int, api.AccountDetails, *api.AddressFilter, string) (*api.Address, error)
 	GetAddressUtxo(string, bool) (api.Utxos, error)
 	GetTransaction(string, bool, bool) (*api.Tx, error)
+	GetBlocks(page int, blocksOnPage int) (*api.Blocks, error)
+	GetBlock(bid string, page int, txsOnPage int) (*api.Block, error)
+	GetBlockRaw(bid string) (*api.BlockRaw, error)
+	EstimateFee(blocks int, conservative bool) (big.Int, error)
+	GetCurrentFiatRates(currencies []string, token string) (*api.FiatTicker, error)
 }
 
 // InsightServer is the optional eight-decimal Bitcoin compatibility listener.
@@ -38,11 +49,19 @@ type InsightServer struct {
 	broadcast func(string) (string, error)
 	ready     atomic.Bool
 	slots     chan struct{}
+	readers   chan struct{}
 	mu        sync.Mutex
 	closing   bool
 	started   bool
 	listener  net.Listener
 	active    sync.WaitGroup
+	// rpc and coinShortcut are set by SetBackend before Start; rpc may be nil.
+	rpc          InsightRPC
+	coinShortcut string
+	blockCache   *insightBlockCache
+	// bodyTimeout overrides insightBodyTimeout (tests).
+	bodyTimeout time.Duration
+	feeCache    insightFeeCache
 }
 
 func NewInsightServer(binding string, chainType bchain.ChainType, decimals int, worker insightWorker, broadcast func(string) (string, error)) (*InsightServer, error) {
@@ -56,7 +75,7 @@ func NewInsightServer(binding string, chainType bchain.ChainType, decimals int, 
 	if worker == nil {
 		return nil, errors.New("Insight requires a query worker")
 	}
-	s := &InsightServer{worker: worker, broadcast: broadcast, slots: make(chan struct{}, 32)}
+	s := &InsightServer{worker: worker, broadcast: broadcast, slots: make(chan struct{}, 32), readers: make(chan struct{}, insightBodyReaders), blockCache: newInsightBlockCache()}
 	s.http = &http.Server{Addr: binding, Handler: s, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	return s, nil
 }
@@ -115,71 +134,6 @@ func insightError(w http.ResponseWriter, code int, message string) {
 	}{"error", message})
 }
 
-type insightRoute struct{ kind, address, from, to string }
-
-func insightMatch(r *http.Request) (insightRoute, bool) {
-	parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
-	if len(parts) < 3 || parts[0] != "" || parts[1] != "api" {
-		return insightRoute{}, false
-	}
-	route := insightRoute{}
-	switch parts[2] {
-	case "status":
-		if len(parts) == 3 {
-			route.kind = "status"
-		}
-	case "tx":
-		if len(parts) == 4 && parts[3] == "send" {
-			route.kind = "send"
-		}
-	case "addr":
-		if len(parts) == 3 {
-			route.kind = "summary"
-		} else if len(parts) == 4 {
-			if parts[3] == "utxo" {
-				route.kind = "utxo"
-			} else {
-				route.kind = "summary"
-				route.address = parts[3]
-			}
-		} else if len(parts) == 5 {
-			route.address = parts[3]
-			route.kind = "summary"
-			if parts[4] == "utxo" {
-				route.kind = "utxo"
-			}
-		}
-	case "addrs":
-		txs := 3
-		if len(parts) > 3 && parts[3] != "txs" {
-			route.address = parts[3]
-			txs = 4
-		}
-		if len(parts) > txs && parts[txs] == "txs" && len(parts) <= txs+3 {
-			route.kind = "history"
-			if len(parts) > txs+1 {
-				route.from = parts[txs+1]
-			}
-			if len(parts) > txs+2 {
-				route.to = parts[txs+2]
-			}
-		}
-	}
-	if route.kind == "" {
-		return route, false
-	}
-	if route.address == "" {
-		route.address = r.URL.Query().Get("address")
-	}
-	if route.from == "" {
-		route.from = r.URL.Query().Get("from")
-	}
-	if route.to == "" {
-		route.to = r.URL.Query().Get("to")
-	}
-	return route, true
-}
-
 func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sourceURL, sourceLabel := sourceLink(common.GetVersionInfo().GitCommit)
 	w.Header().Set("Link", fmt.Sprintf("<%s>; rel=\"source\"; title=\"%s\"", sourceURL, sourceLabel))
@@ -187,7 +141,7 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Expose-Headers", "Link")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	route, ok := insightMatch(r)
+	route, methods, ok := insightMatch(r)
 	if !ok {
 		insightError(w, 404, "Route not found")
 		return
@@ -196,14 +150,49 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(204)
 		return
 	}
-	method := http.MethodGet
-	if route.kind == "send" {
-		method = http.MethodPost
-	}
-	if r.Method != method {
-		w.Header().Set("Allow", method+", OPTIONS")
+	if !insightAllowed(methods, r.Method) {
+		w.Header().Set("Allow", strings.Join(methods, ", ")+", OPTIONS")
 		insightError(w, 405, "Method not allowed")
 		return
+	}
+	if !s.admissible() {
+		w.Header().Set("Retry-After", "1")
+		insightError(w, 503, "Service unavailable")
+		return
+	}
+	// The body is read, size-limited and parsed before a concurrency slot is
+	// taken, so clients that trickle a body cannot hold the 32 slots.
+	if r.Method == http.MethodPost {
+		// Refusals close the connection: net/http would otherwise drain the
+		// unread body before answering, which a trickling client can stall.
+		if r.ContentLength > insightBodyLimit {
+			w.Header().Set("Connection", "close")
+			insightError(w, 413, "Request body too large")
+			return
+		}
+		select {
+		case s.readers <- struct{}{}:
+		default:
+			w.Header().Set("Connection", "close")
+			w.Header().Set("Retry-After", "1")
+			insightError(w, 503, "Service busy")
+			return
+		}
+		timeout := s.bodyTimeout
+		if timeout <= 0 {
+			timeout = insightBodyTimeout
+		}
+		// Not every ResponseWriter supports deadlines (test recorders); the
+		// server-wide ReadTimeout still applies then.
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(timeout))
+		body, code, err := insightReadBody(w, r)
+		<-s.readers
+		if err != nil {
+			code, message := insightErrorStatus(code)
+			insightError(w, code, message)
+			return
+		}
+		route.body = body
 	}
 	s.mu.Lock()
 	if s.closing || !s.ready.Load() {
@@ -223,29 +212,51 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	defer func() { <-s.slots; s.active.Done() }()
-	if route.kind != "status" && route.kind != "send" && (route.address == "" || strings.Contains(route.address, ",")) {
-		insightError(w, 400, "A single address is required")
-		return
+	if insightSingleAddressKinds[route.kind] {
+		if _, ok := insightSingleAddress(route); !ok {
+			insightError(w, 400, "A single address is required")
+			return
+		}
 	}
-	value, code, err := s.handle(w, r, route)
+	route.ctx = r.Context()
+	value, code, err := s.handle(route)
 	if err != nil {
-		if code == 0 {
-			code = 500
-		}
-		message := "Backend request failed"
-		if code == 400 {
-			message = "Invalid request"
-		}
-		if code == 413 {
-			message = "Request body too large"
-		}
-		if code == 503 {
-			message = "Service unavailable"
+		code, message := insightErrorStatus(code)
+		var clientErr *insightClientError
+		if errors.As(err, &clientErr) && clientErr.code == code {
+			message = clientErr.message
 		}
 		insightError(w, code, message)
 		return
 	}
 	insightJSON(w, 200, value)
+}
+
+// insightClientError is a handler error whose fixed, client-safe message
+// replaces the generic one for its status code.
+type insightClientError struct {
+	code    int
+	message string
+}
+
+func (e *insightClientError) Error() string { return e.message }
+
+// insightErrorStatus maps a handler status to the generic public message.
+// Unknown statuses, including 0, become 500.
+func insightErrorStatus(code int) (int, string) {
+	switch code {
+	case http.StatusBadRequest:
+		return code, "Invalid request"
+	case http.StatusNotFound:
+		return code, "Not found"
+	case http.StatusRequestEntityTooLarge:
+		return code, "Request body too large"
+	case http.StatusNotImplemented:
+		return code, "Not supported"
+	case http.StatusServiceUnavailable:
+		return code, "Service unavailable"
+	}
+	return http.StatusInternalServerError, "Backend request failed"
 }
 
 func insightStatusNumber(value string) json.Number {
@@ -255,148 +266,59 @@ func insightStatusNumber(value string) json.Number {
 	}
 	return "0"
 }
-func (s *InsightServer) handle(w http.ResponseWriter, r *http.Request, route insightRoute) (interface{}, int, error) {
+
+// handle dispatches an admitted route. Kinds without a handler yet are 501.
+func (s *InsightServer) handle(route insightRoute) (interface{}, int, error) {
+	address, _ := insightSingleAddress(route)
 	switch route.kind {
 	case "status":
-		info, err := s.worker.GetSystemInfo(false)
-		if err != nil {
-			return nil, 500, err
-		}
-		if info == nil || info.Backend == nil || info.Backend.BackendError != "" {
-			return nil, 503, errors.New("backend unavailable")
-		}
-		b := info.Backend
-		return map[string]interface{}{"info": map[string]interface{}{"blocks": b.Blocks, "version": insightStatusNumber(b.Version), "protocolversion": insightStatusNumber(b.ProtocolVersion), "difficulty": insightStatusNumber(b.Difficulty), "errors": ""}}, 0, nil
+		return s.status(route)
+	case "sync":
+		return s.sync()
+	case "blocks":
+		return s.blocks(route)
+	case "block":
+		return s.block(route)
+	case "rawblock":
+		return s.rawBlock(route)
+	case "blockindex":
+		return s.blockIndex(route)
+	case "peer":
+		return insightPeer(), 0, nil
+	case "version":
+		return insightVersion(), 0, nil
 	case "summary":
-		address, err := s.worker.GetAddress(route.address, 1, 1, api.AccountDetailsTokens, &api.AddressFilter{Vout: api.AddressFilterVoutOff}, "")
-		if err != nil {
-			return nil, insightAddressErrorCode(err), err
-		}
-		out, err := insightAddress(address)
-		return out, 500, err
+		return s.summary(route, address)
+	case "addrvalue":
+		return s.addrValue(route, address)
 	case "utxo":
-		rows, err := s.worker.GetAddressUtxo(route.address, false)
-		if err != nil {
-			return nil, insightAddressErrorCode(err), err
-		}
-		out := make([]insightUtxo, 0, len(rows))
-		for _, u := range rows {
-			amount, sat, err := insightMoney(u.AmountSat)
-			if err != nil {
-				return nil, 500, err
-			}
-			address := u.Address
-			if address == "" {
-				address = route.address
-			}
-			out = append(out, insightUtxo{address, u.Txid, u.Vout, amount, sat, u.Height, u.Confirmations, u.Coinbase})
-		}
-		return out, 0, nil
+		return s.utxo(route, address)
 	case "history":
-		return s.history(route)
+		return s.history(route, address)
+	case "multiutxo":
+		return s.multiUtxo(route, false)
+	case "multiunspent":
+		return s.multiUtxo(route, true)
+	case "multibalance":
+		return s.multiBalance(route)
+	case "multitxs":
+		return s.multiTxs(route)
 	case "send":
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, insightBodyLimit))
-		if err != nil {
-			var large *http.MaxBytesError
-			if errors.As(err, &large) {
-				return nil, 413, err
-			}
-			return nil, 400, err
-		}
-		var input struct {
-			Rawtx string `json:"rawtx"`
-		}
-		if err = json.Unmarshal(body, &input); err != nil {
-			return nil, 400, err
-		}
-		if input.Rawtx == "" {
-			return nil, 400, errors.New("empty rawtx")
-		}
-		if _, err = hex.DecodeString(input.Rawtx); err != nil {
-			return nil, 400, err
-		}
-		if s.broadcast == nil {
-			return nil, 503, errors.New("broadcast unavailable")
-		}
-		txid, err := s.broadcast(input.Rawtx)
-		if err != nil {
-			return nil, 500, err
-		}
-		return struct {
-			Txid string `json:"txid"`
-		}{txid}, 0, nil
+		return s.send(route)
+	case "tx":
+		return s.tx(route)
+	case "rawtx":
+		return s.rawTx(route)
+	case "txs":
+		return s.txs(route)
+	case "estimatefee":
+		return s.estimateFee(route)
+	case "currency":
+		return s.currency()
+	case "verify":
+		return s.verifyMessage(route)
 	}
-	return nil, 500, errors.New("missing route")
-}
-
-func insightOffset(value string, fallback int) (int, error) {
-	if value == "" {
-		return fallback, nil
-	}
-	for _, ch := range value {
-		if ch < '0' || ch > '9' {
-			return 0, errors.New("invalid offset")
-		}
-	}
-	n, err := strconv.Atoi(value)
-	if err != nil || n > 1000 {
-		return 0, fmt.Errorf("offset exceeds compatibility bound")
-	}
-	return n, nil
-}
-func (s *InsightServer) history(route insightRoute) (interface{}, int, error) {
-	from, err := insightOffset(route.from, 0)
-	if err != nil {
-		return nil, 400, err
-	}
-	to, err := insightOffset(route.to, 50)
-	if err != nil {
-		return nil, 400, err
-	}
-	if from > to {
-		return nil, 400, errors.New("invalid window")
-	}
-	prefix := to
-	if prefix == 0 {
-		prefix = 1
-	}
-	address, err := s.worker.GetAddress(route.address, 1, prefix, api.AccountDetailsTxidHistory, &api.AddressFilter{Vout: api.AddressFilterVoutOff}, "")
-	if err != nil {
-		return nil, insightAddressErrorCode(err), err
-	}
-	if address == nil {
-		return nil, 500, errors.New("missing address")
-	}
-	ids := make([]string, 0, len(address.Txids))
-	seen := make(map[string]struct{}, len(address.Txids))
-	for _, id := range address.Txids {
-		if _, ok := seen[id]; !ok {
-			seen[id] = struct{}{}
-			ids = append(ids, id)
-		}
-	}
-	items := make([]*insightTx, 0)
-	end := to
-	if end > len(ids) {
-		end = len(ids)
-	}
-	for i := from; i < end; i++ {
-		tx, err := s.worker.GetTransaction(ids[i], false, false)
-		if err != nil {
-			return nil, 500, err
-		}
-		item, err := insightTransaction(tx)
-		if err != nil {
-			return nil, 500, err
-		}
-		items = append(items, item)
-	}
-	return struct {
-		TotalItems int          `json:"totalItems"`
-		From       int          `json:"from"`
-		To         int          `json:"to"`
-		Items      []*insightTx `json:"items"`
-	}{address.Txs + address.UnconfirmedTxs, from, from + len(items), items}, 0, nil
+	return nil, http.StatusNotImplemented, errors.New("route not implemented")
 }
 
 func insightAddressErrorCode(err error) int {
@@ -405,4 +327,11 @@ func insightAddressErrorCode(err error) int {
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError
+}
+
+// admissible reports whether the listener is ready and not shutting down.
+func (s *InsightServer) admissible() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closing && s.ready.Load()
 }

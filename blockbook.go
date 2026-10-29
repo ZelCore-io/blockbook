@@ -388,6 +388,15 @@ func mainWithExitCode() int {
 			return chain.SendRawTransaction(rawtx, false)
 		})
 		if err == nil {
+			var rpc server.InsightRPC
+			if raw, ok := chain.(interface {
+				RawRPC() (func(req interface{}, res interface{}) error, bool)
+			}); ok {
+				if call, ok := raw.RawRPC(); ok {
+					rpc = server.NewInsightRPC(call)
+				}
+			}
+			insightServer.SetBackend(rpc, internalState.CoinShortcut)
 			err = insightServer.Start()
 		}
 		if err != nil {

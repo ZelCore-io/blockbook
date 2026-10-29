@@ -130,3 +130,35 @@ func TestGetSpendingTxid(t *testing.T) {
 		})
 	}
 }
+
+// The Insight tx route asks for no per-output spending scan
+// (GetTransaction(txid, false, false)). Without the extended index that leaves
+// spentTxId empty, and with it the worker still fills the spender from the
+// index, so nothing is lost where the lookup is cheap.
+func TestGetTransactionSpendingFlag(t *testing.T) {
+	for _, extendedIndex := range []bool{false, true} {
+		w := setupSpendingWorker(t, extendedIndex)
+		tx, err := w.GetTransaction(dbtestdata.TxidB1T1, false, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !tx.Vout[1].Spent || tx.Vout[2].Spent {
+			t.Fatalf("extended=%v: spent flags %v %v", extendedIndex, tx.Vout[1].Spent, tx.Vout[2].Spent)
+		}
+		want := ""
+		if extendedIndex {
+			want = dbtestdata.TxidB2T1
+		}
+		if tx.Vout[1].SpentTxID != want {
+			t.Errorf("extended=%v: spender %q, want %q", extendedIndex, tx.Vout[1].SpentTxID, want)
+		}
+		// the explicit scan stays available to other callers
+		tx, err = w.GetTransaction(dbtestdata.TxidB1T1, true, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tx.Vout[1].SpentTxID != dbtestdata.TxidB2T1 {
+			t.Errorf("extended=%v: scan spender %q", extendedIndex, tx.Vout[1].SpentTxID)
+		}
+	}
+}

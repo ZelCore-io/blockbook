@@ -22,6 +22,7 @@ const (
 type PortInfo struct {
 	CoinName              string
 	BlockbookInternalPort uint16
+	BlockbookInsightPort  uint16
 	BlockbookPublicPort   uint16
 	BackendRPCPort        uint16
 	BackendServicePorts   map[string]uint16
@@ -182,6 +183,8 @@ func loadPortInfo(dir string) (PortInfoSlice, error) {
 				item.BlockbookInternalPort = p
 			case "blockbook_public":
 				item.BlockbookPublicPort = p
+			case "blockbook_insight":
+				item.BlockbookInsightPort = p
 			case "backend_rpc":
 				item.BackendRPCPort = p
 			default:
@@ -242,7 +245,7 @@ func writeMarkdown(output string, slice PortInfoSlice) error {
 
 	fmt.Fprintf(&buf, "# Registry of ports\n\n")
 
-	header := []string{"coin", "blockbook public", "blockbook internal", "backend rpc", "backend service ports (zmq)"}
+	header := []string{"coin", "blockbook public", "blockbook internal", "blockbook insight", "backend rpc", "backend service ports (zmq)"}
 	writeTable(&buf, header, slice)
 
 	fmt.Fprintf(&buf, "\n> NOTE: This document is generated from coin definitions in `configs/coins` using command `go run contrib/scripts/check-and-generate-port-registry.go -w`.\n")
@@ -278,8 +281,11 @@ func writeTable(w io.Writer, header []string, slice PortInfoSlice) {
 		if item.BlockbookInternalPort > 0 {
 			row[2] = fmt.Sprintf("%d", item.BlockbookInternalPort)
 		}
+		if item.BlockbookInsightPort > 0 {
+			row[3] = fmt.Sprintf("%d", item.BlockbookInsightPort)
+		}
 		if item.BackendRPCPort > 0 {
-			row[3] = fmt.Sprintf("%d", item.BackendRPCPort)
+			row[4] = fmt.Sprintf("%d", item.BackendRPCPort)
 		}
 
 		svcPorts := make([]string, 0, len(item.BackendServicePorts))
@@ -294,7 +300,7 @@ func writeTable(w io.Writer, header []string, slice PortInfoSlice) {
 		}
 
 		sort.Strings(svcPorts)
-		row[4] = strings.Join(svcPorts, ", ")
+		row[5] = strings.Join(svcPorts, ", ")
 
 		rows[i] = row
 	}

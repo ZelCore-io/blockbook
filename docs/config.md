@@ -101,7 +101,11 @@ Good examples of coin configuration are
        generates `-insight=127.0.0.1:9876`. This operator-selected port is only an example; allocate
        a free port before enabling. Loopback requires a reverse proxy on the same host. If the
        proxy runs elsewhere, explicitly bind a reachable private interface and restrict access
-       to that proxy. This listener serves plain HTTP; the proxy provides public TLS. Only
+       to that proxy. The host may also be the exact token `${BLOCKBOOK_INSIGHT_HOST}` (BTC and
+       ZEC use `${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookInsight}}`): systemd expands it when the
+       service starts, from the `EnvironmentFile=-/etc/blockbook/blockbook.env` of the generated
+       unit (see [env.md](env.md)). No other `$` reference is accepted, and an unset variable
+       makes Blockbook refuse to start. This listener serves plain HTTP; the proxy provides public TLS. Only
        Bitcoin-type chains with eight decimals are eligible. See the [compatibility profile](insight-compatibility.md).
     * `explorer_url` – URL of blockchain explorer. Leave empty for internal explorer.
     * `additional_params` – Additional params of exec command (see [Dogecoin definition](/configs/coins/dogecoin.json)).

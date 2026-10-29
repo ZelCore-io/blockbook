@@ -212,6 +212,33 @@ func (c *blockChainWithMetrics) observeRPCLatency(method string, start time.Time
 	c.m.RPCLatency.With(common.Labels{"method": method, "error": e}).Observe(float64(time.Since(start)) / 1e6) // in milliseconds
 }
 
+// RawRPC exposes the wrapped chain's raw JSON-RPC caller (BitcoinRPC.Call,
+// promoted through coins that embed it). Calls are observed as "RawRPC:<method>"
+// when the request names its daemon method (a small fixed set of passthrough
+// calls), otherwise as "RawRPC".
+func (c *blockChainWithMetrics) RawRPC() (func(req interface{}, res interface{}) error, bool) {
+	caller, ok := c.b.(interface {
+		Call(interface{}, interface{}) error
+	})
+	if !ok {
+		return nil, false
+	}
+	return func(req interface{}, res interface{}) (err error) {
+		defer func(s time.Time) { c.observeRPCLatency(rawRPCLabel(req), s, err) }(time.Now())
+		return caller.Call(req, res)
+	}, true
+}
+
+// rawRPCLabel is the RPCLatency method label of a raw daemon call.
+func rawRPCLabel(req interface{}) string {
+	if named, ok := req.(interface{ RPCMethod() string }); ok {
+		if method := named.RPCMethod(); method != "" {
+			return "RawRPC:" + method
+		}
+	}
+	return "RawRPC"
+}
+
 func (c *blockChainWithMetrics) Initialize() error {
 	return c.b.Initialize()
 }
