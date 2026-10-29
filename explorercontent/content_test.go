@@ -515,12 +515,13 @@ func TestMoreExplorersSkipsInvalidOnly(t *testing.T) {
 	s := Snapshot{Explorers: ExplorerList{
 		{Coin: "groestlcoin", Name: "Groestlcoin", URL: "https://example.com/grs"},
 		{Coin: "bitcoin-cash", Name: "Bitcoin Cash", URL: "https://example.com/bch"},
+		{Coin: "bitcoin_testnet4", Name: "Bitcoin Testnet4", URL: "https://example.com/tbtc"},
 		{Coin: "bad", Name: "Bad", URL: "javascript:alert(1)"},
 		{Coin: "Upper", Name: "Upper", URL: "https://example.com/upper"},
 		{Coin: "bitcoin", Name: "Bitcoin", URL: "https://example.com/btc", IconURL: "http://example.com/i.png"},
 	}}
 	got := s.MoreExplorers()
-	if len(got) != 2 || got[0].Coin != "groestlcoin" || got[1].Coin != "bitcoin-cash" {
+	if len(got) != 3 || got[0].Coin != "groestlcoin" || got[1].Coin != "bitcoin-cash" || got[2].Coin != "bitcoin_testnet4" {
 		t.Fatalf("got %+v", got)
 	}
 }

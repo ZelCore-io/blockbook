@@ -14,7 +14,7 @@
  *
  * Public classes: .hub-page, .hub-band, .hub-band-home, .hub-nav, .hub-search, .hub-figures,
  * .hub-products, .hub-product, .hub-powered, .hub-layout, .hub-card, .hub-aside, .hub-campaign,
- * .hub-zelcore-prompt, .hub-tabs, .hub-stat-grid, .hub-explorers, .hub-explorer, .hub-articles,
+ * .hub-zelcore-prompt, .hub-tabs, .hub-stat-grid, .hub-xmenu, .hub-articles,
  * .hub-footer, .hub-footer-explorers, .hub-mono,
  * .hub-scroll, .hub-ellipsis, .hub-summary, .hub-badge, .hub-copy, .hub-section-head, .hub-raw,
  * .hub-io-label. Parts used inside them are named .hub-<block>-<part> (for example .hub-brand,
@@ -31,10 +31,10 @@
  * .prim-amt / .sec-amt rules by exact selector, so they must stay separate rules). Build commands (run from the repo root;
  * the perl step restores the \XXXX escapes that csso decodes to UTF-8):
  *   npx csso-cli@4.0.2 static/css/hub.css --no-restructure -o /tmp/hub.css
- *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/hub.css > static/css/hub.min.10.css
+ *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/hub.css > static/css/hub.min.11.css
  *   npx csso-cli@4.0.2 static/css/main.css --no-restructure -o /tmp/main.css
- *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/main.css > static/css/main.min.10.css
- *   npx terser@5.51.2 static/js/main.js -c -m -o static/js/main.min.10.js
+ *   perl -CSD -pe 's/([^\x00-\x7F\x{2006}])(?=([0-9A-Fa-f ]?))/sprintf("\\%X",ord($1)).(length($2)?" ":"")/ge' /tmp/main.css > static/css/main.min.11.css
+ *   npx terser@5.51.2 static/js/main.js -c -m -o static/js/main.min.11.js
  *
  * Links: .hub-page colors plain anchors only. Bootstrap .btn and .nav-link anchors on
  * upstream pages keep their own colors.
@@ -164,8 +164,8 @@
 /* Headings use Montserrat. main.css sets the body font on every element (*), so descendants are
    listed too. :where() keeps this at zero specificity: it beats * only by coming later, and
    .hub-mono inside a heading still wins. */
-:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-explorer-icon, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary),
-:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-explorer-icon, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary) * {
+:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-xmenu-icon, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary),
+:where(.hub-page) :where(h1, h2, h3, .hub-brand, .hub-mark, .hub-product-icon, .hub-product-name, .hub-xmenu-icon, .hub-campaign-title, .hub-zelcore-prompt-title, .hub-article-title, .hub-raw > summary) * {
     font-family: var(--hub-font-heading);
 }
 
@@ -223,7 +223,23 @@
     justify-content: center;
     font-size: 12px;
     font-weight: 800;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
     overflow: hidden;
+}
+
+/* Without a theme icon the mark shows the ticker on one line; the font shrinks with its length
+   (the template adds .hub-mark-4/-5/-6 for 4, 5 and 6+ characters). */
+.hub-mark-4 {
+    font-size: 9.5px;
+}
+
+.hub-mark-5 {
+    font-size: 8px;
+}
+
+.hub-mark-6 {
+    font-size: 6.5px;
 }
 
 .hub-mark img {
@@ -380,6 +396,127 @@
     }
 }
 
+/* Explorers menu: the feed's other explorers in a Bootstrap dropdown beside the currency switch.
+   The toggle is an outlined pill on the band; the menu is a white hub card whose height is capped
+   like the currency menu (the rest scrolls) and whose width never passes the viewport. */
+.hub-xmenu {
+    position: relative;
+}
+
+.hub-xmenu-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 38px;
+    padding: 0 12px 0 14px;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    border-radius: var(--hub-radius-sm);
+    background: rgba(255, 255, 255, 0.12);
+    color: #FFFFFF;
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.hub-xmenu-toggle svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform 0.15s;
+}
+
+.hub-xmenu-toggle[aria-expanded="true"] svg {
+    transform: rotate(180deg);
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .hub-xmenu-toggle:hover {
+        background: rgba(255, 255, 255, 0.24);
+    }
+}
+
+@media (pointer: coarse) {
+    .hub-xmenu-toggle {
+        min-height: 44px;
+    }
+}
+
+.hub-xmenu-list {
+    --bs-dropdown-min-width: 14rem;
+    --bs-dropdown-link-color: var(--hub-ink);
+    --bs-dropdown-link-hover-color: var(--hub-link-hover);
+    --bs-dropdown-link-hover-bg: var(--hub-line-soft);
+    --bs-dropdown-link-active-color: var(--hub-ink);
+    --bs-dropdown-link-active-bg: var(--hub-line-soft);
+    max-width: min(20rem, calc(100vw - 32px));
+    max-height: max(200px, calc(100vh - 160px));
+    max-height: max(200px, calc(100dvh - 160px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    margin: 0;
+    padding: 6px;
+    border: 1px solid var(--hub-line);
+    border-radius: var(--hub-radius-sm);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.hub-band .hub-xmenu a.hub-xmenu-item,
+.hub-band .hub-xmenu a.hub-xmenu-item:hover {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    color: var(--hub-ink);
+    font-size: 14px;
+    font-weight: 600;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+/* The band's white focus ring would vanish on the white menu. */
+.hub-page .hub-band .hub-xmenu a.hub-xmenu-item:focus-visible {
+    outline: 2px solid var(--hub-link);
+    outline-offset: -2px;
+}
+
+@media (pointer: coarse) {
+    .hub-band .hub-xmenu a.hub-xmenu-item {
+        min-height: 44px;
+    }
+}
+
+/* Icon from the feed on a white disc, else the name's initial in white on Blue Wave (5.63:1). */
+.hub-xmenu-icon {
+    flex: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--hub-blue);
+    color: #FFFFFF;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1;
+    overflow: hidden;
+}
+
+.hub-xmenu-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: var(--hub-surface);
+}
+
+.hub-xmenu-name {
+    min-width: 0;
+}
+
 .hub-pill {
     display: inline-flex;
     align-items: center;
@@ -406,16 +543,21 @@
     font-size: 14px;
 }
 
+/* The explorers menu and the currency switch stay in the first row after the links at every width;
+   when the inner-page search does not fit beside them it wraps to the next row, right-aligned. */
+.hub-nav-end {
+    order: 1;
+}
+
+.hub-nav .hub-search {
+    order: 2;
+}
+
 /* D: below 992px the currency switch joins the nav links' row and the inner-page search takes the
    next row, left-aligned and growing to the full width (P14). On phones the links share their row
    with the switch and wrap inside the space left (P1); the brand fills the first row so the links always start a new one. */
 @media (max-width: 991.98px) {
-    .hub-nav-end {
-        order: 1;
-    }
-
     .hub-nav .hub-search {
-        order: 2;
         flex: 1 1 100%;
         margin-left: 0;
     }
@@ -430,6 +572,14 @@
         flex: 1 1 0;
         min-width: 0;
         gap: 0 16px;
+    }
+
+    /* With the explorers menu the links keep their own row and the menu and the currency switch
+       share the next one, at its two ends. */
+    .hub-nav-end:has(.hub-xmenu) {
+        flex: 1 1 100%;
+        justify-content: space-between;
+        padding-bottom: 6px;
     }
 }
 
@@ -1935,95 +2085,6 @@
 
 .hub-error-search input {
     height: 44px;
-}
-
-/* ---------- More explorers ---------- */
-
-/* Links to the other Zelcore explorers, from the feed's "explorers" list. Pill buttons at least
-   44 px tall that wrap onto new rows; black text on white (21:1), white initials on Blue Wave
-   (5.63:1). Not promotions, so no "Sponsored" label. */
-.hub-explorers {
-    max-width: var(--hub-max);
-    margin: 0 auto;
-    padding: 4px var(--hub-gutter) 32px;
-}
-
-.hub-explorers h2 {
-    margin: 0 0 16px;
-    font-size: 20px;
-    font-weight: 800;
-}
-
-.hub-explorers-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-}
-
-.hub-explorers-list li {
-    min-width: 0;
-    max-width: 100%;
-}
-
-.hub-explorer {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-    max-width: 100%;
-    min-height: 44px;
-    padding: 5px 18px 5px 5px;
-    border: 1px solid var(--hub-line-strong);
-    border-radius: 999px;
-    background: var(--hub-surface);
-    color: var(--hub-ink);
-    font-size: 14px;
-    font-weight: 700;
-    line-height: 1.3;
-    overflow-wrap: anywhere;
-}
-
-.hub-page a.hub-explorer,
-.hub-page a.hub-explorer:hover {
-    color: var(--hub-ink);
-    text-decoration: none;
-}
-
-.hub-page a.hub-explorer:hover {
-    border-color: var(--hub-blue);
-}
-
-.hub-page a.hub-explorer:hover .hub-explorer-name {
-    text-decoration: underline;
-}
-
-.hub-explorer-icon {
-    flex: none;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background: var(--hub-blue);
-    color: #FFFFFF;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 14px;
-    font-weight: 800;
-    overflow: hidden;
-}
-
-.hub-explorer-icon img {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    background: var(--hub-surface);
-}
-
-.hub-explorer-name {
-    min-width: 0;
 }
 
 /* ---------- Articles ---------- */

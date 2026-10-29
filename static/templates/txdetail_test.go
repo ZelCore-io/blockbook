@@ -80,6 +80,7 @@ func fakeFuncs() template.FuncMap {
 		return template.HTML(fmt.Sprintf(`<span class="amt %s" cc="%v"><span class="prim-amt">%v</span></span>`, class, v, v))
 	}
 	return template.FuncMap{
+		"initials":            testInitials,
 		"amountSpan":          span,
 		"amountSatsSpan":      span,
 		"tokenAmountSpan":     func(tt fakeTransfer, d any, class string) template.HTML { return span(tt.Value, d, class) },
