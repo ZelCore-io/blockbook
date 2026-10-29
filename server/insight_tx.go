@@ -93,6 +93,9 @@ func (s *InsightServer) txs(route insightRoute) (interface{}, int, error) {
 	if !ok {
 		return nil, http.StatusBadRequest, errors.New("invalid block hash")
 	}
+	if insightDigitsOnly(hash) {
+		return nil, http.StatusNotFound, errors.New(insightBlockNotFound)
+	}
 	pageNum, err := insightPageNum(route)
 	if err != nil {
 		return nil, http.StatusBadRequest, err

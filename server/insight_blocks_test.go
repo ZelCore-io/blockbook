@@ -465,3 +465,46 @@ func TestInsightEmptyArgRoutes(t *testing.T) {
 		}
 	}
 }
+
+// A 64-digit argument is read by the worker as a height (64 zeros is the
+// genesis block), so it is a 404 and never reaches the worker or the daemon.
+func TestInsightBlockDigitsOnlyHash(t *testing.T) {
+	zeros := strings.Repeat("0", 64)
+	f := insightFixture()
+	insightBlockFixture(f, zeros, 1)
+	f.rawBlock = &api.BlockRaw{Hex: "aa"}
+	s := insightTestServer(t, f)
+	called := false
+	s.SetBackend(func(string, []interface{}, interface{}) error { called = true; return nil }, "ZEC")
+	for _, p := range []string{"/api/block/", "/api/rawblock/", "/api/txs?block="} {
+		if w := insightRequest(s, "GET", p+zeros, ""); w.Code != 404 {
+			t.Fatalf("%s %d %s", p, w.Code, w.Body)
+		}
+	}
+	if called {
+		t.Fatal("daemon called for a digits-only hash")
+	}
+}
+
+// The worker answering a different block than the one asked for is a 404.
+func TestInsightBlockHashMismatch(t *testing.T) {
+	f := insightFixture()
+	insightBlockFixture(f, insightHashN(4), 1)
+	f.blockByHash[insightHashN(5)] = f.blockByHash[insightHashN(4)]
+	s := insightTestServer(t, f)
+	insightGetJSON(t, s, "/api/block/"+insightHashN(5), 404)
+	insightGetJSON(t, s, "/api/block/"+insightHashN(4), 200)
+}
+
+// Zebra answers getblock for an unknown hash with -8; that is a 404.
+func TestInsightRawBlockZebraNotFound(t *testing.T) {
+	f := insightFixture()
+	f.rawErr = errors.New("unsupported")
+	s := insightTestServer(t, f)
+	s.SetBackend(func(string, []interface{}, interface{}) error {
+		return &bchain.RPCError{Code: -8, Message: "Block not found"}
+	}, "ZEC")
+	if w := insightRequest(s, "GET", "/api/rawblock/"+insightHashN(3), ""); w.Code != 404 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}

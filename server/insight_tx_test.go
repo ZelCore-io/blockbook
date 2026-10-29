@@ -317,7 +317,7 @@ func insightBlockWithTxs(hash string, n int, f *insightFake) {
 }
 
 func TestInsightTxsByBlock(t *testing.T) {
-	hash := strings.Repeat("11", 32)
+	hash := strings.Repeat("1a", 32)
 	type page struct {
 		PagesTotal int               `json:"pagesTotal"`
 		Txs        []json.RawMessage `json:"txs"`
@@ -395,7 +395,7 @@ func TestInsightTxsByBlock(t *testing.T) {
 // and GetBlockRaw answer an unknown block with exactly "Block not found" and
 // wrap backend failures as "Block not found, <cause>". Only the former is 404.
 func TestInsightBlockErrorShapes(t *testing.T) {
-	hash := strings.Repeat("11", 32)
+	hash := strings.Repeat("1a", 32)
 	for _, tc := range []struct {
 		err  error
 		code int
