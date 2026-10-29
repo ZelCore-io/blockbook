@@ -2,8 +2,10 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/trezor/blockbook/api"
+	"github.com/trezor/blockbook/bchain"
 )
 
 // The Firo extension serves the Firo-specific routes of the stock Firo Insight
@@ -24,8 +27,12 @@ const (
 	insightFiroMasternodeTTL = 30 * time.Second
 	insightFiroSupplyTTL     = 60 * time.Second
 	insightFiroNameTTL       = 10 * time.Minute
-	insightFiroNameCacheSize = 4096
+	insightFiroNameCacheSize = 4096 // across both generations
 	insightFiroPrefix        = "firo/"
+	// insightFiroFilterMax and insightFiroFilterMaxItems cap a listmasternodesarray
+	// filter (bytes, distinct comma-separated items); larger filters get 400.
+	insightFiroFilterMax      = 4096
+	insightFiroFilterMaxItems = 100
 )
 
 // insightFiroRoutes are the stock GET routes without a path argument.
@@ -78,7 +85,8 @@ type insightFiro struct {
 	txids      map[string]*insightCached
 	rpcID      atomic.Int64
 	namesMu    sync.Mutex
-	names      map[string]insightFiroName
+	names      map[string]insightFiroName // current generation
+	oldNames   map[string]insightFiroName // previous generation
 }
 
 type insightFiroName struct {
@@ -119,19 +127,24 @@ func (f *insightFiro) handle(route insightRoute) (interface{}, int, error) {
 	if f.s.rpc == nil {
 		return nil, http.StatusNotImplemented, errors.New("no daemon RPC")
 	}
+	ctx := route.ctx
 	var value interface{}
 	var err error
 	switch strings.TrimPrefix(route.kind, insightFiroPrefix) {
 	case "masternode/listmasternodes":
-		value, err = f.listMasternodes()
+		value, err = f.listMasternodes(ctx)
 	case "masternode/listmasternodesarray":
 		filter, ok := insightFiroFilter(route)
 		if !ok {
 			return nil, http.StatusBadRequest, errors.New("invalid filter")
 		}
-		value, err = f.listMasternodesArray(filter)
+		items, ferr := insightFiroFilterItems(filter)
+		if ferr != nil {
+			return nil, http.StatusBadRequest, ferr
+		}
+		value, err = f.listMasternodesArray(ctx, items)
 	case "masternode/masternodecount":
-		value, err = f.count.get(insightFiroMasternodeTTL, func() (interface{}, error) {
+		value, err = f.count.get(ctx, insightFiroMasternodeTTL, func() (interface{}, error) {
 			var count struct {
 				Total   json.Number `json:"total"`
 				Enabled json.Number `json:"enabled"`
@@ -140,30 +153,30 @@ func (f *insightFiro) handle(route insightRoute) (interface{}, int, error) {
 			return count, err
 		})
 	case "ext/getmoneysupply":
-		value, err = f.totals(func(get func(string) float64) float64 { return get("supply") })
+		value, err = f.totals(ctx, func(get func(string) float64) float64 { return get("supply") })
 	case "zerocoin/gettotalzeromint":
-		value, err = f.totals(func(get func(string) float64) float64 { return get("Zeromint") / 1e+8 })
+		value, err = f.totals(ctx, func(get func(string) float64) float64 { return get("Zeromint") / 1e+8 })
 	case "zerocoin/gettotalzerospend":
-		value, err = f.totals(func(get func(string) float64) float64 { return get("Zerospend") / -1e+8 })
+		value, err = f.totals(ctx, func(get func(string) float64) float64 { return get("Zerospend") / -1e+8 })
 	case "sigma/gettotalsigmamint":
-		value, err = f.totals(func(get func(string) float64) float64 { return get("Sigmamint") / 1e+8 })
+		value, err = f.totals(ctx, func(get func(string) float64) float64 { return get("Sigmamint") / 1e+8 })
 	case "sigma/gettotalsigmaspend":
-		value, err = f.totals(func(get func(string) float64) float64 { return get("Sigmaspend") / -1e+8 })
+		value, err = f.totals(ctx, func(get func(string) float64) float64 { return get("Sigmaspend") / -1e+8 })
 	case "zerocoin/getrealsupply":
 		// stock: results[2] - results[0] + results[1], in that float order
-		value, err = f.totals(func(get func(string) float64) float64 {
+		value, err = f.totals(ctx, func(get func(string) float64) float64 {
 			return get("supply") - get("Zeromint")/1e+8 + get("Zerospend")/1e+8
 		})
 	case "sigma/getrealsupply":
-		value, err = f.totals(func(get func(string) float64) float64 {
+		value, err = f.totals(ctx, func(get func(string) float64) float64 {
 			return get("supply") - get("Sigmamint")/1e+8 + get("Sigmaspend")/-1e+8
 		})
 	case "zerocoin/getzerominttxs":
-		value, err = f.pseudoTxs("Zeromint")
+		value, err = f.pseudoTxs(ctx, "Zeromint")
 	case "zerocoin/getzerospendtxs":
-		value, err = f.pseudoTxs("Zerospend")
+		value, err = f.pseudoTxs(ctx, "Zerospend")
 	case "sparknames":
-		value, err = f.sparknames.get(insightFiroSupplyTTL, func() (interface{}, error) {
+		value, err = f.sparknames.get(ctx, insightFiroSupplyTTL, func() (interface{}, error) {
 			var raw json.RawMessage
 			if err := f.s.rpc("getsparknames", nil, &raw); err != nil {
 				return nil, err
@@ -220,15 +233,15 @@ type insightFiroTotal struct {
 // totals evaluates compute over get, which returns firod's gettotalsupply in
 // coins ("supply") or a pseudo-address's getaddressbalance in satoshis, both
 // as float64 like stock, so the arithmetic rounds as stock's does.
-func (f *insightFiro) totals(compute func(get func(string) float64) float64) (interface{}, error) {
+func (f *insightFiro) totals(ctx context.Context, compute func(get func(string) float64) float64) (interface{}, error) {
 	var firstErr error
 	get := func(name string) float64 {
 		var v float64
 		var err error
 		if name == "supply" {
-			v, err = f.supplyValue()
+			v, err = f.supplyValue(ctx)
 		} else {
-			v, err = f.balance(name)
+			v, err = f.balance(ctx, name)
 		}
 		if err != nil && firstErr == nil {
 			firstErr = err
@@ -242,8 +255,8 @@ func (f *insightFiro) totals(compute func(get func(string) float64) float64) (in
 	return insightFiroTotal{insightFiroNumber(v)}, nil
 }
 
-func (f *insightFiro) supplyValue() (float64, error) {
-	v, err := f.supply.get(insightFiroSupplyTTL, func() (interface{}, error) {
+func (f *insightFiro) supplyValue(ctx context.Context) (float64, error) {
+	v, err := f.supply.get(ctx, insightFiroSupplyTTL, func() (interface{}, error) {
 		var res struct {
 			Total float64 `json:"total"`
 		}
@@ -258,8 +271,8 @@ func (f *insightFiro) supplyValue() (float64, error) {
 	return v.(float64), nil
 }
 
-func (f *insightFiro) balance(address string) (float64, error) {
-	v, err := f.balances[address].get(insightFiroSupplyTTL, func() (interface{}, error) {
+func (f *insightFiro) balance(ctx context.Context, address string) (float64, error) {
+	v, err := f.balances[address].get(ctx, insightFiroSupplyTTL, func() (interface{}, error) {
 		var res struct {
 			Balance float64 `json:"balance"`
 		}
@@ -281,12 +294,12 @@ type insightFiroPseudoTxs struct {
 	Txs     json.RawMessage `json:"txs"`
 }
 
-func (f *insightFiro) pseudoTxs(address string) (interface{}, error) {
-	balance, err := f.balance(address)
+func (f *insightFiro) pseudoTxs(ctx context.Context, address string) (interface{}, error) {
+	balance, err := f.balance(ctx, address)
 	if err != nil {
 		return nil, err
 	}
-	txs, err := f.txids[address].get(insightFiroSupplyTTL, func() (interface{}, error) {
+	txs, err := f.txids[address].get(ctx, insightFiroSupplyTTL, func() (interface{}, error) {
 		var raw json.RawMessage
 		if err := f.s.rpc("getaddresstxids", []interface{}{map[string][]string{"addresses": {address}}}, &raw); err != nil {
 			return nil, err
@@ -326,6 +339,7 @@ type insightFiroZnodes struct {
 	raw    json.RawMessage
 	id     int64
 	nodes  []json.RawMessage
+	text   []string // nodes as strings, searched by the substring filter
 	txhash []string
 	outidx []string
 }
@@ -338,8 +352,8 @@ type insightFiroRPCResult struct {
 	ID     int64            `json:"id"`
 }
 
-func (f *insightFiro) loadZnodes() (*insightFiroZnodes, error) {
-	v, err := f.znodes.get(insightFiroMasternodeTTL, func() (interface{}, error) {
+func (f *insightFiro) loadZnodes(ctx context.Context) (*insightFiroZnodes, error) {
+	v, err := f.znodes.get(ctx, insightFiroMasternodeTTL, func() (interface{}, error) {
 		var raw json.RawMessage
 		if err := f.s.rpc("evoznodelist", nil, &raw); err != nil {
 			return nil, err
@@ -400,51 +414,88 @@ func insightFiroParseZnodes(raw json.RawMessage, id int64) (*insightFiroZnodes, 
 		if err := enc.Encode(&node); err != nil {
 			return nil, err
 		}
-		z.nodes = append(z.nodes, json.RawMessage(bytes.TrimSuffix(buf.Bytes(), []byte("\n"))))
+		text := strings.TrimSuffix(buf.String(), "\n")
+		z.nodes = append(z.nodes, json.RawMessage(text))
+		z.text = append(z.text, text)
 		z.txhash = append(z.txhash, node.Txhash)
 		z.outidx = append(z.outidx, node.Outidx)
 	}
 	return z, nil
 }
 
-func (f *insightFiro) listMasternodes() (interface{}, error) {
-	z, err := f.loadZnodes()
+func (f *insightFiro) listMasternodes(ctx context.Context) (interface{}, error) {
+	z, err := f.loadZnodes(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return insightFiroRPCResult{Result: z.raw, ID: z.id}, nil
 }
 
-// listMasternodesArray applies stock's filter: none returns all; a
-// comma-separated list matches each item; an item (or the whole filter) with
-// "-" is txhash-outidx, exact; anything else is a substring of the entry's
-// JSON. Matches keep list order per item, duplicates dropped.
-func (f *insightFiro) listMasternodesArray(filter string) (interface{}, error) {
-	z, err := f.loadZnodes()
+// insightFiroFilterItems splits a filter as stock does (comma-separated when
+// it has a comma), dropping repeated items, which match nothing new. A filter
+// over insightFiroFilterMax bytes or insightFiroFilterMaxItems distinct items is
+// refused, so one request cannot scan the node list without bound.
+func insightFiroFilterItems(filter string) ([]string, error) {
+	if filter == "" {
+		return nil, nil
+	}
+	if len(filter) > insightFiroFilterMax {
+		return nil, fmt.Errorf("filter longer than %d bytes", insightFiroFilterMax)
+	}
+	parts := []string{filter}
+	if strings.Contains(filter, ",") {
+		parts = strings.Split(filter, ",")
+	}
+	seen := make(map[string]bool, len(parts))
+	items := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if !seen[p] {
+			seen[p] = true
+			items = append(items, p)
+		}
+	}
+	if len(items) > insightFiroFilterMaxItems {
+		return nil, fmt.Errorf("filter has more than %d items", insightFiroFilterMaxItems)
+	}
+	return items, nil
+}
+
+// listMasternodesArray applies stock's filter: no items returns all; each
+// item with "-" is txhash-outidx, exact; anything else is a substring of the
+// entry's JSON. Matches keep list order per item, duplicates dropped. It stops
+// when the request context ends.
+func (f *insightFiro) listMasternodesArray(ctx context.Context, items []string) (interface{}, error) {
+	z, err := f.loadZnodes(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if filter == "" {
+	if len(items) == 0 {
 		return insightFiroRPCResult{Result: z.nodes, ID: z.id}, nil
-	}
-	items := []string{filter}
-	if strings.Contains(filter, ",") {
-		items = strings.Split(filter, ",")
 	}
 	seen := make(map[int]bool)
 	result := []json.RawMessage{}
 	for _, item := range items {
-		for i, node := range z.nodes {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		exact := strings.Contains(item, "-")
+		var txhash, outidx string
+		if exact {
+			p := strings.Split(item, "-")
+			txhash, outidx = p[0], p[1]
+		}
+		for i, text := range z.text {
 			var ok bool
-			if strings.Contains(item, "-") {
-				p := strings.Split(item, "-")
-				ok = z.txhash[i] == p[0] && z.outidx[i] == p[1]
+			if exact {
+				ok = z.txhash[i] == txhash && z.outidx[i] == outidx
 			} else {
-				ok = strings.Contains(string(node), item)
+				ok = strings.Contains(text, item)
 			}
 			if ok && !seen[i] {
 				seen[i] = true
-				result = append(result, node)
+				result = append(result, z.nodes[i])
 			}
 		}
 	}
@@ -483,30 +534,46 @@ type insightSparkData struct {
 }
 
 // sparkName returns firod's getsparknametxdetails for txid, nil when the tx
-// registers no Spark name or the call fails (as stock). Results are cached.
+// registers no Spark name or the call fails (as stock). Only daemon answers are
+// cached: a name, or a JSON-RPC error saying the tx registers none (except
+// warm-up). A transport failure or timeout is not cached, so the next request
+// asks again. The cache keeps two generations of insightFiroNameCacheSize/2
+// entries and drops the older one when the current fills.
 func (f *insightFiro) sparkName(txid string) *insightSparkData {
 	if f.s.rpc == nil {
 		return nil
 	}
 	f.namesMu.Lock()
-	if e, ok := f.names[txid]; ok && insightNow().Sub(e.at) < insightFiroNameTTL {
-		f.namesMu.Unlock()
-		return e.data
+	e, ok := f.names[txid]
+	if !ok {
+		e, ok = f.oldNames[txid]
 	}
 	f.namesMu.Unlock()
+	if ok && insightNow().Sub(e.at) < insightFiroNameTTL {
+		return e.data
+	}
 	var data *insightSparkData
 	var res insightSparkData
-	if err := f.s.rpc("getsparknametxdetails", []interface{}{txid}, &res); err == nil && res.Name != "" && res.Address != "" {
+	err := f.s.rpc("getsparknametxdetails", []interface{}{txid}, &res)
+	if err == nil && res.Name != "" && res.Address != "" {
 		data = &res
 	}
+	var rpcErr *bchain.RPCError
+	if err != nil && (!errors.As(err, &rpcErr) || rpcErr.Code == insightFiroRPCInWarmup) {
+		return nil
+	}
 	f.namesMu.Lock()
-	if len(f.names) >= insightFiroNameCacheSize {
-		f.names = map[string]insightFiroName{}
+	if len(f.names) >= insightFiroNameCacheSize/2 {
+		f.oldNames, f.names = f.names, make(map[string]insightFiroName, insightFiroNameCacheSize/2)
 	}
 	f.names[txid] = insightFiroName{data, insightNow()}
 	f.namesMu.Unlock()
 	return data
 }
+
+// insightFiroRPCInWarmup is bitcoind's RPC_IN_WARMUP, an error that says
+// nothing about the tx.
+const insightFiroRPCInWarmup = -28
 
 func insightFiroOpcode(script string) string {
 	if len(script) < 2 {
@@ -564,7 +631,7 @@ func (f *insightFiro) decorateTx(out *insightTx, tx *api.Tx) {
 	out.SparkData = data
 	name := insightVout{
 		Value: "0", Addresses: []string{"Sparkname"}, Type: "sparkname",
-		ScriptPubKey: insightVoutScript{Value: "0", Addresses: []string{"Sparkname"}, Type: "sparkname"},
+		ScriptPubKey: insightVoutScript{Value: "0", Addresses: []string{"Sparkname"}, Type: "sparkname", emptyScript: true},
 	}
 	out.Vout = append([]insightVout{name}, out.Vout...)
 	for i := range out.Vout {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -54,25 +55,79 @@ func (s *InsightServer) transaction(tx *api.Tx) (*insightTx, error) {
 	return out, err
 }
 
-// insightCached holds one value for ttl. Loads are serialized, so concurrent
-// requests for an expired value make one daemon call; a failed load is not
-// cached.
+// insightCacheErrTTL is how long a failed load is remembered, so a hung or
+// failing daemon is not called again by every queued request.
+const insightCacheErrTTL = 5 * time.Second
+
+// insightCached holds one value for ttl. Loads are single-flight: one load runs
+// at a time, outside the mutex, and every caller that arrives meanwhile shares
+// its result or error. When a refresh fails the last good value is served
+// (stale-on-error); with no good value the error is served for
+// insightCacheErrTTL. A caller whose context ends stops waiting; the load
+// carries on and fills the cache for the next one.
 type insightCached struct {
 	mu    sync.Mutex
 	at    time.Time
 	value interface{}
+	err   error
+	errAt time.Time
+	call  *insightCacheCall
 }
 
-func (c *insightCached) get(ttl time.Duration, load func() (interface{}, error)) (interface{}, error) {
+type insightCacheCall struct {
+	done  chan struct{}
+	value interface{}
+	err   error
+}
+
+func (c *insightCached) get(ctx context.Context, ttl time.Duration, load func() (interface{}, error)) (interface{}, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.value != nil && insightNow().Sub(c.at) < ttl {
-		return c.value, nil
+	now := insightNow()
+	if c.value != nil && now.Sub(c.at) < ttl {
+		v := c.value
+		c.mu.Unlock()
+		return v, nil
 	}
-	value, err := load()
-	if err != nil {
+	if c.err != nil && now.Sub(c.errAt) < insightCacheErrTTL {
+		v, err := c.value, c.err
+		c.mu.Unlock()
+		if v != nil {
+			return v, nil
+		}
 		return nil, err
 	}
-	c.value, c.at = value, insightNow()
-	return value, nil
+	call := c.call
+	if call == nil {
+		call = &insightCacheCall{done: make(chan struct{})}
+		c.call = call
+		go c.run(call, load)
+	}
+	c.mu.Unlock()
+	var cancelled <-chan struct{}
+	if ctx != nil {
+		cancelled = ctx.Done()
+	}
+	select {
+	case <-call.done:
+		return call.value, call.err
+	case <-cancelled:
+		return nil, ctx.Err()
+	}
+}
+
+func (c *insightCached) run(call *insightCacheCall, load func() (interface{}, error)) {
+	value, err := load()
+	c.mu.Lock()
+	if err == nil {
+		c.value, c.at, c.err = value, insightNow(), nil
+	} else {
+		c.err, c.errAt = err, insightNow()
+		if c.value != nil {
+			value, err = c.value, nil
+		}
+	}
+	call.value, call.err = value, err
+	c.call = nil
+	c.mu.Unlock()
+	close(call.done)
 }

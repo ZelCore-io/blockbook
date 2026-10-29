@@ -2,14 +2,19 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -352,5 +357,234 @@ func TestInsightFiroLabelTable(t *testing.T) {
 	// a Spark spend that registers no name gets no sparkname output
 	if rpc.calls["getsparknametxdetails"] != 1 {
 		t.Errorf("getsparknametxdetails called %d times", rpc.calls["getsparknametxdetails"])
+	}
+}
+
+// insightFiroManyNodes repeats the fixture's evoznodelist entries under new
+// collateral keys up to n nodes, the size of the mainnet list.
+func insightFiroManyNodes(t *testing.T, fix *insightFiroFixture, n int) json.RawMessage {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(fix.RPC.Evoznodelist))
+	if _, err := dec.Token(); err != nil {
+		t.Fatal(err)
+	}
+	var values []json.RawMessage
+	for dec.More() {
+		if _, err := dec.Token(); err != nil {
+			t.Fatal(err)
+		}
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			t.Fatal(err)
+		}
+		values = append(values, v)
+	}
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		fmt.Fprintf(&buf, `"COutPoint(%064x, %d)":`, i, i%2)
+		buf.Write(values[i%len(values)])
+	}
+	buf.WriteByte('}')
+	return buf.Bytes()
+}
+
+func TestInsightFiroFilterCaps(t *testing.T) {
+	s, _, rpc, fix := insightFiroSetup(t)
+	fix.RPC.Evoznodelist = insightFiroManyNodes(t, fix, 7300)
+	long := strings.Repeat("a", insightFiroFilterMax+1)
+	many := make([]string, insightFiroFilterMaxItems+1)
+	for i := range many {
+		many[i] = strconv.Itoa(i)
+	}
+	tooMany := strings.Join(many, ",")
+	for _, tc := range []struct{ method, path, body string }{
+		{"GET", "/api/masternode/listmasternodesarray/" + long, ""},
+		{"GET", "/api/masternode/listmasternodesarray?filter=" + long, ""},
+		{"GET", "/api/masternode/listmasternodesarray/" + tooMany, ""},
+		{"GET", "/api/masternode/listmasternodesarray?filter=" + tooMany, ""},
+		{"POST", "/api/masternode/listmasternodesarray", `{"filter":"` + long + `"}`},
+		{"POST", "/api/masternode/listmasternodesarray", `{"filter":"` + tooMany + `"}`},
+	} {
+		r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		if tc.body != "" {
+			r.Header.Set("Content-Type", "application/json")
+		}
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), `"status":"error"`) {
+			t.Errorf("%s %.60s: got %d %.200s", tc.method, tc.path, w.Code, w.Body.String())
+		}
+	}
+	if rpc.calls["evoznodelist"] != 0 {
+		t.Errorf("an over-cap filter loaded the list")
+	}
+	// repeated items count once
+	if w := insightRequest(s, "GET", "/api/masternode/listmasternodesarray/"+strings.Repeat("x,", 200)+"x", ""); w.Code != 200 {
+		t.Errorf("repeated items: got %d", w.Code)
+	}
+	// 100 distinct items that match nothing scan the whole 7.3k list per item
+	start := time.Now()
+	w := insightRequest(s, "GET", "/api/masternode/listmasternodesarray/"+strings.Join(many[:insightFiroFilterMaxItems], "z,")+"z", "")
+	if elapsed := time.Since(start); w.Code != 200 || elapsed > 2*time.Second {
+		t.Errorf("100-item filter: got %d in %v", w.Code, elapsed)
+	}
+	if w := insightRequest(s, "GET", "/api/masternode/listmasternodesarray/"+strings.Repeat("0", 63)+"5-1", ""); w.Code != 200 || strings.Count(w.Body.String(), `"collateral"`) != 1 {
+		t.Errorf("exact match: got %d %.300s", w.Code, w.Body.String())
+	}
+}
+
+func TestInsightFiroFilterStopsOnCancel(t *testing.T) {
+	s, _, _, _ := insightFiroSetup(t)
+	f := s.ext.(*insightFiro)
+	if _, err := f.listMasternodesArray(context.Background(), []string{"a"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := f.listMasternodesArray(ctx, []string{"a", "b"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled filter: %v", err)
+	}
+}
+
+func TestInsightCachedSingleFlight(t *testing.T) {
+	var c insightCached
+	var calls atomic.Int32
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v, err := c.get(context.Background(), time.Minute, func() (interface{}, error) {
+				calls.Add(1)
+				<-release
+				return 7, nil
+			})
+			if err != nil || v != 7 {
+				t.Errorf("got %v %v", v, err)
+			}
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	if calls.Load() != 1 {
+		t.Fatalf("%d loads for concurrent callers, want 1", calls.Load())
+	}
+}
+
+func TestInsightCachedStaleAndErrors(t *testing.T) {
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	old := insightNow
+	insightNow = func() time.Time { return now }
+	defer func() { insightNow = old }()
+	var calls int
+	fail := func() (interface{}, error) { calls++; return nil, errors.New("down") }
+	// no good value: the error is served and cached briefly
+	var c insightCached
+	if _, err := c.get(nil, time.Minute, fail); err == nil {
+		t.Fatal("want error")
+	}
+	if _, err := c.get(nil, time.Minute, fail); err == nil || calls != 1 {
+		t.Fatalf("error not cached: %v, %d calls", err, calls)
+	}
+	now = now.Add(insightCacheErrTTL + time.Second)
+	c.get(nil, time.Minute, fail)
+	if calls != 2 {
+		t.Fatalf("error cached past its TTL: %d calls", calls)
+	}
+	// a good value that went stale is served when the refresh fails
+	var d insightCached
+	d.get(nil, time.Minute, func() (interface{}, error) { return "good", nil })
+	now = now.Add(2 * time.Minute)
+	calls = 0
+	for i := 0; i < 3; i++ {
+		if v, err := d.get(nil, time.Minute, fail); err != nil || v != "good" {
+			t.Fatalf("stale-on-error: got %v %v", v, err)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("failed refresh retried %d times within the error TTL", calls)
+	}
+}
+
+func TestInsightCachedWaiterCancel(t *testing.T) {
+	var c insightCached
+	hang := make(chan struct{})
+	defer close(hang)
+	go c.get(context.Background(), time.Minute, func() (interface{}, error) { <-hang; return 1, nil })
+	time.Sleep(20 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := c.get(ctx, time.Minute, func() (interface{}, error) { t.Error("second load"); return nil, nil })
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
+		t.Fatalf("waiter did not give up: %v after %v", err, time.Since(start))
+	}
+}
+
+func TestInsightFiroSparkNameCache(t *testing.T) {
+	s, _, _, _ := insightFiroSetup(t)
+	f := s.ext.(*insightFiro)
+	var calls int
+	var answer error
+	s.SetBackend(func(method string, params []interface{}, result interface{}) error {
+		calls++
+		return answer
+	}, "FIRO")
+	answer = errors.New("timeout")
+	f.sparkName("t1")
+	f.sparkName("t1")
+	if calls != 2 {
+		t.Errorf("transport failure cached: %d calls", calls)
+	}
+	answer = &bchain.RPCError{Code: -28, Message: "Loading block index"}
+	f.sparkName("t2")
+	f.sparkName("t2")
+	if calls != 4 {
+		t.Errorf("warm-up error cached: %d calls", calls)
+	}
+	answer = &bchain.RPCError{Code: -8, Message: "not a spark name tx"}
+	f.sparkName("t3")
+	f.sparkName("t3")
+	if calls != 5 {
+		t.Errorf("daemon answer not cached: %d calls", calls)
+	}
+	// the bound keeps at most two generations
+	for i := 0; i < insightFiroNameCacheSize*2; i++ {
+		f.sparkName(strconv.Itoa(i))
+	}
+	if n := len(f.names) + len(f.oldNames); n > insightFiroNameCacheSize {
+		t.Errorf("%d cached names", n)
+	}
+	if _, ok := f.oldNames[strconv.Itoa(insightFiroNameCacheSize*2-insightFiroNameCacheSize/2-1)]; !ok {
+		t.Errorf("recent generation dropped")
+	}
+}
+
+func TestInsightFiroSparkNameOutputJSON(t *testing.T) {
+	s, f, _, _ := insightFiroSetup(t)
+	f.txs[insightFiroSparkNameTx] = insightFiroTx()
+	body := insightRequest(s, "GET", "/api/tx/"+insightFiroSparkNameTx, "").Body.String()
+	var out struct {
+		Vout []struct {
+			ScriptPubKey map[string]json.RawMessage `json:"scriptPubKey"`
+		} `json:"vout"`
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil || len(out.Vout) != 3 {
+		t.Fatalf("%v %.300s", err, body)
+	}
+	if string(out.Vout[0].ScriptPubKey["hex"]) != `""` || string(out.Vout[0].ScriptPubKey["asm"]) != `""` {
+		t.Errorf("sparkname scriptPubKey %s", body)
+	}
+	if !strings.Contains(body, `"scriptPubKey":{"value":0,"n":0,"hex":"","addresses":["Sparkname"],"isAddress":false,"type":"sparkname","asm":""}`) {
+		t.Errorf("sparkname output %s", body)
+	}
+	if string(out.Vout[1].ScriptPubKey["hex"]) != `"76a9149e6778ee1011af76f6f800873032ea8e15ada4ca88ac"` {
+		t.Errorf("other output changed %s", body)
 	}
 }
