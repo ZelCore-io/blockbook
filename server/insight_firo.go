@@ -535,8 +535,7 @@ type insightSparkData struct {
 
 // sparkName returns firod's getsparknametxdetails for txid, nil when the tx
 // registers no Spark name or the call fails (as stock). Only daemon answers are
-// cached: a name, or a JSON-RPC error saying the tx registers none (except
-// warm-up). A transport failure or timeout is not cached, so the next request
+// cached: a name, or firod's error saying the tx registers none. A transport failure or timeout is not cached, so the next request
 // asks again. The cache keeps two generations of insightFiroNameCacheSize/2
 // entries and drops the older one when the current fills.
 func (f *insightFiro) sparkName(txid string) *insightSparkData {
@@ -559,7 +558,7 @@ func (f *insightFiro) sparkName(txid string) *insightSparkData {
 		data = &res
 	}
 	var rpcErr *bchain.RPCError
-	if err != nil && (!errors.As(err, &rpcErr) || rpcErr.Code == insightFiroRPCInWarmup) {
+	if err != nil && (!errors.As(err, &rpcErr) || rpcErr.Message != insightFiroNotSparkName) {
 		return nil
 	}
 	f.namesMu.Lock()
@@ -571,9 +570,10 @@ func (f *insightFiro) sparkName(txid string) *insightSparkData {
 	return data
 }
 
-// insightFiroRPCInWarmup is bitcoind's RPC_IN_WARMUP, an error that says
-// nothing about the tx.
-const insightFiroRPCInWarmup = -28
+// insightFiroNotSparkName is firod's answer (code -25) for a known tx that
+// registers no Spark name. The same code also comes with "Unknown
+// transaction." for a tx firod cannot find yet, which must not be cached.
+const insightFiroNotSparkName = "Invalid spark name tx hash"
 
 func insightFiroOpcode(script string) string {
 	if len(script) < 2 {

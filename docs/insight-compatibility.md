@@ -246,8 +246,9 @@ Transactions get stock's labels, keyed by the script's first opcode:
 
 The labels replace the parser's own address labels (for example `LelantusMint`) in Insight output
 only; the index and the V1/V2 APIs are unchanged. For a Spark spend, `getsparknametxdetails`
-(daemon answers cached 10 minutes per txid, up to 4096 entries in two generations; a transport
-failure or warm-up error is not cached) decides whether it registers a Spark name; if so
+(a name, or firod's "Invalid spark name tx hash", is cached 10 minutes per txid, up to 4096
+entries in two generations; any other error, such as "Unknown transaction." for a tx firod
+cannot find yet, a transport failure or warm-up, is not cached) decides whether it registers a Spark name; if so
 the tx gets stock's `sparkData` `{name,address,validUntil[,additionalInfo]}` and a first output
 `{n:0,value:0,type:"sparkname",addresses:["Sparkname"]}` (its `scriptPubKey` carries `hex:""`
 and `asm:""`, as stock's), and the outputs are renumbered, as stock does. So on a Spark name

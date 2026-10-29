@@ -548,10 +548,18 @@ func TestInsightFiroSparkNameCache(t *testing.T) {
 	if calls != 4 {
 		t.Errorf("warm-up error cached: %d calls", calls)
 	}
-	answer = &bchain.RPCError{Code: -8, Message: "not a spark name tx"}
+	// firod 0.14.18 answers -25 both for a tx it cannot find yet and for a
+	// known tx that registers no name; only the second is cached
+	answer = &bchain.RPCError{Code: -25, Message: "Unknown transaction."}
 	f.sparkName("t3")
 	f.sparkName("t3")
-	if calls != 5 {
+	if calls != 6 {
+		t.Errorf("unknown tx cached: %d calls", calls)
+	}
+	answer = &bchain.RPCError{Code: -25, Message: insightFiroNotSparkName}
+	f.sparkName("t4")
+	f.sparkName("t4")
+	if calls != 7 {
 		t.Errorf("daemon answer not cached: %d calls", calls)
 	}
 	// the bound keeps at most two generations
