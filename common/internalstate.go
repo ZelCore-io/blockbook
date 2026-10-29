@@ -255,6 +255,29 @@ func (is *InternalState) SetInitialSync(initialSync bool) {
 	is.InitialSync = initialSync
 }
 
+// SetHistoricalFiatRatesTime records the timestamp of the last historical fiat rates update.
+// The fiat downloader writes it while system info (and Pack) read it, so both sides lock.
+func (is *InternalState) SetHistoricalFiatRatesTime(t time.Time) {
+	is.mux.Lock()
+	defer is.mux.Unlock()
+	is.HistoricalFiatRatesTime = t
+}
+
+// SetHistoricalTokenFiatRatesTime records the timestamp of the last historical token fiat rates update.
+func (is *InternalState) SetHistoricalTokenFiatRatesTime(t time.Time) {
+	is.mux.Lock()
+	defer is.mux.Unlock()
+	is.HistoricalTokenFiatRatesTime = t
+}
+
+// GetHistoricalFiatRatesTimes returns the timestamps of the last historical fiat and token
+// fiat rates updates.
+func (is *InternalState) GetHistoricalFiatRatesTimes() (fiatRates time.Time, tokenFiatRates time.Time) {
+	is.mux.Lock()
+	defer is.mux.Unlock()
+	return is.HistoricalFiatRatesTime, is.HistoricalTokenFiatRatesTime
+}
+
 // GetSyncState gets the state of synchronization
 func (is *InternalState) GetSyncState() (bool, uint32, time.Time, time.Time) {
 	is.mux.Lock()

@@ -2919,6 +2919,7 @@ func (w *Worker) GetSystemInfo(internal bool) (*SystemInfo, error) {
 		internalDBSize = w.is.DBSizeTotal()
 	}
 	var currentFiatRatesTime time.Time
+	historicalFiatRatesTime, historicalTokenFiatRatesTime := w.is.GetHistoricalFiatRatesTimes()
 	ct := w.fiatRates.GetCurrentTicker("", "")
 	if ct != nil {
 		currentFiatRatesTime = ct.Timestamp
@@ -2942,8 +2943,8 @@ func (w *Worker) GetSystemInfo(internal bool) (*SystemInfo, error) {
 		HasFiatRates:                 w.is.HasFiatRates,
 		HasTokenFiatRates:            w.is.HasTokenFiatRates,
 		CurrentFiatRatesTime:         nonZeroTime(currentFiatRatesTime),
-		HistoricalFiatRatesTime:      nonZeroTime(w.is.HistoricalFiatRatesTime),
-		HistoricalTokenFiatRatesTime: nonZeroTime(w.is.HistoricalTokenFiatRatesTime),
+		HistoricalFiatRatesTime:      nonZeroTime(historicalFiatRatesTime),
+		HistoricalTokenFiatRatesTime: nonZeroTime(historicalTokenFiatRatesTime),
 		SupportedStakingPools:        w.chain.EthereumTypeGetSupportedStakingPools(),
 		DbSize:                       w.db.DatabaseSizeOnDisk(),
 		DbSizeFromColumns:            internalDBSize,

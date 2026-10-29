@@ -738,7 +738,7 @@ func (fr *FiatRates) runHistoricalCycle(is *common.InternalState) (done bool, ba
 			glog.Infof("FiatRatesDownloader: UpdateHistoricalTickers finished, last ticker from %v", ticker.Timestamp)
 			fr.logTickersInfo()
 			if is != nil {
-				is.HistoricalFiatRatesTime = ticker.Timestamp
+				is.SetHistoricalFiatRatesTime(ticker.Timestamp)
 			}
 		}
 	}
@@ -763,7 +763,7 @@ func (fr *FiatRates) runHistoricalCycle(is *common.InternalState) (done bool, ba
 			fr.observeUpdateDuration("historical_token_tickers", "success", historicalTokenTickersStart)
 			glog.Info("FiatRatesDownloader: UpdateHistoricalTokenTickers finished")
 			if is != nil {
-				is.HistoricalTokenFiatRatesTime = time.Now().UTC()
+				is.SetHistoricalTokenFiatRatesTime(time.Now().UTC())
 			}
 		}
 	}
