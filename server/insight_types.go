@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"strconv"
 	"strings"
 
 	"github.com/martinboehm/btcd/txscript"
@@ -79,42 +80,111 @@ type insightUtxo struct {
 	Confirmations int         `json:"confirmations"`
 	Coinbase      bool        `json:"coinbase,omitempty"`
 }
+
+// insightScript is stock's vin scriptSig.
 type insightScript struct {
-	Addresses []string `json:"addresses,omitempty"`
-	Hex       string   `json:"hex,omitempty"`
-	Asm       string   `json:"asm,omitempty"`
-}
-type insightVin struct {
-	Txid      string        `json:"txid,omitempty"`
-	Vout      uint32        `json:"vout"`
-	Sequence  int64         `json:"sequence"`
-	N         int           `json:"n"`
-	Addr      *string       `json:"addr"`
-	Value     json.Number   `json:"value"`
-	ValueSat  int64         `json:"valueSat"`
-	Coinbase  string        `json:"coinbase,omitempty"`
-	ScriptSig insightScript `json:"scriptSig"`
-}
-type insightVout struct {
-	Value        json.Number   `json:"value"`
-	N            int           `json:"n"`
-	ScriptPubKey insightScript `json:"scriptPubKey"`
-}
-type insightTx struct {
-	Txid          string        `json:"txid"`
-	Version       int32         `json:"version"`
-	Locktime      uint32        `json:"locktime"`
-	Time          int64         `json:"time"`
-	Blocktime     int64         `json:"blocktime"`
-	Blockheight   int           `json:"blockheight"`
-	Blockhash     string        `json:"blockhash,omitempty"`
-	Confirmations uint32        `json:"confirmations"`
-	Fees          json.Number   `json:"fees"`
-	Vin           []insightVin  `json:"vin"`
-	Vout          []insightVout `json:"vout"`
-	Hex           string        `json:"hex,omitempty"`
+	Hex string `json:"hex,omitempty"`
+	Asm string `json:"asm,omitempty"`
 }
 
+// The transaction shape is the converter's (Blockbook v2 tx JSON plus its
+// edits) with stock Insight fields added alongside. Where both use a key with
+// different meanings, the converter's wins (vout value in coins, valueIn as
+// a satoshi string). asm always comes from script bytes, never from address
+// text (controller ruling).
+
+// insightVinScript is the converter's vin.scriptPubKey: a clone of the vin
+// without addr, scriptSig, doubleSpentTxID and asm.
+type insightVinScript struct {
+	Txid      string      `json:"txid,omitempty"`
+	Vout      uint32      `json:"vout"`
+	Sequence  int64       `json:"sequence"`
+	N         int         `json:"n"`
+	Addresses []string    `json:"addresses,omitempty"`
+	IsAddress bool        `json:"isAddress"`
+	IsOwn     bool        `json:"isOwn,omitempty"`
+	Value     json.Number `json:"value"`
+	ValueSat  int64       `json:"valueSat"`
+	Hex       string      `json:"hex,omitempty"`
+	Coinbase  string      `json:"coinbase,omitempty"`
+}
+type insightVin struct {
+	insightVinScript
+	Addr            *string          `json:"addr"`
+	ScriptSig       insightScript    `json:"scriptSig"`
+	DoubleSpentTxID *string          `json:"doubleSpentTxID"`
+	ScriptPubKey    insightVinScript `json:"scriptPubKey"`
+}
+
+// insightVoutScript is the converter's vout.scriptPubKey (a clone of the
+// vout) with asm disassembled from the script hex.
+type insightVoutScript struct {
+	Value     json.Number `json:"value"`
+	N         int         `json:"n"`
+	Spent     bool        `json:"spent,omitempty"`
+	Hex       string      `json:"hex,omitempty"`
+	Addresses []string    `json:"addresses"`
+	IsAddress bool        `json:"isAddress"`
+	IsOwn     bool        `json:"isOwn,omitempty"`
+	Type      string      `json:"type,omitempty"`
+	Asm       string      `json:"asm,omitempty"`
+}
+type insightVout struct {
+	Value        json.Number       `json:"value"`
+	N            int               `json:"n"`
+	Spent        bool              `json:"spent,omitempty"`
+	SpentTxID    string            `json:"spentTxId,omitempty"`
+	SpentIndex   int               `json:"spentIndex,omitempty"`
+	SpentHeight  int               `json:"spentHeight,omitempty"`
+	Hex          string            `json:"hex,omitempty"`
+	Addresses    []string          `json:"addresses"`
+	IsAddress    bool              `json:"isAddress"`
+	IsOwn        bool              `json:"isOwn,omitempty"`
+	Type         string            `json:"type,omitempty"`
+	ScriptPubKey insightVoutScript `json:"scriptPubKey"`
+}
+type insightTx struct {
+	Txid                   string                `json:"txid"`
+	Version                int32                 `json:"version"`
+	Locktime               uint32                `json:"locktime"`
+	LockTime               uint32                `json:"lockTime,omitempty"`
+	Blockhash              string                `json:"blockhash,omitempty"`
+	BlockHash              string                `json:"blockHash,omitempty"`
+	Blockheight            int                   `json:"blockheight"`
+	BlockHeight            int                   `json:"blockHeight"`
+	Blocktime              int64                 `json:"blocktime"`
+	BlockTime              int64                 `json:"blockTime"`
+	Time                   int64                 `json:"time"`
+	Confirmations          uint32                `json:"confirmations"`
+	ConfirmationETABlocks  uint32                `json:"confirmationETABlocks,omitempty"`
+	ConfirmationETASeconds int64                 `json:"confirmationETASeconds,omitempty"`
+	Size                   int                   `json:"size,omitempty"`
+	VSize                  int                   `json:"vsize,omitempty"`
+	Value                  string                `json:"value"`
+	ValueIn                string                `json:"valueIn,omitempty"`
+	ValueOut               json.Number           `json:"valueOut"`
+	Fees                   json.Number           `json:"fees"`
+	IsCoinBase             bool                  `json:"isCoinBase,omitempty"`
+	Rbf                    bool                  `json:"rbf,omitempty"`
+	Hex                    string                `json:"hex,omitempty"`
+	CoinSpecificData       json.RawMessage       `json:"coinSpecificData,omitempty"`
+	ChainExtraData         *api.TxChainExtraData `json:"chainExtraData,omitempty"`
+	Vin                    []insightVin          `json:"vin"`
+	Vout                   []insightVout         `json:"vout"`
+}
+
+// insightSatString renders an amount as a decimal satoshi string after the
+// same safe-integer check as insightMoney.
+func insightSatString(a *api.Amount) (string, error) {
+	_, sat, err := insightMoney(a)
+	if err != nil {
+		return "", err
+	}
+	return strconv.FormatInt(sat, 10), nil
+}
+
+// insightTransaction is the one transaction transform shared by history,
+// tx/:txid, txs?block= and multi-address history.
 func insightTransaction(tx *api.Tx) (*insightTx, error) {
 	if tx == nil {
 		return nil, errors.New("missing transaction")
@@ -123,7 +193,25 @@ func insightTransaction(tx *api.Tx) (*insightTx, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := &insightTx{Txid: tx.Txid, Version: tx.Version, Locktime: tx.Locktime, Time: tx.Blocktime, Blocktime: tx.Blocktime, Blockheight: tx.Blockheight, Blockhash: tx.Blockhash, Confirmations: tx.Confirmations, Fees: fees, Hex: tx.Hex, Vin: make([]insightVin, 0, len(tx.Vin)), Vout: make([]insightVout, 0, len(tx.Vout))}
+	valueOut, valueOutSat, err := insightMoney(tx.ValueOutSat)
+	if err != nil {
+		return nil, err
+	}
+	out := &insightTx{
+		Txid: tx.Txid, Version: tx.Version, Locktime: tx.Locktime, LockTime: tx.Locktime,
+		Blockhash: tx.Blockhash, BlockHash: tx.Blockhash, Blockheight: tx.Blockheight, BlockHeight: tx.Blockheight,
+		Blocktime: tx.Blocktime, BlockTime: tx.Blocktime, Time: tx.Blocktime, Confirmations: tx.Confirmations,
+		ConfirmationETABlocks: tx.ConfirmationETABlocks, ConfirmationETASeconds: tx.ConfirmationETASeconds,
+		Size: tx.Size, VSize: tx.VSize, Value: strconv.FormatInt(valueOutSat, 10), ValueOut: valueOut, Fees: fees,
+		Rbf: tx.Rbf, Hex: tx.Hex, CoinSpecificData: tx.CoinSpecificData, ChainExtraData: tx.ChainExtraData,
+		Vin: make([]insightVin, 0, len(tx.Vin)), Vout: make([]insightVout, 0, len(tx.Vout)),
+	}
+	if tx.ValueInSat != nil {
+		if out.ValueIn, err = insightSatString(tx.ValueInSat); err != nil {
+			return nil, err
+		}
+	}
+	out.IsCoinBase = len(tx.Vin) > 0 && tx.Vin[0].Coinbase != ""
 	for _, v := range tx.Vin {
 		value, sat, err := insightMoney(v.ValueSat)
 		if err != nil {
@@ -134,25 +222,27 @@ func insightTransaction(tx *api.Tx) (*insightTx, error) {
 			a := v.Addresses[0]
 			addr = &a
 		}
-		out.Vin = append(out.Vin, insightVin{Txid: v.Txid, Vout: v.Vout, Sequence: v.Sequence, N: v.N, Addr: addr, Value: value, ValueSat: sat, Coinbase: v.Coinbase, ScriptSig: insightScript{Hex: v.Hex, Asm: v.Asm}})
+		clone := insightVinScript{Txid: v.Txid, Vout: v.Vout, Sequence: v.Sequence, N: v.N, Addresses: v.Addresses, IsAddress: v.IsAddress, IsOwn: v.IsOwn, Value: value, ValueSat: sat, Hex: v.Hex, Coinbase: v.Coinbase}
+		out.Vin = append(out.Vin, insightVin{insightVinScript: clone, Addr: addr, ScriptSig: insightScript{Hex: v.Hex, Asm: v.Asm}, ScriptPubKey: clone})
 	}
 	for _, v := range tx.Vout {
 		value, _, err := insightMoney(v.ValueSat)
 		if err != nil {
 			return nil, err
 		}
-		script := insightScript{Hex: v.Hex, Asm: v.Asm}
-		if v.IsAddress {
-			script.Addresses = v.Addresses
-		}
+		asm := v.Asm
 		if v.Hex != "" {
 			if raw, err := hex.DecodeString(v.Hex); err == nil {
-				if asm, err := txscript.DisasmString(raw); err == nil {
-					script.Asm = asm
+				if disasm, err := txscript.DisasmString(raw); err == nil {
+					asm = disasm
 				}
 			}
 		}
-		out.Vout = append(out.Vout, insightVout{Value: value, N: v.N, ScriptPubKey: script})
+		out.Vout = append(out.Vout, insightVout{
+			Value: value, N: v.N, Spent: v.Spent, SpentTxID: v.SpentTxID, SpentIndex: v.SpentIndex, SpentHeight: v.SpentHeight,
+			Hex: v.Hex, Addresses: v.Addresses, IsAddress: v.IsAddress, IsOwn: v.IsOwn, Type: v.Type,
+			ScriptPubKey: insightVoutScript{Value: value, N: v.N, Spent: v.Spent, Hex: v.Hex, Addresses: v.Addresses, IsAddress: v.IsAddress, IsOwn: v.IsOwn, Type: v.Type, Asm: asm},
+		})
 	}
 	return out, nil
 }

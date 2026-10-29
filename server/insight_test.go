@@ -48,6 +48,12 @@ type insightFake struct {
 	blockByHash map[string]*api.Block
 	rawBlock    *api.BlockRaw
 	rawErr      error
+	// spending records the spendingTxs flag of each GetTransaction call;
+	// txErr fails single txids. clampPages makes GetBlock clamp a page
+	// beyond the end to the last page, as the worker does.
+	spending   []bool
+	txErr      map[string]error
+	clampPages bool
 }
 
 func (f *insightFake) GetSystemInfo(bool) (*api.SystemInfo, error) {
@@ -71,8 +77,15 @@ func (f *insightFake) GetAddressUtxo(_ string, confirmed bool) (api.Utxos, error
 	}
 	return f.utxos, f.err
 }
-func (f *insightFake) GetTransaction(id string, _ bool, _ bool) (*api.Tx, error) {
+func (f *insightFake) GetTransaction(id string, spending bool, _ bool) (*api.Tx, error) {
 	f.fetched = append(f.fetched, id)
+	f.spending = append(f.spending, spending)
+	if err := f.txErr[id]; err != nil {
+		return nil, err
+	}
+	if f.err == nil && f.txs[id] == nil {
+		return nil, api.NewAPIError("Transaction '"+id+"' not found", true)
+	}
 	return f.txs[id], f.err
 }
 func (f *insightFake) GetBlocks(page int, size int) (*api.Blocks, error) {
@@ -100,6 +113,9 @@ func (f *insightFake) GetBlock(bid string, page int, size int) (*api.Block, erro
 		return nil, api.NewAPIError("Block not found", true)
 	}
 	out := *b
+	if f.clampPages && size > 0 && b.TxCount > 0 && (page-1)*size >= b.TxCount {
+		page = (b.TxCount + size - 1) / size
+	}
 	from, to := (page-1)*size, page*size
 	if to > len(b.Transactions) {
 		to = len(b.Transactions)
@@ -147,7 +163,7 @@ func TestInsightContracts(t *testing.T) {
 		{"status", "/api/status", []string{`"blocks":10`, `"version":123`, `"protocolversion":456`, `"errors":""`}},
 		{"utxo", "/api/addr/A/utxo", []string{`"amount":0.00000001`, `"satoshis":1`, `"coinbase":true`}},
 		{"summary", "/api/addr/A", []string{`"balanceSat":"1"`, `"unconfirmedBalance":-0.00000001`, `"totalReceived":0`, `"totalSentSat":0`, `"txApperances":3`}},
-		{"history", "/api/addrs/A/txs?from=1&to=3", []string{`"totalItems":4`, `"from":1`, `"to":3`, `"txid":"a"`, `"txid":"b"`, `"asm":"OP_RETURN 6869"`, `"value":0.00000001`, `"coinbase":"abc"`}},
+		{"history", "/api/addrs/A/txs?from=1&to=3", []string{`"totalItems":4`, `"from":1`, `"to":3`, `"txid":"a"`, `"txid":"b"`, `"asm":"OP_RETURN 6869"`, `"value":0.00000001`, `"coinbase":"abc"`, `"isCoinBase":true`, `"blockHeight":0`, `"blockheight":0`, `"blockTime":0`, `"valueOut":0`, `"fees":0.00000001`, `"addresses":["OP_RETURN (hi)"]`}},
 		{"query summary", "/api/addr?address=A", []string{`"addrStr":"A"`}},
 		{"noTxList", "/api/addr/A/true", []string{`"addrStr":"A"`}},
 		{"query utxo", "/api/addr/utxo?address=A", []string{`"satoshis":1`}},
@@ -338,13 +354,18 @@ func TestInsightTransactionWalletFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"time":123`, `"blockheight":20`, `"blockhash":"block"`, `"confirmations":2`, `"hex":"abcd"`, `"fees":0.00000001`, `"addr":"A"`, `"valueSat":1`, `"coinbase":"coinbase"`, `"n":2`, `"addresses":["B"]`, `"asm":"1"`} {
+	for _, field := range []string{`"time":123`, `"blockheight":20`, `"blockhash":"block"`, `"confirmations":2`, `"hex":"abcd"`, `"fees":0.00000001`, `"addr":"A"`, `"valueSat":1`, `"coinbase":"coinbase"`, `"n":2`, `"addresses":["B"]`, `"asm":"1"`, `"blockHeight":20`, `"blockHash":"block"`, `"blockTime":123`, `"blocktime":123`, `"value":"0"`, `"valueOut":0`} {
 		if !strings.Contains(string(data), field) {
 			t.Fatalf("missing %s in %s", field, data)
 		}
 	}
-	if out.Vin[1].Addr != nil || out.Vout[1].ScriptPubKey.Asm != "" || len(out.Vout[1].ScriptPubKey.Addresses) != 0 {
+	// The converter puts the vout addresses (including OP_RETURN text) into
+	// scriptPubKey.addresses; asm still comes only from script bytes.
+	if out.Vin[1].Addr != nil || out.Vout[1].ScriptPubKey.Asm != "" || !reflect.DeepEqual(out.Vout[1].ScriptPubKey.Addresses, []string{"OP_RETURN (fake)"}) {
 		t.Fatal("fabricated script or input address")
+	}
+	if strings.Contains(string(data), `"isCoinBase"`) || strings.Contains(string(data), `"valueIn"`) {
+		t.Fatalf("isCoinBase/valueIn: %s", data)
 	}
 	tx.Vin[0].ValueSat = insightAmount(9007199254740992)
 	if _, err = insightTransaction(tx); err == nil {

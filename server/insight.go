@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -258,28 +257,13 @@ func (s *InsightServer) handle(route insightRoute) (interface{}, int, error) {
 	case "history":
 		return s.history(route, address)
 	case "send":
-		var input struct {
-			Rawtx string `json:"rawtx"`
-		}
-		if err := json.Unmarshal(route.body, &input); err != nil {
-			return nil, 400, err
-		}
-		if input.Rawtx == "" {
-			return nil, 400, errors.New("empty rawtx")
-		}
-		if _, err := hex.DecodeString(input.Rawtx); err != nil {
-			return nil, 400, err
-		}
-		if s.broadcast == nil {
-			return nil, 503, errors.New("broadcast unavailable")
-		}
-		txid, err := s.broadcast(input.Rawtx)
-		if err != nil {
-			return nil, 500, err
-		}
-		return struct {
-			Txid string `json:"txid"`
-		}{txid}, 0, nil
+		return s.send(route)
+	case "tx":
+		return s.tx(route)
+	case "rawtx":
+		return s.rawTx(route)
+	case "txs":
+		return s.txs(route)
 	}
 	return nil, http.StatusNotImplemented, errors.New("route not implemented")
 }
