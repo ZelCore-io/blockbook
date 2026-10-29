@@ -112,10 +112,9 @@ func init() {
 		LockTime:  0,
 		Vin: []bchain.Vin{
 			{
-				Coinbase: rawSpendHex,
-				Txid:     "0000000000000000000000000000000000000000000000000000000000000000",
-				Vout:     4294967295,
-				Sequence: 2,
+				// a Zerocoin spend: the scriptSig is kept, it is not coinbase data
+				ScriptSig: bchain.ScriptSig{Hex: rawSpendHex},
+				Sequence:  2,
 			},
 		},
 		Vout: []bchain.Vout{

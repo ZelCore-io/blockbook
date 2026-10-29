@@ -2,6 +2,7 @@ package firo
 
 import (
 	"bytes"
+	"errors"
 	"io"
 
 	"github.com/martinboehm/btcd/chaincfg/chainhash"
@@ -53,6 +54,13 @@ func (msg *FiroMsgTx) FiroDecode(r io.Reader, pver uint32, enc wire.MessageEncod
 			return err
 		}
 
+		// the payload cannot be longer than what is left of the input
+		if extraSize > wire.MaxBlockPayload {
+			return errors.New("firo: extra payload too large")
+		}
+		if lr, ok := r.(interface{ Len() int }); ok && extraSize > uint64(lr.Len()) {
+			return io.ErrUnexpectedEOF
+		}
 		msg.Extra = make([]byte, extraSize)
 		_, err = io.ReadFull(r, msg.Extra[:])
 		if err != nil {

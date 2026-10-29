@@ -360,6 +360,24 @@ type EVMTip struct {
 	Height     uint32
 }
 
+// PrivateSpendParser is optionally implemented by a BlockChainParser of a coin
+// whose transactions can spend private value that is not in the transparent
+// UTXO set (Firo's Zerocoin, Sigma, Lelantus and Spark spends). Such a spend
+// has an input without a previous output, which the index stores the same way
+// as a coinbase input (no address, zero value), and its fee cannot be computed
+// as inputs minus outputs. Parsers of other coins do not implement it and their
+// behavior does not change.
+type PrivateSpendParser interface {
+	// IsCoinbaseTx reports whether tx is a coinbase transaction and not a
+	// private spend that looks like one in the index
+	IsCoinbaseTx(tx *Tx) bool
+	// PrivateSpendFee returns the fee of a private spend. readable is false
+	// when tx is not a private spend with a fee the parser can read. fee is
+	// nil when it is readable but the data it is read from (tx.Hex, or the
+	// backend's verbose JSON in tx.CoinSpecificData) is not in tx.
+	PrivateSpendFee(tx *Tx) (fee *big.Int, readable bool)
+}
+
 // BlockChainParser defines common interface to parsing and conversions of block chain data
 type BlockChainParser interface {
 	// type of the blockchain

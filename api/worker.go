@@ -99,6 +99,68 @@ func (w *Worker) getAddressesFromVout(vout *bchain.Vout) (bchain.AddressDescript
 	return addrDesc, a, s, err
 }
 
+// isCoinbaseTx is called for a transaction whose only input in the index has
+// no address and no value. For most coins that is a coinbase. A parser
+// implementing bchain.PrivateSpendParser (Firo, whose private spends look the
+// same in the index) decides from the transaction itself. If the transaction
+// cannot be loaded, it stays a coinbase, as before.
+func (w *Worker) isCoinbaseTx(txid string) bool {
+	pp, ok := w.chainParser.(bchain.PrivateSpendParser)
+	if !ok {
+		return true
+	}
+	tx, _, err := w.txCache.GetTransaction(txid)
+	if err != nil {
+		glog.Warning("isCoinbaseTx: GetTransaction ", txid, ": ", err)
+		return true
+	}
+	return pp.IsCoinbaseTx(tx)
+}
+
+// privateSpendFee returns the fee of a private spend (see
+// bchain.PrivateSpendParser), or nil if tx is not one or its fee is not known.
+// A transaction loaded from the index cache holds neither the raw hex nor the
+// backend JSON, so the JSON is then requested from the backend.
+func (w *Worker) privateSpendFee(tx *bchain.Tx) *big.Int {
+	pp, ok := w.chainParser.(bchain.PrivateSpendParser)
+	if !ok {
+		return nil
+	}
+	fee, readable := pp.PrivateSpendFee(tx)
+	if fee != nil || !readable {
+		return fee
+	}
+	if _, isJSON := tx.CoinSpecificData.(json.RawMessage); isJSON {
+		return nil
+	}
+	txJSON, err := w.chain.GetTransactionSpecific(tx)
+	if err != nil {
+		glog.Warning("privateSpendFee: GetTransactionSpecific ", tx.Txid, ": ", err)
+		return nil
+	}
+	withJSON := *tx
+	withJSON.CoinSpecificData = txJSON
+	fee, _ = pp.PrivateSpendFee(&withJSON)
+	return fee
+}
+
+// mempoolTxAsTx returns the fields of a mempool transaction a
+// bchain.PrivateSpendParser reads
+func mempoolTxAsTx(mtx *bchain.MempoolTx) *bchain.Tx {
+	vin := make([]bchain.Vin, len(mtx.Vin))
+	for i := range mtx.Vin {
+		vin[i] = mtx.Vin[i].Vin
+	}
+	return &bchain.Tx{
+		Hex:              mtx.Hex,
+		Txid:             mtx.Txid,
+		Version:          mtx.Version,
+		Vin:              vin,
+		Vout:             mtx.Vout,
+		CoinSpecificData: mtx.CoinSpecificData,
+	}
+}
+
 // setSpendingTxToVout is helper function, that finds transaction that spent given output and sets it to the output
 // there is no direct index for the operation, it must be found using addresses -> txaddresses -> tx
 func (w *Worker) setSpendingTxToVout(vout *Vout, txid string, height uint32) error {
@@ -497,6 +559,9 @@ func (w *Worker) GetTransactionFromBchainTx(bchainTx *bchain.Tx, height int, spe
 			feesSat.SetUint64(0)
 		}
 		pValInSat = &valInSat
+		if fee := w.privateSpendFee(bchainTx); fee != nil {
+			feesSat.Set(fee)
+		}
 	} else if w.chainType == bchain.ChainEthereumType {
 		tokenTransfers, err := w.chainParser.EthereumTypeGetTokenTransfersFromTx(bchainTx)
 		if err != nil {
@@ -664,6 +729,11 @@ func (w *Worker) GetTransactionFromMempoolTx(mempoolTx *bchain.MempoolTx) (*Tx, 
 			feesSat.SetUint64(0)
 		}
 		pValInSat = &valInSat
+		if _, ok := w.chainParser.(bchain.PrivateSpendParser); ok {
+			if fee := w.privateSpendFee(mempoolTxAsTx(mempoolTx)); fee != nil {
+				feesSat.Set(fee)
+			}
+		}
 	} else if w.chainType == bchain.ChainEthereumType {
 		if len(mempoolTx.Vout) > 0 {
 			valOutSat = mempoolTx.Vout[0].ValueSat
@@ -2326,7 +2396,7 @@ func (w *Worker) getAddrDescUtxo(addrDesc bchain.AddressDescriptor, ba *db.AddrB
 							return nil, err
 						}
 						if len(ta.Inputs) == 1 && len(ta.Inputs[0].AddrDesc) == 0 && IsZeroBigInt(&ta.Inputs[0].ValueSat) {
-							coinbase = true
+							coinbase = w.isCoinbaseTx(txid)
 						}
 					}
 					_, e = inMempool[txid+":"+strconv.Itoa(int(utxo.Vout))]
