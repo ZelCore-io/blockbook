@@ -214,10 +214,15 @@ controller makes through bitcore-node-zcoin:
 The masternode filter is stock's: `filter` from the body (JSON or form), else the path, else the
 query. A comma-separated list matches each item; an item with `-` is an exact
 `txhash-outidx`, anything else a substring of the entry's JSON; results keep list order per
-item with duplicates dropped. On the recorded mainnet list (7287 nodes) the unfiltered array is
+item with duplicates dropped. A filter is capped at 4 KiB and 100 distinct items (repeated
+items count once); a larger one, in any of the three forms, is a 400 JSON error. Each entry's
+JSON is built once per cached list, and the scan stops when the client goes away. On the recorded mainnet list (7287 nodes) the unfiltered array is
 byte-identical to stock's apart from `id`, which is the listener's own counter (stock's is a
-random JSON-RPC id). Caches are per value; an expired value is reloaded by one request while
-concurrent ones wait for it, and a failed load is not cached. A firod error is a generic
+random JSON-RPC id). Caches are per value and single-flight: an expired value is reloaded by
+one firod call whose result or error every concurrent request shares, and a request whose client
+goes away stops waiting (the load still fills the cache). When a reload fails the last good value
+is served (stale-on-error); with no good value the error is cached for 5 s, so a hung firod is not
+called again by every queued request. A firod error is a generic
 `{"status":"error","error":"Backend request failed"}` 500 (stock answered with the raw error or
 crashed the request); the routes need the daemon RPC and are 501 without it.
 
@@ -241,10 +246,14 @@ Transactions get stock's labels, keyed by the script's first opcode:
 
 The labels replace the parser's own address labels (for example `LelantusMint`) in Insight output
 only; the index and the V1/V2 APIs are unchanged. For a Spark spend, `getsparknametxdetails`
-(cached 10 minutes per txid, up to 4096 entries) decides whether it registers a Spark name; if so
+(daemon answers cached 10 minutes per txid, up to 4096 entries in two generations; a transport
+failure or warm-up error is not cached) decides whether it registers a Spark name; if so
 the tx gets stock's `sparkData` `{name,address,validUntil[,additionalInfo]}` and a first output
-`{n:0,value:0,type:"sparkname",addresses:["Sparkname"]}`, and the outputs are renumbered, as
-stock does. Stock makes that call for every transaction; here only Spark spends trigger it.
+`{n:0,value:0,type:"sparkname",addresses:["Sparkname"]}` (its `scriptPubKey` carries `hex:""`
+and `asm:""`, as stock's), and the outputs are renumbered, as stock does. So on a Spark name
+registration tx the tx-detail `vout` numbering is shifted by one from the chain's, exactly as on
+stock: a consumer must take outpoints (txid and vout index) from the `utxo` route, not from the
+tx detail. Stock makes that call for every transaction; here only Spark spends trigger it.
 
 ## Readiness and shutdown
 
