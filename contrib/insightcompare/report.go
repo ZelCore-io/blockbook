@@ -108,6 +108,7 @@ func (rep *Report) Summary() string {
 	fmt.Fprintf(&b, "**%s**: %d paths, %d identical, %d with missing/changed (%d missing, %d changed), %d extra, %d expected\n\n",
 		verdict, t.Paths, t.Identical, t.Failing, t.Missing, t.Changed, t.Extra, t.Expected)
 
+	b.WriteString("Every finding, expected and extra ones included, is in the JSON report; this summary lists only failures.\n\n")
 	if len(rep.ExpectedBy) > 0 {
 		b.WriteString("## Expected differences\n\n")
 		for _, r := range rep.Rules {

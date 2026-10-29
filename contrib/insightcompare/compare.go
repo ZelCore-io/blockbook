@@ -51,7 +51,7 @@ var expectedRules = map[string]Rule{
 	"E6":  {"E6", "Task 8 rule 6", "minedBy is not emitted"},
 	"E7":  {"E7", "Task 8 rule 7", "vin vout/sequence zero omitted by Blockbook"},
 	"E8":  {"E8", "spec Call 2 (deep paging)", "from >= 1000: the converter returns the first 1000, the listener serves the real window"},
-	"E9":  {"E9", "spec Verification (ZEC)", "estimatefee -1 / messages/verify 501 are the normal ZEC answers"},
+	"E9":  {"E9", "spec Verification (ZEC); only with -zebra-new", "estimatefee -1 and messages/verify 501 are the normal answers of a Zebra-backed ZEC listener"},
 	"E10": {"E10", "Task 8 drift tolerance", "list membership differs by drift between the two requests (new block or pending tx)"},
 }
 
@@ -87,25 +87,52 @@ var (
 	reEvenHexTok = regexp.MustCompile(`^([0-9a-fA-F]{2})+$`)
 )
 
+// Options tune one comparison.
+type Options struct {
+	// Expect is the status class the case is built for: "ok" (must be 2xx on
+	// both sides), "error" (malformed input, must be 4xx) or "any"/"" (statuses
+	// must match, no class check). A 5xx from the listener always fails.
+	Expect string
+	// Ignores are extra JSON pointers to skip, added to defaultIgnores.
+	Ignores []string
+	// ZebraNew says the listener's coin is Zebra-backed (ZEC): messages/verify
+	// answers 501 and estimatefee answers -1, both expected (E9).
+	ZebraNew bool
+}
+
+// defaultIgnores are node-local fields that differ between two daemons. They
+// are always on; -ignore adds to them.
+var defaultIgnores = []string{"/info/connections", "/info/timeoffset", "/info/proxy"}
+
+// pendingTimeKeys are first-seen times, skipped on a tx object that is pending
+// (confirmations == 0) on either side. Confirmed txs compare them.
+var pendingTimeKeys = map[string]bool{"time": true, "blocktime": true, "blockTime": true, "firstSeen": true, "firstSeenTs": true, "receivedTime": true}
+
 type comparer struct {
-	mode    string
-	path    string
-	route   string
-	query   url.Values
-	out     []Finding
-	ignores []string
+	mode     string
+	path     string
+	route    string
+	query    url.Values
+	out      []Finding
+	opts     Options
+	refTotal *big.Rat // ref totalItems, for window-beyond-end decisions
 }
 
 // Compare walks ref and got (decoded JSON, numbers as json.Number or float64)
 // and returns the differences for the request path. mode is "converter" or
 // "stock".
 func Compare(ref, got interface{}, mode string, path string) []Finding {
-	return compareWith(ref, got, mode, path, nil)
+	return compareWith(ref, got, mode, path, Options{})
 }
 
-func compareWith(ref, got interface{}, mode, path string, ignores []string) []Finding {
+func compareWith(ref, got interface{}, mode, path string, opts Options) []Finding {
 	route, q := splitPath(path)
-	c := &comparer{mode: mode, path: path, route: route, query: q, ignores: ignores}
+	c := &comparer{mode: mode, path: path, route: route, query: q, opts: opts}
+	if m, ok := ref.(map[string]interface{}); ok {
+		if n, ok := toRat(m["totalItems"]); ok {
+			c.refTotal = n
+		}
+	}
 	c.walk("", ref, got, nil)
 	return c.out
 }
@@ -158,7 +185,7 @@ func lastKey(ptr string) string {
 }
 
 func (c *comparer) isIgnoredPtr(ptr string) bool {
-	for _, ig := range c.ignores {
+	for _, ig := range append(append([]string{}, defaultIgnores...), c.opts.Ignores...) {
 		if ig == ptr || (strings.HasSuffix(ig, "*") && strings.HasPrefix(ptr, strings.TrimSuffix(ig, "*"))) {
 			return true
 		}
@@ -173,23 +200,27 @@ func (c *comparer) isHistory() bool {
 	return strings.HasPrefix(c.route, "addrs/") && (strings.HasSuffix(c.route, "/txs") || strings.Contains(c.route, "/txs/")) || c.route == "addrs/txs"
 }
 
-// deepPaging reports a from offset at or beyond 1000 (spec Call 2).
-func (c *comparer) deepPaging() bool {
+// fromOffset is the history from offset of the request (query or path form).
+func (c *comparer) fromOffset() int {
 	if v := c.query.Get("from"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1000 {
-			return true
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
 		}
 	}
 	parts := strings.Split(c.route, "/")
 	for i, p := range parts {
 		if p == "txs" && i+1 < len(parts) {
-			if n, err := strconv.Atoi(parts[i+1]); err == nil && n >= 1000 {
-				return true
+			if n, err := strconv.Atoi(parts[i+1]); err == nil && n > 0 {
+				return n
 			}
 		}
 	}
-	return false
+	return 0
 }
+
+// deepPaging reports a from offset at or beyond 1000, the converter's cap
+// (spec Call 2).
+func (c *comparer) deepPaging() bool { return c.fromOffset() >= 1000 }
 
 func (c *comparer) walk(ptr string, r, g interface{}, rparent map[string]interface{}) {
 	if c.isIgnoredPtr(ptr) {
@@ -241,9 +272,15 @@ func sortedKeys(m map[string]interface{}) []string {
 	return keys
 }
 
+func isZeroNum(v interface{}) bool {
+	n, ok := toRat(v)
+	return ok && n.Sign() == 0
+}
+
 func (c *comparer) walkMap(ptr string, r, g map[string]interface{}) {
+	pending := isZeroNum(r["confirmations"]) || isZeroNum(g["confirmations"])
 	for _, k := range sortedKeys(r) {
-		if ignoredKeys[k] {
+		if ignoredKeys[k] || (pending && pendingTimeKeys[k]) {
 			continue
 		}
 		cp := ptr + "/" + esc(k)
@@ -262,7 +299,7 @@ func (c *comparer) walkMap(ptr string, r, g map[string]interface{}) {
 		c.walk(cp, r[k], gv, r)
 	}
 	for _, k := range sortedKeys(g) {
-		if ignoredKeys[k] {
+		if ignoredKeys[k] || (pending && pendingTimeKeys[k]) {
 			continue
 		}
 		if _, ok := r[k]; !ok {
@@ -394,12 +431,29 @@ func (c *comparer) historyArray(ptr string, r, g []interface{}) {
 	if c.deepPaging() {
 		rule = "E8"
 	}
-	if len(common) == 0 && len(rk.order) > 0 && len(gk.order) > 0 && !c.deepPaging() {
-		c.add(KindChanged, ptr, fmt.Sprintf("%d items", len(rk.order)), fmt.Sprintf("%d items", len(gk.order)), "no txid in common between the two pages")
+	refN, gotN, from := len(rk.order), len(gk.order), c.fromOffset()
+	if refN > 0 && gotN == 0 {
+		// An empty listener page is fine only when the window starts at or past the end.
+		if c.refTotal != nil && c.refTotal.Cmp(big.NewRat(int64(from), 1)) <= 0 {
+			c.add(KindExpected, ptr, fmt.Sprintf("%d items", refN), "0 items", rule+": window starts at or beyond ref totalItems; "+expectedRules[rule].Text)
+		} else {
+			c.add(KindChanged, ptr, fmt.Sprintf("%d items", refN), "0 items", "listener returned an empty page while the reference has items for this window")
+		}
 		return
 	}
+	// The converter's page starts at 0, the listener's at from. The txids the
+	// two pages share by construction, less a small drift budget, must be there.
+	exp := min(refN, from+gotN) - from
+	if exp > 0 {
+		slack := min(2, exp-1)
+		if len(common) < exp-slack {
+			c.add(KindChanged, ptr, fmt.Sprintf("%d items", refN), fmt.Sprintf("%d items", gotN),
+				fmt.Sprintf("only %d txids in common, at least %d expected", len(common), exp-slack))
+			return
+		}
+	}
 	if rOnly > 0 || gOnly > 0 {
-		c.add(KindExpected, ptr, fmt.Sprintf("%d items", len(rk.order)), fmt.Sprintf("%d items", len(gk.order)),
+		c.add(KindExpected, ptr, fmt.Sprintf("%d items", refN), fmt.Sprintf("%d items", gotN),
 			fmt.Sprintf("%s: %s (common %d, ref-only %d, got-only %d)", rule, expectedRules[rule].Text, len(common), rOnly, gOnly))
 	}
 	// Relative order of the common txids must agree, except between txs of the
@@ -449,6 +503,10 @@ func (c *comparer) blocksArray(ptr string, r, g []interface{}) {
 			c.walk(ptr+"/"+id, rk.byKey[id], gm, nil)
 		}
 	}
+	if len(rk.order) > 0 && len(gk.order) == 0 {
+		c.add(KindChanged, ptr, fmt.Sprintf("%d blocks", len(rk.order)), "0 blocks", "listener returned no blocks")
+		return
+	}
 	if common == 0 && len(rk.order) > 0 && len(gk.order) > 0 {
 		rh, ok1 := toRat(rk.byKey[rk.order[0]]["height"])
 		gh, ok2 := toRat(gk.byKey[gk.order[0]]["height"])
@@ -462,6 +520,10 @@ func (c *comparer) blocksArray(ptr string, r, g []interface{}) {
 		} else {
 			c.add(KindChanged, ptr, fmt.Sprintf("%d blocks", len(rk.order)), fmt.Sprintf("%d blocks", len(gk.order)), "no block hash in common")
 		}
+		return
+	}
+	if need := min(len(rk.order), len(gk.order)) - 2; common < need {
+		c.add(KindChanged, ptr, fmt.Sprintf("%d blocks", len(rk.order)), fmt.Sprintf("%d blocks", len(gk.order)), fmt.Sprintf("only %d block hashes in common", common))
 		return
 	}
 	if len(rk.order) != common || len(gk.order) != common {
@@ -518,6 +580,10 @@ func (c *comparer) txidList(ptr string, r, g []interface{}) {
 		}
 	}
 	switch {
+	case len(r) > 0 && len(g) == 0:
+		c.add(KindChanged, ptr, fmt.Sprintf("%d txids", len(r)), "0 txids", "listener returned an empty transactions list")
+	case len(r) > 0 && len(rOnly) == len(r):
+		c.add(KindChanged, ptr, fmt.Sprintf("%d txids", len(r)), fmt.Sprintf("%d txids", len(g)), "no txid in common")
 	case len(rOnly) > 2:
 		c.add(KindChanged, ptr, fmt.Sprintf("%d txids not on listener", len(rOnly)), fmt.Sprintf("%d txids", len(g)), "transactions list differs, first missing "+rOnly[0])
 	case len(rOnly) > 0 || len(gOnly) > 0:
@@ -532,13 +598,13 @@ func (c *comparer) scalar(ptr string, r, g interface{}, rparent map[string]inter
 	}
 	if key == "asm" {
 		if rs, ok := r.(string); ok {
-			if gs, ok := g.(string); ok && rs != gs && isAddressText(rs, rparent) {
+			if gs, ok := g.(string); ok && rs != gs && isAddressText(rs, rparent) && isDisassembly(gs) {
 				c.add(KindExpected, ptr, r, g, "E1")
 				return
 			}
 		}
 	}
-	if strings.HasPrefix(c.route, "utils/estimatefee") {
+	if c.opts.ZebraNew && strings.HasPrefix(c.route, "utils/estimatefee") {
 		if rat, ok := toRat(g); ok && rat.Cmp(big.NewRat(-1, 1)) == 0 {
 			if rr, ok := toRat(r); !ok || rr.Cmp(rat) != 0 {
 				c.add(KindExpected, ptr, r, g, "E9")
@@ -594,6 +660,15 @@ func isAddressText(s string, parent map[string]interface{}) bool {
 		}
 	}
 	return s != "" && !strings.HasPrefix(s, "OP_") && reAddrToken.MatchString(s) && !reEvenHexTok.MatchString(s)
+}
+
+var reSmallInt = regexp.MustCompile(`^-?\d+$`)
+
+// isDisassembly reports whether an asm value starts like a script disassembly:
+// empty, an opcode, a hex push or a small number.
+func isDisassembly(s string) bool {
+	first, _, _ := strings.Cut(strings.TrimSpace(s), " ")
+	return first == "" || strings.HasPrefix(first, "OP_") || reEvenHexTok.MatchString(first) || reSmallInt.MatchString(first)
 }
 
 func toRat(v interface{}) (*big.Rat, bool) {
@@ -685,11 +760,12 @@ func DecodeJSON(body []byte) (interface{}, bool) {
 }
 
 // CompareResponse applies the status, error-body and JSON rules for one path.
-func CompareResponse(ref, got *Response, mode, path string, ignores []string) []Finding {
+func CompareResponse(ref, got *Response, mode, path string, opts Options) []Finding {
 	var out []Finding
 	mk := func(kind, ptr, r, g, note string) {
 		out = append(out, Finding{Path: path, Pointer: ptr, Kind: kind, Ref: r, Got: g, Note: note})
 	}
+	route, _ := splitPath(path)
 	if ref.Err != "" || got.Err != "" {
 		if ref.Err != "" {
 			mk(KindChanged, "transport", ref.Err, statusText(got), "reference request failed")
@@ -701,13 +777,25 @@ func CompareResponse(ref, got *Response, mode, path string, ignores []string) []
 	}
 	if ref.Status != got.Status {
 		switch {
-		case got.Status == 501:
+		case got.Status == 501 && opts.ZebraNew && route == "messages/verify":
 			mk(KindExpected, "http status", statusText(ref), statusText(got), "E9: "+expectedRules["E9"].Text)
-		case ref.Status == 404 && got.Status/100 == 2:
+		case ref.Status == 404 && got.Status/100 == 2 && opts.Expect != "error":
 			mk(KindExtra, "http status", statusText(ref), statusText(got), "route absent on the reference; check it against stock Insight")
 		default:
 			mk(KindChanged, "http status", statusText(ref), statusText(got), "")
 		}
+		return out
+	}
+	// Same status on both sides: check it against what the case is built for.
+	switch {
+	case got.Status/100 == 5 && !(got.Status == 501 && opts.ZebraNew && route == "messages/verify"):
+		mk(KindChanged, "http status", statusText(ref), statusText(got), "server error on both sides")
+		return out
+	case opts.Expect == "ok" && got.Status/100 != 2 && !(got.Status == 501 && opts.ZebraNew && route == "messages/verify"):
+		mk(KindChanged, "http status", statusText(ref), statusText(got), "case is meant to succeed but both sides answered non-2xx")
+		return out
+	case opts.Expect == "error" && got.Status/100 == 2:
+		mk(KindChanged, "http status", statusText(ref), statusText(got), "malformed input accepted by both sides")
 		return out
 	}
 	if ref.Status >= 400 {
@@ -722,7 +810,7 @@ func CompareResponse(ref, got *Response, mode, path string, ignores []string) []
 	}
 	switch {
 	case ref.IsJSON && got.IsJSON:
-		out = append(out, compareWith(ref.JSON, got.JSON, mode, path, ignores)...)
+		out = append(out, compareWith(ref.JSON, got.JSON, mode, path, opts)...)
 	case ref.IsJSON != got.IsJSON:
 		mk(KindChanged, "body", bodyKind(ref), bodyKind(got), "one side is not JSON")
 	default:

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -24,6 +25,7 @@ type pathSpec struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
 	Body   string `json:"body,omitempty"`
+	Expect string `json:"expect"` // ok, error or any; set by `#! <class>` lines
 	Line   int    `json:"line"`
 }
 
@@ -35,15 +37,27 @@ func (p pathSpec) String() string {
 }
 
 // loadPaths reads one request per line: `GET path` or `POST path <json>`.
-// Blank lines and lines starting with # are skipped.
+// Blank lines and lines starting with # are skipped, except `#! ok|error|any`,
+// which sets the status class (default ok) for the lines that follow:
+// ok must answer 2xx, error must answer 4xx (malformed input), any only needs
+// both sides to agree. A 5xx fails in every class.
 func loadPaths(r io.Reader) ([]pathSpec, error) {
 	var out []pathSpec
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 16<<20)
 	n := 0
+	expect := "ok"
 	for sc.Scan() {
 		n++
 		line := strings.TrimSpace(sc.Text())
+		if class, ok := strings.CutPrefix(line, "#!"); ok {
+			class = strings.TrimSpace(class)
+			if class != "ok" && class != "error" && class != "any" {
+				return nil, fmt.Errorf("line %d: unknown class %q (want ok, error or any)", n, class)
+			}
+			expect = class
+			continue
+		}
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -51,7 +65,7 @@ func loadPaths(r io.Reader) ([]pathSpec, error) {
 		if len(f) < 2 {
 			return nil, fmt.Errorf("line %d: want `GET path` or `POST path <json>`", n)
 		}
-		spec := pathSpec{Method: strings.ToUpper(f[0]), Path: strings.TrimPrefix(f[1], "/"), Line: n}
+		spec := pathSpec{Method: strings.ToUpper(f[0]), Path: strings.TrimPrefix(f[1], "/"), Expect: expect, Line: n}
 		switch spec.Method {
 		case "GET":
 			if len(f) > 2 {
@@ -91,30 +105,36 @@ func expandBody(body string) (string, error) {
 	return pre + strings.Repeat("z", n-len(pre)-len(post)) + post, nil
 }
 
-// unsafeBroadcast reports why a tx/send body could be a real transaction. A
-// body is safe only when it is not JSON or form data, or its rawtx is missing,
-// not a string, odd-length or not hexadecimal.
+// unsafeBroadcast reports why a tx/send body could be a real transaction.
+// It is an allow-list: a body is safe only when it is not decodable as JSON
+// object or form data and is not bare hex, or when every key that matches
+// rawtx (any case) is missing, not a string, odd-length or not hexadecimal.
 func unsafeBroadcast(body string) string {
-	raw := ""
+	const why = "rawtx is even-length hex and could be a real transaction"
 	trim := strings.TrimSpace(body)
-	if strings.HasPrefix(trim, "{") {
-		var m map[string]interface{}
-		if json.Unmarshal([]byte(trim), &m) != nil {
-			return "" // malformed JSON cannot broadcast
-		}
-		s, _ := m["rawtx"].(string)
-		raw = s
-	} else if strings.Contains(trim, "rawtx=") {
-		for _, kv := range strings.Split(trim, "&") {
-			if v, ok := strings.CutPrefix(kv, "rawtx="); ok {
-				raw = v
+	if reEvenHexTok.MatchString(trim) {
+		return "body is bare even-length hex"
+	}
+	var cands []string
+	var m map[string]interface{}
+	if json.Unmarshal([]byte(trim), &m) == nil {
+		for k, v := range m {
+			if strings.EqualFold(k, "rawtx") {
+				s, _ := v.(string)
+				cands = append(cands, s)
 			}
 		}
-	} else {
-		return ""
+	} else if vals, err := url.ParseQuery(trim); err == nil {
+		for k, vs := range vals {
+			if strings.EqualFold(k, "rawtx") {
+				cands = append(cands, vs...)
+			}
+		}
 	}
-	if raw != "" && reEvenHexTok.MatchString(raw) {
-		return "rawtx is even-length hex and could be a real transaction"
+	for _, raw := range cands {
+		if reEvenHexTok.MatchString(strings.TrimSpace(raw)) {
+			return why
+		}
 	}
 	return ""
 }
@@ -253,16 +273,22 @@ type config struct {
 	Concurrency int
 	Ignores     []string
 	Origin      string
+	ZebraNew    bool
+	NewAlt      string
+	NoOversize  bool
 }
 
 func (cfg *config) runOne(c *client, spec pathSpec) Result {
 	body, _ := expandBody(spec.Body)
-	var ref, got, oref, onew *Response
+	var ref, got, oref, onew, alt *Response
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); ref = c.do(spec.Method, cfg.Ref, spec.Path, body, nil, true) }()
 	go func() { defer wg.Done(); got = c.do(spec.Method, cfg.New, spec.Path, body, nil, true) }()
 	wg.Wait()
+	if cfg.NewAlt != "" {
+		alt = c.do(spec.Method, cfg.NewAlt, spec.Path, body, nil, true)
+	}
 	oh := map[string]string{"Origin": cfg.Origin, "Access-Control-Request-Method": spec.Method}
 	wg.Add(2)
 	go func() { defer wg.Done(); oref = c.do("OPTIONS", cfg.Ref, spec.Path, "", oh, true) }()
@@ -273,8 +299,23 @@ func (cfg *config) runOne(c *client, spec pathSpec) Result {
 		OptRef: oref.Status, OptNew: onew.Status,
 		CORSRef: headerOf(oref, "Access-Control-Allow-Origin"), CORSNew: headerOf(onew, "Access-Control-Allow-Origin"),
 		LinkNew: headerOf(got, "Link")}
-	res.Findings = CompareResponse(ref, got, cfg.Mode, spec.Path, cfg.Ignores)
+	opts := Options{Expect: spec.Expect, Ignores: cfg.Ignores, ZebraNew: cfg.ZebraNew}
+	res.Findings = CompareResponse(ref, got, cfg.Mode, spec.Path, opts)
 	res.Findings = append(res.Findings, corsFindings(spec.Path, oref, onew)...)
+	if ref.Err == "" && got.Err == "" && ref.Status/100 == 2 && got.Status/100 == 2 {
+		if fs := getCORS(spec.Path, ref, got); fs != nil {
+			res.Findings = append(res.Findings, fs...)
+		}
+	}
+	if alt != nil {
+		for _, f := range CompareResponse(got, alt, "converter", spec.Path, Options{Expect: spec.Expect, Ignores: cfg.Ignores}) {
+			f.Pointer = "[new-alt prefix] " + f.Pointer
+			if f.Kind == KindExtra || f.Kind == KindExpected {
+				continue
+			}
+			res.Findings = append(res.Findings, f)
+		}
+	}
 	return res
 }
 
@@ -290,6 +331,16 @@ func corsFindings(path string, oref, onew *Response) []Finding {
 		return []Finding{{Path: path, Pointer: "OPTIONS Access-Control-Allow-Origin", Kind: KindExtra, Ref: "(absent)", Got: g}}
 	case r == "" && g == "":
 		return []Finding{{Path: path, Pointer: "OPTIONS Access-Control-Allow-Origin", Kind: KindChanged, Ref: "(absent)", Got: "(absent)", Note: "no CORS header on either side"}}
+	}
+	return nil
+}
+
+// getCORS requires the allow-origin header on the actual GET/POST response, which
+// is what a browser reads, whenever the reference sets it.
+func getCORS(path string, ref, got *Response) []Finding {
+	r, g := headerOf(ref, "Access-Control-Allow-Origin"), headerOf(got, "Access-Control-Allow-Origin")
+	if r != "" && g == "" {
+		return []Finding{{Path: path, Pointer: "response Access-Control-Allow-Origin", Kind: KindMissing, Ref: r, Got: "(absent)"}}
 	}
 	return nil
 }
@@ -327,6 +378,7 @@ type LoadSide struct {
 	Requests int     `json:"requests"`
 	OK       int     `json:"ok"`
 	Non2xx   int     `json:"non2xx"`
+	BadBody  int     `json:"badBody"`
 	Errors   int     `json:"errors"`
 	P50ms    float64 `json:"p50ms"`
 	P95ms    float64 `json:"p95ms"`
@@ -361,6 +413,8 @@ func summarize(rs []*Response) LoadSide {
 		switch {
 		case r.Err != "":
 			s.Errors++
+		case r.Status/100 == 2 && !r.IsJSON:
+			s.BadBody++
 		case r.Status/100 == 2:
 			s.OK++
 		default:
@@ -421,6 +475,11 @@ func (cfg *config) runLoad(c *client, paths []string, n int, pause time.Duration
 	return out
 }
 
+// normBase makes two spellings of one base URL comparable.
+func normBase(u string) string {
+	return strings.ToLower(strings.TrimRight(strings.TrimSpace(u), "/"))
+}
+
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -440,6 +499,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		loadMax     = fs.Int("load-paths", 12, "paths used by the latency phase")
 		loadPause   = fs.Duration("load-pause", time.Second, "pause between latency waves")
 		ignore      = fs.String("ignore", "", "comma-separated JSON pointers to ignore; trailing * is a prefix, **/name matches a suffix")
+		zebraNew    = fs.Bool("zebra-new", false, "the listener's coin is Zebra-backed (ZEC): messages/verify 501 and estimatefee -1 are expected; without it they fail")
+		newAlt      = fs.String("new-alt", "", "second base URL of the same listener (the other prefix, /api vs /insight-api); every path must answer the same there")
+		noOversize  = fs.Bool("no-oversize", false, "drop @oversize POSTs (9 MiB bodies) from the run")
 		origin      = fs.String("origin", "https://insightcompare.invalid", "Origin header sent with OPTIONS")
 		seedBase    = fs.String("seed", "", "base URL used to discover sample paths (see -seed-kind)")
 		seedKind    = fs.String("seed-kind", "insight", "insight: -seed is an Insight base (block-index, block, tx); blockbook: -seed is a Blockbook root (/api/v2)")
@@ -455,6 +517,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if *mode != "converter" && *mode != "stock" {
 		fmt.Fprintln(stderr, "-mode must be converter or stock")
+		return 2
+	}
+	if normBase(*ref) != "" && normBase(*ref) == normBase(*newBase) {
+		fmt.Fprintln(stderr, "-ref and -new are the same URL: that compares a host with itself")
+		return 2
+	}
+	if *loadMax < 1 || *loadMax > 30 {
+		fmt.Fprintln(stderr, "-load-paths must be between 1 and 30")
 		return 2
 	}
 	if *load < 0 || *load > 64 {
@@ -520,7 +590,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "refusing to run:", err)
 		return 2
 	}
-	cfg := &config{Ref: *ref, New: *newBase, Mode: *mode, Concurrency: max(1, *conc), Origin: *origin}
+	cfg := &config{Ref: *ref, New: *newBase, Mode: *mode, Concurrency: max(1, *conc), Origin: *origin, ZebraNew: *zebraNew, NewAlt: *newAlt, NoOversize: *noOversize}
+	if cfg.NoOversize {
+		kept := specs[:0]
+		for _, sp := range specs {
+			if !strings.HasPrefix(sp.Body, "@oversize:") {
+				kept = append(kept, sp)
+			}
+		}
+		specs = kept
+	}
 	for _, p := range strings.Split(*ignore, ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			cfg.Ignores = append(cfg.Ignores, p)

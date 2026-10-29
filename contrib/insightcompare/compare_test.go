@@ -138,28 +138,34 @@ func TestCompareAsmExpected(t *testing.T) {
 func TestCompareStatusCode(t *testing.T) {
 	ok := &Response{Status: 200, JSON: j(t, `{"a":1}`), IsJSON: true}
 	bad := &Response{Status: 500, JSON: j(t, `{"status":"error"}`), IsJSON: true}
-	fs := CompareResponse(ok, bad, "converter", "tx/a", nil)
+	fs := CompareResponse(ok, bad, "converter", "tx/a", Options{})
 	if len(fs) != 1 || fs[0].Kind != KindChanged {
 		t.Fatalf("want changed, got %+v", fs)
 	}
 	// Error bodies compare by status code and status key only.
 	a := &Response{Status: 400, JSON: j(t, `{"status":"error","error":"x"}`), IsJSON: true}
 	b := &Response{Status: 400, JSON: j(t, `{"status":"error","error":"different text"}`), IsJSON: true}
-	if fs := CompareResponse(a, b, "converter", "tx/a", nil); len(fs) != 0 {
+	if fs := CompareResponse(a, b, "converter", "tx/a", Options{}); len(fs) != 0 {
 		t.Fatalf("same status and key must match, got %+v", fs)
 	}
 	// Non-JSON against JSON.
 	html := &Response{Status: 200, Body: []byte("<html>")}
-	if fs := CompareResponse(ok, html, "converter", "tx/a", nil); failing(fs) != 1 {
+	if fs := CompareResponse(ok, html, "converter", "tx/a", Options{}); failing(fs) != 1 {
 		t.Fatalf("non-json must fail, got %+v", fs)
 	}
 	// 501 and routes absent on the converter are classified.
 	nope := &Response{Status: 501, JSON: j(t, `{"status":"error"}`), IsJSON: true}
-	if fs := CompareResponse(ok, nope, "converter", "messages/verify", nil); failing(fs) != 0 || fs[0].Kind != KindExpected {
-		t.Fatalf("501 must be expected, got %+v", fs)
+	if fs := CompareResponse(ok, nope, "converter", "messages/verify", Options{ZebraNew: true}); failing(fs) != 0 || fs[0].Kind != KindExpected {
+		t.Fatalf("501 must be expected with -zebra-new, got %+v", fs)
+	}
+	if failing(CompareResponse(ok, nope, "converter", "messages/verify", Options{})) != 1 {
+		t.Fatal("501 without -zebra-new must fail")
+	}
+	if failing(CompareResponse(ok, nope, "converter", "addr/X/balance", Options{ZebraNew: true})) != 1 {
+		t.Fatal("501 outside messages/verify must fail even with -zebra-new")
 	}
 	absent := &Response{Status: 404, Body: []byte("Cannot GET")}
-	if fs := CompareResponse(absent, ok, "converter", "currency", nil); failing(fs) != 0 || fs[0].Kind != KindExtra {
+	if fs := CompareResponse(absent, ok, "converter", "currency", Options{}); failing(fs) != 0 || fs[0].Kind != KindExtra {
 		t.Fatalf("ref 404 vs listener 200 must be extra, got %+v", fs)
 	}
 }
@@ -228,9 +234,15 @@ func TestCompareUtxoSet(t *testing.T) {
 }
 
 func TestEstimateFeeMinusOne(t *testing.T) {
-	fs := Compare(j(t, `{"2":0.0001}`), j(t, `{"2":-1}`), "stock", "utils/estimatefee?nbBlocks=2")
+	if failing(Compare(j(t, `{"2":0.0001}`), j(t, `{"2":-1}`), "stock", "utils/estimatefee?nbBlocks=2")) != 1 {
+		t.Fatal("-1 against a real fee must fail without -zebra-new")
+	}
+	fs := compareWith(j(t, `{"2":0.0001}`), j(t, `{"2":-1}`), "stock", "utils/estimatefee?nbBlocks=2", Options{ZebraNew: true})
 	if failing(fs) != 0 || len(fs) != 1 {
 		t.Fatalf("got %+v", fs)
+	}
+	if failing(compareWith(j(t, `{"2":0.0001}`), j(t, `{"2":-1}`), "stock", "addr/a/balance", Options{ZebraNew: true})) != 1 {
+		t.Fatal("-1 exception is estimatefee only")
 	}
 }
 
@@ -569,5 +581,276 @@ func TestRunExitStatus(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(dir, "r.json"))
 	if err != nil || !strings.Contains(string(raw), `"totals"`) || !strings.Contains(string(raw), `"load"`) {
 		t.Fatalf("json report: %v\n%s", err, raw)
+	}
+}
+
+// --- fix round 1 ---
+
+func items(ids ...string) string {
+	var parts []string
+	for _, id := range ids {
+		parts = append(parts, fmt.Sprintf(`{"txid":%q,"blockheight":5}`, id))
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}
+
+func ids(prefix string, from, to int) []string {
+	var out []string
+	for i := from; i < to; i++ {
+		out = append(out, fmt.Sprintf("%s%d", prefix, i))
+	}
+	return out
+}
+
+func TestEmptyListenerPageFails(t *testing.T) {
+	ref := j(t, `{"totalItems":2,"items":`+items("a", "b")+`}`)
+	got := j(t, `{"totalItems":2,"items":[]}`)
+	if failing(Compare(ref, got, "converter", "addrs/X/txs?from=0&to=50")) != 1 {
+		t.Fatal("empty listener page against a full ref page must fail")
+	}
+	// Deep window: empty is fine only when the converter's totalItems is at or below from.
+	deepRef := j(t, `{"totalItems":1200,"items":`+items(ids("t", 0, 50)...)+`}`)
+	empty := j(t, `{"totalItems":1200,"items":[]}`)
+	if failing(Compare(deepRef, empty, "converter", "addrs/X/txs?from=1000&to=1050")) != 1 {
+		t.Fatal("empty deep window with ref totalItems 1200 > from must fail")
+	}
+	shortRef := j(t, `{"totalItems":1200,"items":`+items(ids("t", 0, 50)...)+`}`)
+	if fs := Compare(shortRef, empty, "converter", "addrs/X/txs?from=1500&to=1600"); failing(fs) != 0 || fs[0].Kind != KindExpected {
+		t.Fatalf("window past the end must be expected, got %+v", fs)
+	}
+	// Non-empty deep window is E8 expected.
+	got = j(t, `{"totalItems":1200,"items":`+items("zz1", "zz2")+`}`)
+	if fs := Compare(deepRef, got, "converter", "addrs/X/txs?from=1000&to=1050"); failing(fs) != 0 || !strings.HasPrefix(fs[0].Note, "E8") {
+		t.Fatalf("got %+v", fs)
+	}
+}
+
+func TestOneOverlapOfFullPageFails(t *testing.T) {
+	ref := j(t, `{"totalItems":50,"items":`+items(ids("t", 0, 50)...)+`}`)
+	got := j(t, `{"totalItems":50,"items":`+items(append([]string{"t0"}, ids("x", 0, 49)...)...)+`}`)
+	if failing(Compare(ref, got, "converter", "addrs/X/txs?from=0&to=50")) != 1 {
+		t.Fatal("one common txid of 50 must fail")
+	}
+	// A small drift (a new pending tx at the top, the tail falling off) is fine.
+	got = j(t, `{"totalItems":51,"items":`+items(append([]string{"new"}, ids("t", 0, 49)...)...)+`}`)
+	if failing(Compare(ref, got, "converter", "addrs/X/txs?from=0&to=50")) != 0 {
+		t.Fatal("drift of one must pass")
+	}
+	// A narrower listener window inside the converter page is fine.
+	got = j(t, `{"totalItems":50,"items":`+items(ids("t", 10, 20)...)+`}`)
+	if failing(Compare(ref, got, "converter", "addrs/X/txs?from=10&to=20")) != 0 {
+		t.Fatal("window inside the ref page must pass")
+	}
+}
+
+func TestEmptyBlocksAndTransactionsFail(t *testing.T) {
+	if failing(Compare(j(t, `{"blocks":[{"hash":"h","height":1}]}`), j(t, `{"blocks":[]}`), "converter", "blocks?limit=1")) != 1 {
+		t.Fatal("empty blocks must fail")
+	}
+	if failing(Compare(j(t, `{"transactions":["a","b"]}`), j(t, `{"transactions":[]}`), "converter", "addr/X")) != 1 {
+		t.Fatal("empty transactions must fail")
+	}
+	if failing(Compare(j(t, `{"transactions":["a","b"]}`), j(t, `{"transactions":["c"]}`), "converter", "addr/X")) != 1 {
+		t.Fatal("disjoint transactions must fail")
+	}
+	if failing(Compare(j(t, `{"transactions":["a","b","c"]}`), j(t, `{"transactions":["b","c","d"]}`), "converter", "addr/X")) != 0 {
+		t.Fatal("tail drift must pass")
+	}
+}
+
+func resp(t *testing.T, status int, body string) *Response {
+	v, ok := DecodeJSON([]byte(body))
+	return &Response{Status: status, Body: []byte(body), JSON: v, IsJSON: ok}
+}
+
+func TestStatusClasses(t *testing.T) {
+	ok500a, ok500b := resp(t, 500, `{"status":"error"}`), resp(t, 500, `{"status":"error"}`)
+	if failing(CompareResponse(ok500a, ok500b, "converter", "status", Options{Expect: "ok"})) != 1 {
+		t.Fatal("500 on both sides must fail on an ok case")
+	}
+	if failing(CompareResponse(ok500a, ok500b, "converter", "addr/zz", Options{Expect: "error"})) != 1 {
+		t.Fatal("500 on both sides must fail on an error case too")
+	}
+	n1, n2 := resp(t, 404, `{"status":"error"}`), resp(t, 404, `{"status":"error"}`)
+	if failing(CompareResponse(n1, n2, "converter", "status", Options{Expect: "ok"})) != 1 {
+		t.Fatal("404 on both sides must fail on an ok case")
+	}
+	if fs := CompareResponse(n1, n2, "converter", "addr/zz", Options{Expect: "error"}); len(fs) != 0 {
+		t.Fatalf("matching 404 on an error case is identical, got %+v", fs)
+	}
+	o1, o2 := resp(t, 200, `{}`), resp(t, 200, `{}`)
+	if failing(CompareResponse(o1, o2, "converter", "addr/zz", Options{Expect: "error"})) != 1 {
+		t.Fatal("malformed input accepted by both must fail")
+	}
+	if fs := CompareResponse(n1, n2, "converter", "x", Options{Expect: "any"}); len(fs) != 0 {
+		t.Fatalf("any: matching 4xx passes, got %+v", fs)
+	}
+	if failing(CompareResponse(o1, resp(t, 503, `{}`), "converter", "x", Options{Expect: "any"})) != 1 {
+		t.Fatal("a 5xx mismatch fails")
+	}
+}
+
+func TestPathsClasses(t *testing.T) {
+	specs, err := loadPaths(strings.NewReader("GET a\n#! error\nGET b\n#! any\nGET c\n#! ok\nGET d\n"))
+	if err != nil || len(specs) != 4 {
+		t.Fatal(err, specs)
+	}
+	got := []string{specs[0].Expect, specs[1].Expect, specs[2].Expect, specs[3].Expect}
+	if strings.Join(got, ",") != "ok,error,any,ok" {
+		t.Fatalf("classes %v", got)
+	}
+	if _, err := loadPaths(strings.NewReader("#! bogus\n")); err == nil {
+		t.Fatal("unknown class must be refused")
+	}
+}
+
+func TestSeedClassesAndDistinctLists(t *testing.T) {
+	srv := newBlockbookStub()
+	defer srv.Close()
+	lines, err := runSeed(newClient(0, 5*time.Second), seedConfig{Base: srv.URL, Kind: "blockbook", Blocks: 3, Empty: "t1EmptyAddress0000000006"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	specs, err := loadPaths(strings.NewReader(strings.Join(lines, "\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"status": "ok", "tx/zz": "error", "addr/notanaddress": "error", "block-index/abc": "error", "nosuchroute": "error", "utils/estimatefee?nbBlocks=2,3": "ok"}
+	seen := map[string]bool{}
+	for _, s := range specs {
+		if w, ok := want[s.Path]; ok {
+			seen[s.Path] = true
+			if s.Expect != w {
+				t.Errorf("%s: class %s, want %s", s.Path, s.Expect, w)
+			}
+		}
+		if s.Method == "POST" && strings.HasPrefix(s.Path, "tx/send") && s.Expect != "error" {
+			t.Errorf("tx/send must be an error case")
+		}
+		if strings.Contains(s.Path, "addrs/t1BusyAddressManyTxs000003,") && strings.Count(s.Path, ",") >= 20 {
+			parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(strings.SplitN(s.Path, "?", 2)[0], "addrs/"), "/txs"), ",")
+			uniq := map[string]bool{}
+			for _, p := range parts {
+				uniq[strings.TrimSuffix(p, "/utxo")] = true
+			}
+			if len(uniq) != len(parts) || s.Expect != "error" {
+				t.Errorf("over-limit list must be distinct and an error case: %d/%d %s", len(uniq), len(parts), s.Expect)
+			}
+		}
+	}
+	for p := range want {
+		if !seen[p] {
+			t.Errorf("no line for %s", p)
+		}
+	}
+	if got := strings.Count(distinctList("t1Abcdefghijklmnopqrstuvw", 101), ","); got != 100 {
+		t.Fatalf("101 addresses expected, %d commas", got)
+	}
+}
+
+func TestDefaultIgnores(t *testing.T) {
+	if fs := Compare(j(t, `{"info":{"connections":8,"blocks":5}}`), j(t, `{"info":{"connections":9,"blocks":5}}`), "converter", "status"); len(fs) != 0 {
+		t.Fatalf("info.connections is a default ignore, got %+v", fs)
+	}
+	pend := Compare(j(t, `{"txid":"a","confirmations":0,"time":100,"blocktime":100}`), j(t, `{"txid":"a","confirmations":0,"time":105,"blocktime":105}`), "converter", "tx/a")
+	if len(pend) != 0 {
+		t.Fatalf("pending tx times are ignored, got %+v", pend)
+	}
+	conf := Compare(j(t, `{"txid":"a","confirmations":3,"time":100}`), j(t, `{"txid":"a","confirmations":3,"time":105}`), "converter", "tx/a")
+	if failing(conf) != 1 {
+		t.Fatalf("confirmed tx time is compared, got %+v", conf)
+	}
+	// -ignore adds to the defaults.
+	fs := compareWith(j(t, `{"info":{"connections":8,"errors":"a"}}`), j(t, `{"info":{"connections":9,"errors":"b"}}`), "converter", "status", Options{Ignores: []string{"/info/errors"}})
+	if len(fs) != 0 {
+		t.Fatalf("got %+v", fs)
+	}
+}
+
+func TestAsmGarbageFails(t *testing.T) {
+	fs := Compare(j(t, `{"asm":"t1abc"}`), j(t, `{"asm":"garbage!!"}`), "converter", "tx/a")
+	if failing(fs) != 1 {
+		t.Fatalf("got %+v", fs)
+	}
+}
+
+func TestUnsafeBroadcastAllowList(t *testing.T) {
+	for _, b := range []string{`{"RAWTX":"0100"}`, `{"rawTx":"aabb"}`, "rawtx=0100", "RawTx=0100&x=1", "0100aabb", `{"rawtx":"0100","rawtx2":"zz"}`} {
+		if unsafeBroadcast(b) == "" {
+			t.Errorf("must flag %q", b)
+		}
+	}
+	for _, b := range []string{`{"rawtx":"zz"}`, `{"rawtx":"abc"}`, `{}`, `{"rawtx":`, `{"rawtx":1}`, "rawtx=zz", "hello"} {
+		if unsafeBroadcast(b) != "" {
+			t.Errorf("must allow %q", b)
+		}
+	}
+}
+
+func TestLoadBadBodyNotOK(t *testing.T) {
+	good := &Response{Status: 200, IsJSON: true, Latency: 1000}
+	bad := &Response{Status: 200, IsJSON: false, Latency: 1000}
+	s := summarize([]*Response{good, bad})
+	if s.OK != 1 || s.BadBody != 1 {
+		t.Fatalf("%+v", s)
+	}
+}
+
+func TestGetCORS(t *testing.T) {
+	with := &Response{Status: 200, Header: http.Header{"Access-Control-Allow-Origin": {"*"}}}
+	without := &Response{Status: 200, Header: http.Header{}}
+	if fs := getCORS("p", with, without); len(fs) != 1 || fs[0].Kind != KindMissing {
+		t.Fatal(fs)
+	}
+	if fs := getCORS("p", with, with); fs != nil {
+		t.Fatal(fs)
+	}
+}
+
+func TestRunRefusals(t *testing.T) {
+	dir := t.TempDir()
+	paths := filepath.Join(dir, "p.txt")
+	os.WriteFile(paths, []byte("GET version\n"), 0o644)
+	var out, errb bytes.Buffer
+	if code := run([]string{"-ref", "http://h:1/api/", "-new", "HTTP://H:1/api", "-paths", paths}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "same URL") {
+		t.Fatalf("same URL must exit 2, got %d %s", code, errb.String())
+	}
+	if code := run([]string{"-ref", "http://a/api", "-new", "http://b/api", "-paths", paths, "-load-paths", "999"}, &out, &errb); code != 2 {
+		t.Fatalf("load-paths cap, got %d", code)
+	}
+}
+
+func TestRunNewAltAndClasses(t *testing.T) {
+	dir := t.TempDir()
+	paths := filepath.Join(dir, "paths.txt")
+	os.WriteFile(paths, []byte("GET version\n"), 0o644)
+	ref := listener(map[string]string{"version": `{"version":"1"}`}, true)
+	defer ref.Close()
+	nw := listener(map[string]string{"version": `{"version":"1"}`}, true)
+	defer nw.Close()
+	altOK := listener(map[string]string{"version": `{"version":"1"}`}, true)
+	defer altOK.Close()
+	altBad := listener(map[string]string{"version": `{"version":"9"}`}, true)
+	defer altBad.Close()
+	args := func(alt string) []string {
+		return []string{"-ref", ref.URL + "/api", "-new", nw.URL + "/api", "-new-alt", alt + "/api", "-paths", paths, "-out", filepath.Join(dir, "r.md"), "-rate", "0"}
+	}
+	var out, errb bytes.Buffer
+	if code := run(args(altOK.URL), &out, &errb); code != 0 {
+		t.Fatalf("matching alt prefix must pass, got %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run(args(altBad.URL), &out, &errb); code != 1 || !strings.Contains(out.String(), "new-alt prefix") {
+		t.Fatalf("differing alt prefix must fail, got %d\n%s", code, out.String())
+	}
+	// Both hosts answering 404 on an ok case is a failure, not "identical".
+	os.WriteFile(paths, []byte("GET missing\n"), 0o644)
+	out.Reset()
+	if code := run([]string{"-ref", ref.URL + "/api", "-new", nw.URL + "/api", "-paths", paths, "-out", filepath.Join(dir, "r2.md"), "-rate", "0"}, &out, &errb); code != 1 {
+		t.Fatalf("404 on both sides of an ok case must exit 1, got %d\n%s", code, out.String())
+	}
+	os.WriteFile(paths, []byte("#! error\nGET missing\n"), 0o644)
+	if code := run([]string{"-ref", ref.URL + "/api", "-new", nw.URL + "/api", "-paths", paths, "-out", filepath.Join(dir, "r3.md"), "-rate", "0"}, &out, &errb); code != 0 {
+		t.Fatalf("matching 404 on an error case is fine, got %d", code)
 	}
 }
