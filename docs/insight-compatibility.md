@@ -2,8 +2,8 @@
 
 The optional native Go listener reuses Blockbook's query worker, mempool, transaction cache and
 single database owner. It opens no second RocksDB index and makes no calls to the public HTTP
-API. The V1/V2 APIs and explorer keep their existing bindings and behavior. This profile serves every bitcore Insight route Zelcore's wallets use. Each response is a superset
-of what Zelcore's MIT-licensed `insight-to-blockbook` adapter (the converter) returns today: no
+API. The V1/V2 APIs and explorer keep their existing bindings and behavior. This profile
+serves every bitcore Insight route Zelcore's wallets use. Each response is a superset of what Zelcore's MIT-licensed `insight-to-blockbook` adapter (the converter) returns today: no
 converter path, field name or value changes, and stock Insight fields are added alongside. Its
 notice is retained in [COPYING.insight-to-blockbook](../COPYING.insight-to-blockbook).
 
@@ -43,8 +43,13 @@ variable unset) makes Blockbook refuse to start.
 
 `contrib/scripts/deploy-blockbook.sh` therefore refuses an install of an Insight-enabled coin
 before it builds or stops anything when the env file does not define `BLOCKBOOK_INSIGHT_HOST`
-as a dotted IPv4 address other than `0.0.0.0`. It also refuses a package whose unit lacks the
-flag (for example a stale `--skip-build` package). This holds with `--skip-build` and
+as a dotted IPv4 address other than `0.0.0.0`, when that address is not assigned to the host
+(`ip -o -4 addr show`), or when the port is held by a process other than this coin's running
+Blockbook (`ss -ltnp`). On the first BTC and ZEC switch the port is held by the converter, so
+stop and disable it first; the refusal says so. It also refuses a package whose unit lacks the
+flag (for example a stale `--skip-build` package). After the restart it probes
+`http://<host>:<port>/api/status` (200, or 503 while not ready); a refused connection is a failed
+check and rolls the install back. All of this holds with `--skip-build` and
 `--use-package-unit`, which the production deploys use. Without `--use-package-unit`, a host
 unit or `ExecStart` drop-in keeps its own command line and the listener is not started.
 Coins without `ports.blockbook_insight` are not checked or changed.
@@ -235,8 +240,8 @@ clients. Before a user-run canary:
    at one live database.
 3. Exercise daemon broadcast rejection/acceptance, coinbase and OP_RETURN transactions, pending
    balance/history changes, BTG/GRS address handling and wallet display/export/spending contracts.
-4. Set `BLOCKBOOK_INSIGHT_HOST` in `/etc/blockbook/blockbook.env`, stop the converter on that host
-   and verify the listener on port 9876 behind the trusted proxy: TLS, CORS, 503 readiness,
+4. Set `BLOCKBOOK_INSIGHT_HOST` in `/etc/blockbook/blockbook.env`, stop and disable the converter
+   on that host (the deploy refuses while it holds the port) and verify the listener on port 9876 behind the trusted proxy: TLS, CORS, 503 readiness,
    saturation, body limits and shutdown under active requests.
 5. Retain a recoverable snapshot and agree on canary/rollback steps. Matching schema and unit
    fixtures alone do not prove production database compatibility. No schema migration is added

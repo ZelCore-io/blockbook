@@ -30,8 +30,11 @@
 # -insight=${BLOCKBOOK_INSIGHT_HOST}:PORT in the package unit. The host address comes from
 # /etc/blockbook/blockbook.env (override the path with BLOCKBOOK_ENV_FILE). The script refuses
 # to build or install, before stopping anything, when that file does not define a non-empty
-# dotted IPv4 BLOCKBOOK_INSIGHT_HOST other than 0.0.0.0, and when the package in build/ lacks the
-# Insight flag. The check also runs with --skip-build and --use-package-unit. Note that a host
+# dotted IPv4 BLOCKBOOK_INSIGHT_HOST other than 0.0.0.0, when that address is not assigned to the
+# host (ip -o -4 addr show), when the port is held by a process other than this coin's running
+# blockbook (ss -ltnp; stop and disable the Node converter first), and when the package in build/
+# lacks the Insight flag. After the restart the listener is probed (GET /api/status, 200 or 503);
+# a refused connection is a failed check and triggers the rollback. The check also runs with --skip-build and --use-package-unit. Note that a host
 # unit or ExecStart drop-in kept without --use-package-unit never gets the flag.
 #
 # Only the blockbook-<coin> package is built and installed. The backend package is never
@@ -206,6 +209,63 @@ insight_preflight() {
     fi
 }
 
+# insight_host_assigned HOST: reads `ip -o -4 addr show` output on stdin and succeeds when HOST is
+# an IPv4 address assigned to this machine (the bind would otherwise fail at start).
+insight_host_assigned() {
+    awk -v h="$1" '$3 == "inet" { split($4, a, "/"); if (a[1] == h) found = 1 } END { exit !found }'
+}
+
+# insight_port_holders PORT OWNPID: reads `ss -ltnp` output on stdin and prints one line per
+# listener on PORT whose process is not OWNPID (name(pid), or "unknown" when ss shows no process).
+# Prints nothing when the port is free or held only by OWNPID.
+insight_port_holders() {
+    awk -v port="$1" -v own="$2" '
+        $1 == "LISTEN" {
+            n = split($4, l, ":")
+            if (l[n] != port) next
+            rest = $0; name = ""; pids = ""
+            if (match(rest, /users:\(\(.*\)\)/)) {
+                u = substr(rest, RSTART, RLENGTH)
+                if (match(u, /"[^"]*"/)) name = substr(u, RSTART + 1, RLENGTH - 2)
+                while (match(u, /pid=[0-9]+/)) {
+                    pids = pids " " substr(u, RSTART + 4, RLENGTH - 4)
+                    u = substr(u, RSTART + RLENGTH)
+                }
+            }
+            if (pids == "") { print "unknown"; next }
+            m = split(pids, p, " ")
+            for (i = 1; i <= m; i++) if (p[i] != own) print name "(" p[i] ")"
+        }'
+}
+
+# insight_runtime_check HOST PORT OWNPID: refuse a bind that cannot succeed, before anything is
+# stopped: HOST must be assigned to this machine, and PORT must be free or held by OWNPID (the
+# running blockbook of this coin on a redeploy). Needs ip and ss. Prints the reason on failure.
+insight_runtime_check() {
+    local host=$1 port=$2 own=$3 holders
+    if ! command -v ip >/dev/null || ! command -v ss >/dev/null; then
+        echo 'ip and ss are required to check the Insight bind address and port.' >&2
+        return 1
+    fi
+    if ! ip -o -4 addr show | insight_host_assigned "$host"; then
+        echo "BLOCKBOOK_INSIGHT_HOST=$host is not an address assigned to this host (ip -o -4 addr show); Blockbook would fail to bind. Nothing was stopped or installed." >&2
+        return 1
+    fi
+    holders=$(ss -ltnp | insight_port_holders "$port" "$own" | paste -sd, -)
+    if [[ -n $holders ]]; then
+        echo "Port $port is already held by $holders, so Blockbook's Insight listener could not bind. If that is the insight-to-blockbook converter (Node), stop and disable it first, then run this script again. Nothing was stopped or installed." >&2
+        return 1
+    fi
+}
+
+# insight_probe HOST PORT: succeed when the Insight listener answers /api/status with 200, or
+# 503 while it is not ready yet. A refused connection (curl prints 000) fails.
+insight_probe() {
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$1:$2/api/status" 2>/dev/null) || code=000
+    [[ $code == 200 || $code == 503 ]]
+}
+
 # insight_unit_ok DEB PACKAGE: succeed when the package's service unit carries the Insight flag.
 insight_unit_ok() {
     local unit
@@ -352,13 +412,22 @@ else
     log "No $config_dist yet; the diff is printed after the install."
 fi
 
-if insight_msg=$(insight_preflight "$config" "$insight_env_file" 2>&1); then
-    jq -e '(.ports.blockbook_insight // 0) > 0' "$config" >/dev/null &&
-        log "Insight: BLOCKBOOK_INSIGHT_HOST=$(insight_env_value "$insight_env_file") in $insight_env_file"
-elif (( check_only )); then
-    log "Warning: $insight_msg"
-else
-    fail "$insight_msg"
+# Insight: the env file must name a usable address (before any build), and that address and port
+# must be bindable (before any stop). insight_host and insight_port stay empty for other coins.
+insight_host=''
+insight_port=$(jq -r '(.ports.blockbook_insight // 0) | tostring' "$config")
+[[ $insight_port != 0 ]] || insight_port=''
+insight_msg=''
+if [[ -n $insight_port ]]; then
+    if insight_msg=$(insight_preflight "$config" "$insight_env_file" 2>&1); then
+        insight_host=$(insight_env_value "$insight_env_file")
+        own_pid=$(num "$(systemctl show -p MainPID --value "$service")")
+        insight_msg=$(insight_runtime_check "$insight_host" "$insight_port" "$own_pid" 2>&1) &&
+            log "Insight: $insight_host:$insight_port is bindable (BLOCKBOOK_INSIGHT_HOST from $insight_env_file)"
+    fi
+    if [[ -z $insight_host ]] || [[ -n $insight_msg ]]; then
+        if (( check_only )); then log "Warning: $insight_msg"; else fail "$insight_msg"; fi
+    fi
 fi
 
 if (( check_only )); then
@@ -517,6 +586,17 @@ post_commit=$(api_field "$post_json" gitCommit)
 [[ -n $post_commit && $git_head == "$post_commit"* ]] ||
     verify_failed "running commit '${post_commit}' is not the built ${git_head:0:12}"
 log "Running commit ${post_commit:0:12}, version $(api_field "$post_json" version)"
+
+if [[ -n $insight_host ]]; then
+    probed=0
+    for ((waited = 0; waited < 60; waited += 5)); do
+        if insight_probe "$insight_host" "$insight_port"; then probed=1; break; fi
+        systemctl is-active --quiet "$service" || break
+        sleep 5
+    done
+    (( probed )) || verify_failed "Insight listener $insight_host:$insight_port does not answer /api/status (a host unit or ExecStart drop-in that replaces the package unit needs --use-package-unit)"
+    log "Insight listener answers on $insight_host:$insight_port"
+fi
 
 log "Waiting up to ${sync_timeout}s for inSync at height >= $pre_height"
 synced=0
