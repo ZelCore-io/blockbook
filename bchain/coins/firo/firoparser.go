@@ -199,6 +199,12 @@ func GetChainParams(chain string) *chaincfg.Params {
 	}
 }
 
+// InsightExtension names the native Insight listener's Firo extension, which
+// serves the Firo-specific routes and labels of the stock Firo Insight API.
+func (p *FiroParser) InsightExtension() string {
+	return "firo"
+}
+
 // GetAddressesFromAddrDesc returns addresses for given address descriptor with flag if the addresses are searchable
 func (p *FiroParser) GetAddressesFromAddrDesc(addrDesc bchain.AddressDescriptor) ([]string, bool, error) {
 

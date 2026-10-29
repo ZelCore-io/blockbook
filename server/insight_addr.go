@@ -175,7 +175,7 @@ func (s *InsightServer) ownedItems(route insightRoute, owned map[string]bool, id
 		if tx == nil {
 			return nil, http.StatusInternalServerError, errors.New("missing transaction")
 		}
-		item, err := insightTransaction(insightOwnTx(tx, owned))
+		item, err := s.transaction(insightOwnTx(tx, owned))
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
 		}

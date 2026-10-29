@@ -397,7 +397,12 @@ func mainWithExitCode() int {
 				}
 			}
 			insightServer.SetBackend(rpc, internalState.CoinShortcut)
-			err = insightServer.Start()
+			if ext, ok := parser.(server.InsightExtensionProvider); ok {
+				err = insightServer.EnableExtension(ext.InsightExtension())
+			}
+			if err == nil {
+				err = insightServer.Start()
+			}
 		}
 		if err != nil {
 			glog.Error("Insight listener: ", err)

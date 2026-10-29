@@ -53,11 +53,10 @@ var insightAddrValues = map[string]bool{"balance": true, "totalReceived": true, 
 // allows. The first segment must be "api" or "insight-api"; the rest is
 // matched identically for both prefixes.
 func insightMatch(r *http.Request) (insightRoute, []string, bool) {
-	parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
-	if len(parts) < 3 || parts[0] != "" || (parts[1] != "api" && parts[1] != "insight-api") {
+	parts, ok := insightPathParts(r)
+	if !ok {
 		return insightRoute{}, nil, false
 	}
-	parts = parts[2:]
 	n := len(parts)
 	query := r.URL.Query()
 	route := insightRoute{query: query}
@@ -157,6 +156,33 @@ func insightMatch(r *http.Request) (insightRoute, []string, bool) {
 		route.to = query.Get("to")
 	}
 	return route, methods, true
+}
+
+// insightPathParts returns the path segments after the "api" or
+// "insight-api" prefix.
+func insightPathParts(r *http.Request) ([]string, bool) {
+	parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "" || (parts[1] != "api" && parts[1] != "insight-api") {
+		return nil, false
+	}
+	return parts[2:], true
+}
+
+// match is insightMatch plus the routes of the coin's extension, if any.
+func (s *InsightServer) match(r *http.Request) (insightRoute, []string, bool) {
+	route, methods, ok := insightMatch(r)
+	if ok || s.ext == nil {
+		return route, methods, ok
+	}
+	parts, ok := insightPathParts(r)
+	if !ok {
+		return insightRoute{}, nil, false
+	}
+	kind, arg, methods, ok := s.ext.match(parts)
+	if !ok {
+		return insightRoute{}, nil, false
+	}
+	return insightRoute{kind: kind, arg: arg, query: r.URL.Query()}, methods, true
 }
 
 // insightSingleAddress returns the one address of a single-address route.

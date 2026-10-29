@@ -166,6 +166,11 @@ type insightCurrency struct {
 // currency serves the USD rate from Blockbook's own fiat rates (no network call
 // here). The rate is 0 when the coin has no usable USD rate.
 func (s *InsightServer) currency() (interface{}, int, error) {
+	return insightCurrency{Status: http.StatusOK, Data: insightCurrencyData{Rate: s.usdRate(), Short: s.coinShortcut}}, 0, nil
+}
+
+// usdRate is the coin's current USD rate from Blockbook's fiat rates, or 0.
+func (s *InsightServer) usdRate() json.Number {
 	rate := json.Number("0")
 	ticker, err := s.worker.GetCurrentFiatRates([]string{"usd"}, "")
 	if err == nil && ticker != nil {
@@ -174,7 +179,7 @@ func (s *InsightServer) currency() (interface{}, int, error) {
 			rate = json.Number(strconv.FormatFloat(float64(v), 'f', -1, 32))
 		}
 	}
-	return insightCurrency{Status: http.StatusOK, Data: insightCurrencyData{Rate: rate, Short: s.coinShortcut}}, 0, nil
+	return rate
 }
 
 type insightVerifyResult struct {

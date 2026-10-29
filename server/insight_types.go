@@ -178,6 +178,8 @@ type insightTx struct {
 	ChainExtraData         *api.TxChainExtraData `json:"chainExtraData,omitempty"`
 	Vin                    []insightVin          `json:"vin"`
 	Vout                   []insightVout         `json:"vout"`
+	// SparkData is set by the Firo extension on a Spark name registration.
+	SparkData *insightSparkData `json:"sparkData,omitempty"`
 }
 
 // insightSatString renders an amount as a decimal satoshi string. Strings
