@@ -44,7 +44,8 @@ var themeColorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 const maxExplorers = 24
 const maxExplorerName = 40
 
-var coinSlugRe = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
+// coinSlugRe matches the dashboard's coin slugs, which may hold underscores (bitcoin_testnet4).
+var coinSlugRe = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
 
 // Campaign is a scheduled product promotion, never executable HTML.
 type Campaign struct {
