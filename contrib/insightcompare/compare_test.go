@@ -66,7 +66,7 @@ func TestCompareIgnoresConfirmations(t *testing.T) {
 
 func TestCompareHistoryByTxid(t *testing.T) {
 	ref := j(t, `{"totalItems":3,"from":0,"to":3,"items":[{"txid":"a","blockheight":9},{"txid":"b","blockheight":8,"fees":1},{"txid":"c","blockheight":7}]}`)
-	got := j(t, `{"totalItems":2,"from":0,"to":2,"items":[{"txid":"b","blockheight":8,"fees":1},{"txid":"c","blockheight":7}]}`)
+	got := j(t, `{"totalItems":2,"from":0,"to":2,"items":[{"txid":"a","blockheight":9},{"txid":"b","blockheight":8,"fees":1}]}`)
 	fs := Compare(ref, got, "converter", "addrs/X/txs?from=0&to=50")
 	if k := kinds(fs); k[KindChanged] != 0 || k[KindMissing] != 0 {
 		t.Fatalf("no failure expected, got %+v", fs)
@@ -81,7 +81,7 @@ func TestCompareHistoryByTxid(t *testing.T) {
 		t.Fatalf("want an expected count note on /items, got %+v", fs)
 	}
 	// A real difference inside a shared txid still fails.
-	got2 := j(t, `{"totalItems":2,"from":0,"to":2,"items":[{"txid":"b","blockheight":8,"fees":2},{"txid":"c","blockheight":7}]}`)
+	got2 := j(t, `{"totalItems":2,"from":0,"to":2,"items":[{"txid":"a","blockheight":9},{"txid":"b","blockheight":8,"fees":2}]}`)
 	fs = Compare(ref, got2, "converter", "addrs/X/txs?from=0&to=50")
 	if failing(fs) != 1 || fs[0].Pointer == "" {
 		t.Fatalf("want one failing difference, got %+v", fs)
@@ -988,5 +988,63 @@ func TestNewClassInPathsFile(t *testing.T) {
 	specs, err := loadPaths(strings.NewReader("#! new\nGET currency\n"))
 	if err != nil || specs[0].Expect != "new" {
 		t.Fatal(err, specs)
+	}
+}
+
+// The one-txid drift allowance is position-bound: the reference loses its
+// oldest txid and the listener gains a newest one; anywhere else it is a
+// real difference.
+func TestCompareHistoryDriftIsPositionBound(t *testing.T) {
+	const path = "addrs/X/txs?from=0&to=50"
+	items := func(ids ...string) interface{} {
+		var parts []string
+		for _, id := range ids { // a tx keeps its height wherever it sits on a page
+			parts = append(parts, fmt.Sprintf(`{"txid":"%s","blockheight":%d}`, id, 200-int(id[0])))
+		}
+		return j(t, `{"totalItems":`+fmt.Sprint(len(ids))+`,"from":0,"to":`+fmt.Sprint(len(ids))+`,"items":[`+strings.Join(parts, ",")+`]}`)
+	}
+	ref := items("a", "b", "c", "d", "e")
+	for _, tc := range []struct {
+		name string
+		got  interface{}
+		fail int
+	}{
+		{"identical", items("a", "b", "c", "d", "e"), 0},
+		{"new newest tx, oldest pushed off", items("n", "a", "b", "c", "d"), 0},
+		{"oldest ref txid missing", items("a", "b", "c", "d"), 0},
+		{"txid swapped in the middle", items("a", "b", "x", "d", "e"), 1},
+		{"middle ref txid missing", items("a", "b", "d", "e"), 1},
+		{"newest ref txid missing", items("b", "c", "d", "e"), 1},
+		{"extra listener txid in the middle", items("a", "b", "x", "c", "d"), 1},
+		{"extra listener txid at the oldest end", items("a", "b", "c", "d", "x"), 1},
+	} {
+		if n := failing(Compare(ref, tc.got, "converter", path)); n != tc.fail {
+			t.Errorf("%s: %d failing, want %d: %+v", tc.name, n, tc.fail, Compare(ref, tc.got, "converter", path))
+		}
+	}
+}
+
+func TestCompareRefLacksOnlyExcusesA4xx(t *testing.T) {
+	ok := &Response{Status: 200, IsJSON: true, JSON: map[string]interface{}{}}
+	resp := func(status int) *Response {
+		return &Response{Status: status, IsJSON: true, JSON: map[string]interface{}{}}
+	}
+	for _, tc := range []struct {
+		name   string
+		ref    *Response
+		opts   Options
+		expect string // "" none, else the single finding kind
+	}{
+		{"declared route, ref 404", resp(404), Options{RefLacks: true, Expect: "ok"}, KindExtra},
+		{"declared route, ref 404, any case", resp(404), Options{RefLacks: true}, KindExtra},
+		{"declared route, ref 5xx is not extra", resp(502), Options{RefLacks: true, Expect: "ok"}, KindChanged},
+		{"declared route, error-class case is not excused", resp(404), Options{RefLacks: true, Expect: "error"}, KindChanged},
+		{"new case, ref 404", resp(404), Options{Expect: "new"}, KindExtra},
+		{"new case, ref 5xx is a broken reference", resp(500), Options{Expect: "new"}, KindChanged},
+	} {
+		fs := CompareResponse(tc.ref, ok, "converter", "currency", tc.opts)
+		if len(fs) != 1 || fs[0].Kind != tc.expect {
+			t.Errorf("%s: %+v, want one %s", tc.name, fs, tc.expect)
+		}
 	}
 }

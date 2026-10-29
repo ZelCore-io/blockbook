@@ -461,7 +461,7 @@ func (c *comparer) historyArray(ptr string, r, g []interface{}) {
 	}
 	// Below the converter's 1000 cap the listener page must be as long as the
 	// window asks for (the ref page length when no window is given), less the
-	// txs the history does not have. One off at the newest end is drift.
+	// txs the history does not have. One off at either end is drift.
 	if from < 1000 {
 		want := refN
 		if w, ok := c.windowSize(); ok {
@@ -477,7 +477,7 @@ func (c *comparer) historyArray(ptr string, r, g []interface{}) {
 				fmt.Sprintf("listener page has %d items, %d expected for this window", gotN, want))
 			return
 		case gotN != want:
-			c.add(KindExpected, ptr, fmt.Sprintf("%d items", want), fmt.Sprintf("%d items", gotN), expectedRules["E10"].ID+": page length off by one at the newest end ("+expectedRules["E10"].Text+")")
+			c.add(KindExpected, ptr, fmt.Sprintf("%d items", want), fmt.Sprintf("%d items", gotN), expectedRules["E10"].ID+": page length off by one at an end ("+expectedRules["E10"].Text+")")
 		}
 	}
 	// The converter's page starts at 0, the listener's at from. The txids the
@@ -490,6 +490,34 @@ func (c *comparer) historyArray(ptr string, r, g []interface{}) {
 				fmt.Sprintf("only %d txids in common, at least %d expected", len(common), exp-slack))
 			return
 		}
+	}
+	// Drift moves the window by one: the shared range then loses its oldest
+	// ref txid and the listener page gains one at its newest end. A txid
+	// missing or extra anywhere else is a real difference.
+	if exp > 0 {
+		shared := rk.order[from : from+exp]
+		var missing []string
+		for _, id := range shared {
+			if _, ok := gk.byKey[id]; !ok {
+				missing = append(missing, id)
+			}
+		}
+		if len(missing) > 1 || len(missing) == 1 && missing[0] != shared[len(shared)-1] {
+			c.add(KindChanged, ptr, "txid "+missing[0], "(absent)",
+				fmt.Sprintf("%d ref txids missing from the listener page; one is drift only at the oldest end of the shared range", len(missing)))
+			return
+		}
+	}
+	var extra []int
+	for i, id := range gk.order {
+		if _, ok := rk.byKey[id]; !ok && from+i < refN { // past the ref page the listener has more by construction
+			extra = append(extra, i)
+		}
+	}
+	if len(extra) > 1 || len(extra) == 1 && extra[0] != 0 {
+		c.add(KindChanged, ptr, "(absent)", "txid "+gk.order[extra[0]],
+			fmt.Sprintf("%d listener txids inside the ref page window are not on the reference; one is drift only at the newest end", len(extra)))
+		return
 	}
 	if rOnly > 0 || gOnly > 0 {
 		c.add(KindExpected, ptr, fmt.Sprintf("%d items", refN), fmt.Sprintf("%d items", gotN),
@@ -818,7 +846,9 @@ func CompareResponse(ref, got *Response, mode, path string, opts Options) []Find
 		switch {
 		case got.Status == 501 && opts.ZebraNew && route == "messages/verify":
 			mk(KindExpected, "http status", statusText(ref), statusText(got), "E9: "+expectedRules["E9"].Text)
-		case ref.Status/100 != 2 && got.Status/100 == 2 && (opts.RefLacks || opts.Expect == "new"):
+		// A route the reference lacks answers 4xx there. A 5xx is a broken
+		// reference, and an error-class case is never excused by -ref-lacks.
+		case ref.Status/100 == 4 && got.Status/100 == 2 && (opts.RefLacks && opts.Expect != "error" || opts.Expect == "new"):
 			mk(KindExtra, "http status", statusText(ref), statusText(got), "route the reference lacks (declared); check it against stock Insight")
 		case ref.Status/100 != 2 && got.Status/100 == 2 && opts.Expect != "error" && opts.Expect != "any" && opts.Expect != "":
 			mk(KindChanged, "http status", statusText(ref), statusText(got), "reference broken: non-2xx on a case that must succeed")
