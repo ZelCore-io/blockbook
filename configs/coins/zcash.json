@@ -8,7 +8,8 @@
     "ports": {
         "backend_rpc": 8032,
         "blockbook_internal": 9032,
-        "blockbook_public": 9132
+        "blockbook_public": 9132,
+        "blockbook_insight": 9876
     },
     "ipc": {
         "rpc_url_template": "http://127.0.0.1:{{.Ports.BackendRPC}}",
@@ -42,6 +43,7 @@
         "system_user": "blockbook-zcash",
         "internal_binding_template": ":{{.Ports.BlockbookInternal}}",
         "public_binding_template": ":{{.Ports.BlockbookPublic}}",
+        "insight_binding_template": "${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookInsight}}",
         "explorer_url": "",
         "additional_params": "-resyncindexperiod=50000 -resyncmempoolperiod=3000",
         "block_chain": {

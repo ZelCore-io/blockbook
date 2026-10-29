@@ -157,5 +157,34 @@ check 'unit_redact: masks a quoted password' grep -qx 'Environment="RPC_PASS=<re
 check 'unit_redact: keeps other values' grep -qx 'Environment=MALLOC_CONF=narenas:8' <<< "$red"
 check 'unit_redact: no secret left' bash -c '! grep -q "abc\|RPC_PASS=x" <<< "$1"' _ "$red"
 
+# Insight bind host preflight: refuse an Insight-enabled install without BLOCKBOOK_INSIGHT_HOST
+mkdir -p "$work/insight"
+printf '{"ports":{"blockbook_public":9130,"blockbook_insight":9876}}\n' > "$work/insight/on.json"
+printf '{"ports":{"blockbook_public":9130}}\n' > "$work/insight/off.json"
+envf=$work/insight/blockbook.env
+refuses() { ! insight_preflight "$1" "$2" 2>/dev/null; } # refuses CONFIG ENVFILE
+check 'insight preflight: missing env file is refused' refuses "$work/insight/on.json" "$work/insight/none.env"
+printf 'MALLOC_CONF=x\n' > "$envf"
+check 'insight preflight: variable absent is refused' refuses "$work/insight/on.json" "$envf"
+printf 'BLOCKBOOK_INSIGHT_HOST=\n' > "$envf"
+check 'insight preflight: empty value is refused' refuses "$work/insight/on.json" "$envf"
+printf '# BLOCKBOOK_INSIGHT_HOST=10.100.0.5\n; BLOCKBOOK_INSIGHT_HOST=10.100.0.6\n' > "$envf"
+check 'insight preflight: commented value is refused' refuses "$work/insight/on.json" "$envf"
+printf 'BLOCKBOOK_INSIGHT_HOST=0.0.0.0\n' > "$envf"
+check 'insight preflight: wildcard is refused' refuses "$work/insight/on.json" "$envf"
+printf 'BLOCKBOOK_INSIGHT_HOST=10.100.0.300\n' > "$envf"
+check 'insight preflight: bad octet is refused' refuses "$work/insight/on.json" "$envf"
+printf 'BLOCKBOOK_INSIGHT_HOST=example.com\n' > "$envf"
+check 'insight preflight: hostname is refused' refuses "$work/insight/on.json" "$envf"
+printf 'BLOCKBOOK_INSIGHT_HOST=10.100.0.5\n' > "$envf"
+check 'insight preflight: valid value passes' insight_preflight "$work/insight/on.json" "$envf"
+printf 'MALLOC_CONF=x\nBLOCKBOOK_INSIGHT_HOST="10.100.0.7"\n' > "$envf"
+check 'insight preflight: quoted value is unquoted' [ "$(insight_env_value "$envf")" = 10.100.0.7 ]
+printf 'BLOCKBOOK_INSIGHT_HOST=10.100.0.5\nBLOCKBOOK_INSIGHT_HOST=\n' > "$envf"
+check 'insight preflight: last assignment wins (empty)' refuses "$work/insight/on.json" "$envf"
+check 'insight preflight: coin without the port ignores the env file' insight_preflight "$work/insight/off.json" "$work/insight/none.env"
+check 'insight preflight: real bitcoin config enables it' refuses "$here/../../configs/coins/bitcoin.json" "$work/insight/none.env"
+check 'insight preflight: real ethereum config is unaffected' insight_preflight "$here/../../configs/coins/ethereum.json" "$work/insight/none.env"
+
 echo "$passed passed, $failed failed"
 [[ $failed == 0 ]]

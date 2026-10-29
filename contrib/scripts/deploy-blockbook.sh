@@ -26,6 +26,14 @@
 # backup directory after printing their diff against the package unit, so the package unit runs;
 # a rollback puts them back.
 #
+# Insight listener: a coin whose config has ports.blockbook_insight (bitcoin, zcash) gets
+# -insight=${BLOCKBOOK_INSIGHT_HOST}:PORT in the package unit. The host address comes from
+# /etc/blockbook/blockbook.env (override the path with BLOCKBOOK_ENV_FILE). The script refuses
+# to build or install, before stopping anything, when that file does not define a non-empty
+# dotted IPv4 BLOCKBOOK_INSIGHT_HOST other than 0.0.0.0, and when the package in build/ lacks the
+# Insight flag. The check also runs with --skip-build and --use-package-unit. Note that a host
+# unit or ExecStart drop-in kept without --use-package-unit never gets the flag.
+#
 # Only the blockbook-<coin> package is built and installed. The backend package is never
 # built, installed or restarted, and the index database is never touched.
 #
@@ -47,6 +55,7 @@
 # Environment:
 #   BLOCKBOOK_MIN_BUILD_MEM_MIB   RAM + free swap needed to build without extra swap (default 8192)
 #   BLOCKBOOK_SWAP_MIB            temporary swap size passed to build-with-swap.sh (default 4096)
+#   BLOCKBOOK_ENV_FILE            service env file with BLOCKBOOK_INSIGHT_HOST (default /etc/blockbook/blockbook.env)
 #
 # Requires jq on the host for the config comparison.
 #
@@ -141,6 +150,68 @@ cfg_merge() {
         rm -f -- "$tmp"; echo "Error: could not replace $live" >&2; return 1
     fi
     return 0
+}
+
+# ---- Insight bind host preflight -----------------------------------------------------------
+# A coin config with ports.blockbook_insight renders -insight=${BLOCKBOOK_INSIGHT_HOST}:PORT into
+# the package's service unit. systemd fills the variable from EnvironmentFile=-/etc/blockbook/
+# blockbook.env. When it is missing or empty the host part is empty and Blockbook refuses to
+# start, so the install is refused up front, before anything is stopped. Coins without the port
+# are not checked.
+
+insight_env_file=${BLOCKBOOK_ENV_FILE:-/etc/blockbook/blockbook.env}
+
+# insight_env_value FILE: the value of BLOCKBOOK_INSIGHT_HOST the way systemd reads FILE (the
+# last assignment wins, '#' and ';' lines are comments, one pair of matching quotes is removed).
+# Prints nothing when the file or the variable is missing.
+insight_env_value() {
+    [[ -r $1 ]] || return 0
+    awk -v q="'" '
+        /^[ \t]*[#;]/ { next }
+        match($0, /^[ \t]*BLOCKBOOK_INSIGHT_HOST[ \t]*=/) {
+            v = substr($0, RLENGTH + 1)
+            sub(/^[ \t]+/, "", v); sub(/[ \t\r]+$/, "", v)
+            n = length(v); c = substr(v, 1, 1)
+            if (n >= 2 && (c == "\"" || c == q) && substr(v, n, 1) == c) v = substr(v, 2, n - 2)
+            last = v
+        }
+        END { print last }' "$1"
+}
+
+# insight_host_valid VALUE: a dotted IPv4 address that is not the wildcard 0.0.0.0. The listener
+# is meant for the private 10.100.0.x interface, so a wildcard bind is refused.
+insight_host_valid() {
+    local o1 o2 o3 o4
+    [[ $1 =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+    o1=$((10#${BASH_REMATCH[1]})); o2=$((10#${BASH_REMATCH[2]}))
+    o3=$((10#${BASH_REMATCH[3]})); o4=$((10#${BASH_REMATCH[4]}))
+    (( o1 <= 255 && o2 <= 255 && o3 <= 255 && o4 <= 255 )) || return 1
+    (( o1 + o2 + o3 + o4 > 0 ))
+}
+
+# insight_preflight COIN_CONFIG ENV_FILE: succeed when the coin does not enable Insight or the
+# host env file holds a usable BLOCKBOOK_INSIGHT_HOST. Prints the reason and fails otherwise.
+insight_preflight() {
+    local cfg=$1 envfile=$2 port host
+    port=$(jq -r '(.ports.blockbook_insight // 0) | tostring' "$cfg") || { echo "cannot read $cfg" >&2; return 1; }
+    [[ $port =~ ^[0-9]+$ && $port != 0 ]] || return 0
+    host=$(insight_env_value "$envfile")
+    if [[ -z $host ]]; then
+        echo "$cfg enables Insight on port $port, but $envfile does not define a non-empty BLOCKBOOK_INSIGHT_HOST. Add the host's private address, e.g. BLOCKBOOK_INSIGHT_HOST=10.100.0.x, and run again; nothing was stopped or installed." >&2
+        return 1
+    fi
+    if ! insight_host_valid "$host"; then
+        echo "BLOCKBOOK_INSIGHT_HOST='$host' in $envfile is not a usable bind address (need a dotted IPv4 address other than 0.0.0.0); nothing was stopped or installed." >&2
+        return 1
+    fi
+}
+
+# insight_unit_ok DEB PACKAGE: succeed when the package's service unit carries the Insight flag.
+insight_unit_ok() {
+    local unit
+    unit=$(dpkg-deb --fsys-tarfile "$1" | tar -xO --wildcards "*/$2.service" 2>/dev/null) || return 1
+    # shellcheck disable=SC2016 # the literal systemd variable reference is what we look for
+    grep -qF -- ' -insight=${BLOCKBOOK_INSIGHT_HOST}:' <<<"$unit"
 }
 
 # Sourced (by the test): stop here, only the functions above are wanted.
@@ -281,6 +352,15 @@ else
     log "No $config_dist yet; the diff is printed after the install."
 fi
 
+if insight_msg=$(insight_preflight "$config" "$insight_env_file" 2>&1); then
+    jq -e '(.ports.blockbook_insight // 0) > 0' "$config" >/dev/null &&
+        log "Insight: BLOCKBOOK_INSIGHT_HOST=$(insight_env_value "$insight_env_file") in $insight_env_file"
+elif (( check_only )); then
+    log "Warning: $insight_msg"
+else
+    fail "$insight_msg"
+fi
+
 if (( check_only )); then
     log 'Check only: nothing changed.'
     exit 0
@@ -301,6 +381,9 @@ fi
 [[ -f $deb ]] || fail "Package not found: $deb"
 [[ $(dpkg-deb -f "$deb" Package) == "$package" ]] || fail "$deb is not a $package package."
 log "Package: $deb ($(dpkg-deb -f "$deb" Version))"
+if jq -e '(.ports.blockbook_insight // 0) > 0' "$config" >/dev/null && ! insight_unit_ok "$deb" "$package"; then
+    fail "$deb was built without the Insight flag (-insight=\${BLOCKBOOK_INSIGHT_HOST}:PORT in its unit) although $config enables it; rebuild it, nothing was stopped."
+fi
 
 # 4. Backup of everything the package overwrites
 backup=/var/backups/blockbook-deploy/$coin-$stamp

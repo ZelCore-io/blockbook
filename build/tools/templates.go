@@ -690,6 +690,9 @@ func GeneratePackageDefinitions(config *Config, templateDir, outputDir string) e
 	return nil
 }
 
+// insightBindHostEnv is the only environment reference an Insight binding may contain.
+const insightBindHostEnv = "${BLOCKBOOK_INSIGHT_HOST}"
+
 // Validate the opt-in pair before template parsing or package output mutation.
 func (c *Config) validateInsight() error {
 	port, binding := c.Ports.BlockbookInsight, c.Blockbook.InsightBindingTemplate
@@ -709,10 +712,18 @@ func (c *Config) validateInsight() error {
 	}
 	value := out.String()
 	host, renderedPort, err := net.SplitHostPort(value)
-	if err != nil || host == "" || renderedPort != strconv.Itoa(port) || strings.ContainsAny(value, " \t\r\n\"'\\%$") {
+	// The one allowed indirection: systemd expands ${BLOCKBOOK_INSIGHT_HOST} from
+	// EnvironmentFile=/etc/blockbook/blockbook.env when the service starts. Every
+	// other '$' stays rejected, and the host is checked as the exact token only.
+	envHost := host == insightBindHostEnv
+	checked := value
+	if envHost {
+		checked = strings.TrimPrefix(value, insightBindHostEnv)
+	}
+	if err != nil || host == "" || renderedPort != strconv.Itoa(port) || strings.ContainsAny(checked, " \t\r\n\"'\\%$") {
 		return fmt.Errorf("Insight binding must contain an explicit host and configured port")
 	}
-	if net.ParseIP(host) == nil {
+	if !envHost && net.ParseIP(host) == nil {
 		for _, ch := range host {
 			if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '.' || ch == '-') {
 				return fmt.Errorf("invalid Insight bind host")
