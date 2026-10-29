@@ -32,7 +32,7 @@ func (s *InsightServer) tx(route insightRoute) (interface{}, int, error) {
 	if err != nil {
 		return nil, insightNotFoundCode(err, insightTxNotFound(txid)), err
 	}
-	out, err := insightTransaction(tx)
+	out, err := s.transaction(tx)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -123,7 +123,7 @@ func (s *InsightServer) txs(route insightRoute) (interface{}, int, error) {
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
-		item, err := insightTransaction(tx)
+		item, err := s.transaction(tx)
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
 		}

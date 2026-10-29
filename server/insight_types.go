@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -132,6 +133,45 @@ type insightVoutScript struct {
 	IsOwn       bool        `json:"isOwn,omitempty"`
 	Type        string      `json:"type,omitempty"`
 	Asm         string      `json:"asm,omitempty"`
+	// emptyScript marks a synthetic output (Firo's sparkname) whose hex and
+	// asm are written as "" instead of omitted, as stock does.
+	emptyScript bool
+}
+
+// insightVoutScriptEmpty is insightVoutScript with hex and asm always written.
+type insightVoutScriptEmpty struct {
+	Value       json.Number `json:"value"`
+	N           int         `json:"n"`
+	Spent       bool        `json:"spent,omitempty"`
+	SpentTxID   string      `json:"spentTxId,omitempty"`
+	SpentIndex  int         `json:"spentIndex,omitempty"`
+	SpentHeight int         `json:"spentHeight,omitempty"`
+	Hex         string      `json:"hex"`
+	Addresses   []string    `json:"addresses"`
+	IsAddress   bool        `json:"isAddress"`
+	IsOwn       bool        `json:"isOwn,omitempty"`
+	Type        string      `json:"type,omitempty"`
+	Asm         string      `json:"asm"`
+	emptyScript bool
+}
+
+// insightVoutScriptPlain has insightVoutScript's fields without its methods.
+type insightVoutScriptPlain insightVoutScript
+
+// MarshalJSON writes the struct as declared, except that a synthetic output
+// keeps its empty hex and asm.
+func (s insightVoutScript) MarshalJSON() ([]byte, error) {
+	var v interface{} = insightVoutScriptPlain(s)
+	if s.emptyScript {
+		v = insightVoutScriptEmpty(s)
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false) // the outer encoder applies its own setting
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 // insightVout: spentTxId/spentIndex/spentHeight are null for an unspent (or
@@ -178,6 +218,8 @@ type insightTx struct {
 	ChainExtraData         *api.TxChainExtraData `json:"chainExtraData,omitempty"`
 	Vin                    []insightVin          `json:"vin"`
 	Vout                   []insightVout         `json:"vout"`
+	// SparkData is set by the Firo extension on a Spark name registration.
+	SparkData *insightSparkData `json:"sparkData,omitempty"`
 }
 
 // insightSatString renders an amount as a decimal satoshi string. Strings

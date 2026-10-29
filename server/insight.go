@@ -62,6 +62,8 @@ type InsightServer struct {
 	// bodyTimeout overrides insightBodyTimeout (tests).
 	bodyTimeout time.Duration
 	feeCache    insightFeeCache
+	// ext holds the coin's own stock routes and tx labels (EnableExtension).
+	ext insightExtension
 }
 
 func NewInsightServer(binding string, chainType bchain.ChainType, decimals int, worker insightWorker, broadcast func(string) (string, error)) (*InsightServer, error) {
@@ -141,7 +143,7 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Expose-Headers", "Link")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	route, methods, ok := insightMatch(r)
+	route, methods, ok := s.match(r)
 	if !ok {
 		insightError(w, 404, "Route not found")
 		return
@@ -269,6 +271,9 @@ func insightStatusNumber(value string) json.Number {
 
 // handle dispatches an admitted route. Kinds without a handler yet are 501.
 func (s *InsightServer) handle(route insightRoute) (interface{}, int, error) {
+	if s.ext != nil && s.ext.handles(route.kind) {
+		return s.ext.handle(route)
+	}
 	address, _ := insightSingleAddress(route)
 	switch route.kind {
 	case "status":

@@ -89,7 +89,7 @@ a known path with the wrong method is 405 with `Allow`, and unknown paths are 40
 | `GET addrs/A,B/utxo`, `GET addrs/A,B/unspent`, `POST addrs/utxo` | Concatenated unspent rows of at most 100 addresses; `unspent` returns confirmed outputs only |
 | `GET addrs/A,B/balance` | `{balance,unconfirmedBalance}` in satoshis, summed over at most 100 addresses |
 | `GET utils/estimatefee?nbBlocks=2,3` | `{"2":<coins/kB>,...}`; `-1` when the daemon cannot estimate |
-| `GET currency` | `{status:200,data:{rate:<USD>,short:"<TICKER>"}}`; rate 0 without a fiat source |
+| `GET currency` | `{status:200,data:{rate:<USD>,short:"<TICKER>"}}`; rate 0 without a fiat source (Firo: stock shape, see [Firo extension](#firo-extension)) |
 | `GET`/`POST messages/verify` | `{result:<bool>}` from the daemon's `verifymessage` |
 
 For adapter compatibility, a single address can instead be supplied by `?address=...` on `addr`,
@@ -188,6 +188,73 @@ generic 503. Error JSON has shape `{status:"error",error:"..."}`. Only the exact
 All known paths set public CORS headers on every response. Socket.IO and events are not served.
 Stock fields the converter never returned (for example a block's `minedBy`) are not emitted.
 For a ZEC node only the transparent pool is indexed, so shielded asset semantics are not covered.
+
+## Firo extension
+
+A coin whose chain parser implements `InsightExtension() string` (the
+`server.InsightExtensionProvider` interface) gets that named extension on top of the generic
+table; today only `bchain/coins/firo` does (`"firo"`). Other coins gain no route and no label:
+the extension only adds paths the generic router does not know, replaces `currency`, and
+decorates converted transactions. It serves the Firo-specific routes of the stock Firo Insight
+(insight-api-zcoin 0.4.5, the API on FIRO-01 port 3001), each with the firod call the stock
+controller makes through bitcore-node-zcoin:
+
+| Route | firod call | Response (stock shape) | Cache |
+| --- | --- | --- | --- |
+| `GET masternode/listmasternodes` | `evoznodelist` | `{result:<firod object>,error:null,id}` | 30 s |
+| `GET masternode/listmasternodesarray[/:filter]`, `POST masternode/listmasternodesarray` | `evoznodelist` | `{result:[{collateral,txhash,outidx,ip,proTxHash,address,payee,status,lastpaidtime,lastpaidblock,owneraddress,votingaddress,collateraladdress,pubkeyoperator}],error:null,id}` | 30 s |
+| `GET masternode/masternodecount` | `evoznode count` | `{total,enabled}` | 30 s |
+| `GET currency` | none (Blockbook fiat rates) | `{status:200,data:{zcoin_usd,btc_usd:0,btc_zcoin:0,bitstamp}}` | fiat layer |
+| `GET ext/getmoneysupply` | `gettotalsupply` | `{total}` (coins) | 60 s |
+| `GET zerocoin/gettotalzeromint`, `zerocoin/gettotalzerospend`, `sigma/gettotalsigmamint`, `sigma/gettotalsigmaspend` | `getaddressbalance` of the pseudo-address `Zeromint`/`Zerospend`/`Sigmamint`/`Sigmaspend` | `{total}` (spends positive, as stock) | 60 s |
+| `GET zerocoin/getrealsupply`, `sigma/getrealsupply` | `gettotalsupply` and the two balances | `{total}` = supply - mints + spends, in stock's float order | 60 s |
+| `GET zerocoin/getzerominttxs`, `zerocoin/getzerospendtxs` | `getaddressbalance` and `getaddresstxids` of the pseudo-address | `{balance,txs:[txid]}` | 60 s |
+| `GET sparknames` | `getsparknames` | the firod array (`[]` if not an array) | 60 s |
+
+The masternode filter is stock's: `filter` from the body (JSON or form), else the path, else the
+query. A comma-separated list matches each item; an item with `-` is an exact
+`txhash-outidx`, anything else a substring of the entry's JSON; results keep list order per
+item with duplicates dropped. A filter is capped at 4 KiB and 100 distinct items (repeated
+items count once); a larger one, in any of the three forms, is a 400 JSON error. Each entry's
+JSON is built once per cached list, and the scan stops when the client goes away. On the recorded mainnet list (7287 nodes) the unfiltered array is
+byte-identical to stock's apart from `id`, which is the listener's own counter (stock's is a
+random JSON-RPC id). Caches are per value and single-flight: an expired value is reloaded by
+one firod call whose result or error every concurrent request shares, and a request whose client
+goes away stops waiting (the load still fills the cache). When a reload fails the last good value
+is served (stale-on-error); with no good value the error is cached for 5 s, so a hung firod is not
+called again by every queued request. A firod error is a generic
+`{"status":"error","error":"Backend request failed"}` 500 (stock answered with the raw error or
+crashed the request); the routes need the daemon RPC and are 501 without it.
+
+`currency` reads the USD rate from Blockbook's fiat layer (`zcoin_usd`, copied to `bitstamp`
+as stock does); stock never fills `btc_usd` and `btc_zcoin`, so they stay 0. `configs/coins/firo.json`
+sets the ZelCore rates service with CoinGecko id `zcoin` (Firo's id there). The rates service's
+Blockbook endpoint answered `coin not found` for `zcoin` when this was written, so the rate is 0
+until `zcoin` is enabled there. Stock's own CoinGecko fetch also returns 0 today.
+
+`POST znodes/listznodesarray` (an older insight-api-zcoin route, still about 3.4k calls a year) is
+not aliased: stock 0.4.5 answers 404 and so does this listener, so callers see no change. Not
+served (Postgres-backed and broken on stock): `richlist`, `sigmastatus`, `lelantusstatus`.
+
+Transactions get stock's labels, keyed by the script's first opcode:
+
+| Script | Label |
+| --- | --- |
+| input `OP_ZEROCOINSPEND` / `OP_SIGMASPEND` / `OP_LELANTUSJOINSPLIT(PAYLOAD)` / `OP_SPARKSPEND` | `addr` `Zerospend` / `Sigmaspend` / `Lelantusjsplit` / `Sparkspend` |
+| input `OP_ZEROCOINTOSIGMAREMINT` | `addr` `Remint`; `value`/`valueSat` = the tx's output value |
+| output `OP_ZEROCOINMINT` / `OP_SIGMAMINT` / `OP_LELANTUSMINT` / `OP_LELANTUSJMINT` / `OP_SPARKMINT` / `OP_SPARKSMINT` | `type` `zerocoinmint` / `sigmamint` / `lelantusmint` / `lelantusjmint` / `sparkmint` / `sparksmint`; `addresses` `[Zeromint]` / `[Sigmamint]` / `[Lelantusmint]` / `[Lelantusjmint]` / `[Sparkmint]` / `[Sparksmint]` |
+
+The labels replace the parser's own address labels (for example `LelantusMint`) in Insight output
+only; the index and the V1/V2 APIs are unchanged. For a Spark spend, `getsparknametxdetails`
+(a name, or firod's "Invalid spark name tx hash", is cached 10 minutes per txid, up to 4096
+entries in two generations; any other error, such as "Unknown transaction." for a tx firod
+cannot find yet, a transport failure or warm-up, is not cached) decides whether it registers a Spark name; if so
+the tx gets stock's `sparkData` `{name,address,validUntil[,additionalInfo]}` and a first output
+`{n:0,value:0,type:"sparkname",addresses:["Sparkname"]}` (its `scriptPubKey` carries `hex:""`
+and `asm:""`, as stock's), and the outputs are renumbered, as stock does. So on a Spark name
+registration tx the tx-detail `vout` numbering is shifted by one from the chain's, exactly as on
+stock: a consumer must take outpoints (txid and vout index) from the `utxo` route, not from the
+tx detail. Stock makes that call for every transaction; here only Spark spends trigger it.
 
 ## Readiness and shutdown
 

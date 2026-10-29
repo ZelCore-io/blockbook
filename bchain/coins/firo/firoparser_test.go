@@ -1004,3 +1004,9 @@ func TestDecodeTransaction(t *testing.T) {
 		})
 	}
 }
+
+func TestInsightExtension(t *testing.T) {
+	if got := NewFiroParser(GetChainParams("main"), &btc.Configuration{}).InsightExtension(); got != "firo" {
+		t.Errorf("InsightExtension() = %q, want firo", got)
+	}
+}

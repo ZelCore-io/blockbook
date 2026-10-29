@@ -1,0 +1,147 @@
+package server
+
+import (
+	"context"
+	"fmt"
+	"runtime/debug"
+	"sync"
+	"time"
+
+	"github.com/golang/glog"
+	"github.com/trezor/blockbook/api"
+)
+
+// insightExtension adds the routes and transaction fields of one coin's stock
+// Insight API. Only a coin whose chain parser names an extension gets them, so
+// other coins keep the generic route table unchanged.
+type insightExtension interface {
+	// match maps path segments (after the api prefix) that the generic
+	// router does not know to a kind, its path argument and allowed methods.
+	match(parts []string) (kind, arg string, methods []string, ok bool)
+	// handles reports whether the extension serves kind instead of the
+	// generic handler.
+	handles(kind string) bool
+	// handle serves an admitted route of a kind it handles.
+	handle(route insightRoute) (interface{}, int, error)
+	// decorateTx adds the coin's labels to a converted transaction.
+	decorateTx(out *insightTx, tx *api.Tx)
+}
+
+// InsightExtensionProvider is implemented by chain parsers whose stock Insight
+// API has coin-specific routes. InsightExtension names the extension.
+type InsightExtensionProvider interface {
+	InsightExtension() string
+}
+
+var insightExtensions = map[string]func(*InsightServer) insightExtension{
+	"firo": newInsightFiro,
+}
+
+// EnableExtension turns on a coin's extension by name. Call it after
+// SetBackend and before Start.
+func (s *InsightServer) EnableExtension(name string) error {
+	ctor, ok := insightExtensions[name]
+	if !ok {
+		return fmt.Errorf("unknown Insight extension %q", name)
+	}
+	s.ext = ctor(s)
+	return nil
+}
+
+// transaction converts tx and applies the extension's labels.
+func (s *InsightServer) transaction(tx *api.Tx) (*insightTx, error) {
+	out, err := insightTransaction(tx)
+	if err == nil && s.ext != nil {
+		s.ext.decorateTx(out, tx)
+	}
+	return out, err
+}
+
+// insightCacheErrTTL is how long a failed load is remembered, so a hung or
+// failing daemon is not called again by every queued request.
+const insightCacheErrTTL = 5 * time.Second
+
+// insightCached holds one value for ttl. Loads are single-flight: one load runs
+// at a time, outside the mutex, and every caller that arrives meanwhile shares
+// its result or error. When a refresh fails the last good value is served
+// (stale-on-error); with no good value the error is served for
+// insightCacheErrTTL. A caller whose context ends stops waiting; the load
+// carries on and fills the cache for the next one.
+type insightCached struct {
+	mu    sync.Mutex
+	at    time.Time
+	value interface{}
+	err   error
+	errAt time.Time
+	call  *insightCacheCall
+}
+
+type insightCacheCall struct {
+	done  chan struct{}
+	value interface{}
+	err   error
+}
+
+func (c *insightCached) get(ctx context.Context, ttl time.Duration, load func() (interface{}, error)) (interface{}, error) {
+	c.mu.Lock()
+	now := insightNow()
+	if c.value != nil && now.Sub(c.at) < ttl {
+		v := c.value
+		c.mu.Unlock()
+		return v, nil
+	}
+	if c.err != nil && now.Sub(c.errAt) < insightCacheErrTTL {
+		v, err := c.value, c.err
+		c.mu.Unlock()
+		if v != nil {
+			return v, nil
+		}
+		return nil, err
+	}
+	call := c.call
+	if call == nil {
+		call = &insightCacheCall{done: make(chan struct{})}
+		c.call = call
+		go c.run(call, load)
+	}
+	c.mu.Unlock()
+	var cancelled <-chan struct{}
+	if ctx != nil {
+		cancelled = ctx.Done()
+	}
+	select {
+	case <-call.done:
+		return call.value, call.err
+	case <-cancelled:
+		return nil, ctx.Err()
+	}
+}
+
+func (c *insightCached) run(call *insightCacheCall, load func() (interface{}, error)) {
+	value, err := c.load(load)
+	c.mu.Lock()
+	if err == nil {
+		c.value, c.at, c.err = value, insightNow(), nil
+	} else {
+		c.err, c.errAt = err, insightNow()
+		if c.value != nil {
+			value, err = c.value, nil
+		}
+	}
+	call.value, call.err = value, err
+	c.call = nil
+	c.mu.Unlock()
+	close(call.done)
+}
+
+// load runs the loader in the background goroutine, where a panic would end
+// the process instead of one request; it becomes the waiters' error.
+func (c *insightCached) load(load func() (interface{}, error)) (value interface{}, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			glog.Error("insight: cache loader panic: ", r, "\n", string(debug.Stack()))
+			value, err = nil, fmt.Errorf("internal error")
+		}
+	}()
+	return load()
+}
