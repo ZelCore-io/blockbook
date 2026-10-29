@@ -9,7 +9,8 @@
     "backend_rpc": 8050,
     "backend_message_queue": 38350,
     "blockbook_internal": 9050,
-    "blockbook_public": 9150
+    "blockbook_public": 9150,
+    "blockbook_insight": 9876
   },
   "ipc": {
     "rpc_url_template": "http://127.0.0.1:{{.Ports.BackendRPC}}",

@@ -497,6 +497,29 @@ func TestGetAddressesFromAddrDescForMint(t *testing.T) {
 			want2:   false,
 			wantErr: false,
 		},
+		{
+			// truncated from output 0 of mainnet tx 84a08f7d4a1c57885a8c4b0e7c61682b292e6b045fe328b1e41d79bff0262639
+			name:    "OP_SPARKMINT hex",
+			args:    args{script: "d100c6065af7f73d8998e4715b153f81b42f4b1e"},
+			want:    []string{"SparkMint"},
+			want2:   false,
+			wantErr: false,
+		},
+		{
+			// truncated from output 1 of mainnet tx 526e7a05df8f909ebcb5a5d222c1ae8474df50fe6b793c3f47cda1e8027a0ea4
+			name:    "OP_SPARKSMINT hex",
+			args:    args{script: "d2010961475a040137dbff6f1500209316199aa4"},
+			want:    []string{"SparkSMint"},
+			want2:   false,
+			wantErr: false,
+		},
+		{
+			name:    "OP_SPARKSPEND hex",
+			args:    args{script: "d3"},
+			want:    []string{"SparkSpend"},
+			want2:   false,
+			wantErr: false,
+		},
 	}
 	parser := NewFiroParser(GetChainParams("main"), &btc.Configuration{})
 
