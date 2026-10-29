@@ -20,8 +20,10 @@ const (
 	insightBlocksDefaultLimit = 200 // stock BLOCK_LIMIT
 	insightBlocksMaxLimit     = 200
 	insightRPCNotFound        = -5
-	insightTipRetries         = 3
-	insightBlockCacheSize     = 32
+	// insightRPCInvalidParam is what Zebra answers getblock for an unknown hash.
+	insightRPCInvalidParam = -8
+	insightTipRetries      = 3
+	insightBlockCacheSize  = 32
 	// insightBlockCacheBytes caps the cached txid lists in total, so a run of
 	// very large blocks cannot grow the cache by entry count alone. A block
 	// whose own cost exceeds the cap is not cached.
@@ -144,10 +146,25 @@ func (s *InsightServer) blockIndex(route insightRoute) (interface{}, int, error)
 	return nil, http.StatusServiceUnavailable, errInsightTipMoved
 }
 
+// insightDigitsOnly reports a 64-character argument with no a-f letter. The
+// worker reads such a string as a block height (64 zeros is the genesis
+// block), and no real block hash has this form in practice.
+func insightDigitsOnly(hash string) bool {
+	for i := 0; i < len(hash); i++ {
+		if hash[i] < '0' || hash[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *InsightServer) rawBlock(route insightRoute) (interface{}, int, error) {
 	hash, ok := insightHash64(route.arg)
 	if !ok {
 		return nil, http.StatusBadRequest, errors.New("invalid block hash")
+	}
+	if insightDigitsOnly(hash) {
+		return nil, http.StatusNotFound, errors.New(insightBlockNotFound)
 	}
 	raw, err := s.worker.GetBlockRaw(hash)
 	if err == nil && raw != nil {
@@ -166,7 +183,7 @@ func (s *InsightServer) rawBlock(route insightRoute) (interface{}, int, error) {
 	var rawHex string
 	if rpcErr := s.rpc("getblock", []interface{}{hash, 0}, &rawHex); rpcErr != nil {
 		var re *bchain.RPCError
-		if errors.As(rpcErr, &re) && re.Code == insightRPCNotFound {
+		if errors.As(rpcErr, &re) && (re.Code == insightRPCNotFound || re.Code == insightRPCInvalidParam) {
 			return nil, http.StatusNotFound, rpcErr
 		}
 		return nil, http.StatusInternalServerError, rpcErr
@@ -265,6 +282,9 @@ func (s *InsightServer) loadBlock(hash string) (*api.Block, *insightBlockData, e
 	if head == nil {
 		return nil, nil, errors.New("missing block")
 	}
+	if !strings.EqualFold(head.Hash, hash) {
+		return nil, nil, api.NewAPIError(insightBlockNotFound, true)
+	}
 	if cached != nil && len(cached.Txids) == head.TxCount {
 		head.Transactions = nil
 		return head, cached, nil
@@ -317,6 +337,9 @@ func (s *InsightServer) block(route insightRoute) (interface{}, int, error) {
 	hash, ok := insightHash64(route.arg)
 	if !ok {
 		return nil, http.StatusBadRequest, errors.New("invalid block hash")
+	}
+	if insightDigitsOnly(hash) {
+		return nil, http.StatusNotFound, errors.New(insightBlockNotFound)
 	}
 	b, data, err := s.loadBlock(hash)
 	if err != nil {
