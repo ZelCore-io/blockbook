@@ -54,6 +54,10 @@ type insightFake struct {
 	spending   []bool
 	txErr      map[string]error
 	clampPages bool
+	// pages records the page of every GetAddress call; pageHook rewrites
+	// the txids of a history page (e.g. to inject a duplicate).
+	pages    []int
+	pageHook func(page int, ids []string) []string
 }
 
 func (f *insightFake) GetSystemInfo(bool) (*api.SystemInfo, error) {
@@ -66,10 +70,38 @@ func (f *insightFake) GetSystemInfo(bool) (*api.SystemInfo, error) {
 func (f *insightFake) GetAddress(_ string, page, size int, d api.AccountDetails, filter *api.AddressFilter, _ string) (*api.Address, error) {
 	f.detail = d
 	f.prefix = size
-	if page != 1 || filter == nil || filter.Vout != api.AddressFilterVoutOff {
+	if page < 1 || size < 1 || filter == nil || filter.Vout != api.AddressFilterVoutOff {
 		panic("wrong worker query")
 	}
-	return f.address, f.err
+	f.pages = append(f.pages, page)
+	if f.err != nil || f.address == nil {
+		return f.address, f.err
+	}
+	out := *f.address
+	out.Txids = nil
+	if d < api.AccountDetailsTxidHistory {
+		return &out, nil
+	}
+	// address.Txids is the merged pending+confirmed sequence; page it like
+	// computeAccountPaging, which clamps a page past the end to the last page.
+	ids := f.address.Txids
+	last := 1
+	if len(ids) > 0 {
+		last = (len(ids)-1)/size + 1
+	}
+	if page > last {
+		page = last
+	}
+	lo, hi := (page-1)*size, page*size
+	if hi > len(ids) {
+		hi = len(ids)
+	}
+	out.Txids = append([]string{}, ids[lo:hi]...)
+	if f.pageHook != nil {
+		out.Txids = f.pageHook(page, out.Txids)
+	}
+	out.Paging = api.Paging{Page: page, TotalPages: last, ItemsOnPage: size}
+	return &out, nil
 }
 func (f *insightFake) GetAddressUtxo(_ string, confirmed bool) (api.Utxos, error) {
 	if confirmed {
@@ -183,11 +215,11 @@ func TestInsightContracts(t *testing.T) {
 					t.Errorf("missing %s in %s", v, w.Body)
 				}
 			}
-			if tc.name == "history" && (!reflect.DeepEqual(f.fetched, []string{"a", "b"}) || f.prefix != 3 || f.detail != api.AccountDetailsTxidHistory) {
+			if tc.name == "history" && (!reflect.DeepEqual(f.fetched, []string{"a", "b"}) || f.prefix != 1000 || f.detail != api.AccountDetailsTxidHistory) {
 				t.Fatalf("query/enrichment: %+v", f)
 			}
-			if tc.name == "summary" && f.detail != api.AccountDetailsTokens {
-				t.Fatal("pending balance must be requested")
+			if tc.name == "summary" && f.detail != api.AccountDetailsTxidHistory {
+				t.Fatal("summary and its transactions list must come from one history query")
 			}
 		})
 	}
@@ -201,6 +233,10 @@ func TestInsightInvalidRequests(t *testing.T) {
 		{"POST", "/api/sync", "", 405}, {"OPTIONS", "/insight-api/status", "", 204},
 		{"GET", "/api/addr", "", 400}, {"GET", "/api/addrs/A,B/txs", "", 400},
 		{"GET", "/api/addrs/A/txs?from=-1", "", 400}, {"GET", "/api/addrs/A/txs?to=1001", "", 400},
+		{"GET", "/api/addrs/A/txs?to=1000", "", 200}, {"GET", "/api/addrs/A/txs?from=2000&to=3000", "", 200}, {"GET", "/api/addrs/A/txs//5", "", 400}, {"GET", "/api/addrs/A/txs/0/", "", 200},
+		{"GET", "/api/addrs/A/txs/0//", "", 400}, {"GET", "/api/addr//balance", "", 400}, {"GET", "/api/txs?address=", "", 400},
+		{"GET", "/api/txs?address=A,B", "", 400}, {"GET", "/api/addr/A?from=x", "", 400}, {"GET", "/api/addr/A?from=0&to=1000", "", 200},
+		{"GET", "/api/addr/A?from=0&to=1001", "", 400},
 		{"GET", "/api/addrs/A/txs?from=2&to=1", "", 400}, {"GET", "/api/addrs/A/txs?from=1.5", "", 400},
 		{"POST", "/api/tx/send", `{}`, 400}, {"POST", "/api/tx/send", `{"rawtx":1}`, 400},
 		{"POST", "/api/tx/send", `{"rawtx":"a"}`, 400}, {"POST", "/api/tx/send", `{"rawtx":"gg"}`, 400},
@@ -302,27 +338,31 @@ func TestInsightInvalidAddress(t *testing.T) {
 		}
 	}
 }
+
+// Offsets index the worker's paged sequence, so a window that holds the same
+// txid twice returns it once and later windows keep their positions.
 func TestInsightHistoryDedup(t *testing.T) {
 	f := insightFixture()
 	f.address.Txids = []string{"pending", "a", "a", "b", "c"}
-	w := insightRequest(insightTestServer(t, f), "GET", "/api/addrs/A/txs?from=1&to=3", "")
-	if w.Code != 200 || !reflect.DeepEqual(f.fetched, []string{"a", "b"}) {
+	w := insightRequest(insightTestServer(t, f), "GET", "/api/addrs/A/txs?from=1&to=4", "")
+	if w.Code != 200 || !reflect.DeepEqual(f.fetched, []string{"a", "b"}) || !strings.Contains(w.Body.String(), `"from":1,"to":3,`) {
 		t.Fatal(w, f.fetched)
 	}
 }
 
 func TestInsightHistoryWindows(t *testing.T) {
 	for _, tc := range []struct {
-		query            string
-		from, to, prefix int
-		ids              []string
+		query    string
+		from, to int
+		detail   api.AccountDetails
+		ids      []string
 	}{
-		{"", 0, 4, 50, []string{"pending", "a", "b", "c"}},
-		{"?from=0&to=1", 0, 1, 1, []string{"pending"}},
-		{"?from=1&to=2", 1, 2, 2, []string{"a"}},
-		{"?from=2&to=4", 2, 4, 4, []string{"b", "c"}},
-		{"?from=0&to=0", 0, 0, 1, nil},
-		{"?from=1000&to=1000", 1000, 1000, 1000, nil},
+		{"", 0, 4, api.AccountDetailsTxidHistory, []string{"pending", "a", "b", "c"}},
+		{"?from=0&to=1", 0, 1, api.AccountDetailsTxidHistory, []string{"pending"}},
+		{"?from=1&to=2", 1, 2, api.AccountDetailsTxidHistory, []string{"a"}},
+		{"?from=2&to=4", 2, 4, api.AccountDetailsTxidHistory, []string{"b", "c"}},
+		{"?from=0&to=0", 0, 0, api.AccountDetailsTokens, nil},
+		{"?from=1000&to=1000", 1000, 1000, api.AccountDetailsTokens, nil},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
 			f := insightFixture()
@@ -334,8 +374,10 @@ func TestInsightHistoryWindows(t *testing.T) {
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil {
 				t.Fatal(w)
 			}
-			if out.TotalItems != 4 || out.From != tc.from || out.To != tc.to || f.prefix != tc.prefix || !reflect.DeepEqual(f.fetched, tc.ids) {
-				t.Fatalf("response=%s prefix=%d enriched=%v", w.Body, f.prefix, f.fetched)
+			// A window inside the first worker page reads only page 1; an
+			// empty window reads the totals alone.
+			if out.TotalItems != 4 || out.From != tc.from || out.To != tc.to || f.detail != tc.detail || !reflect.DeepEqual(f.pages, []int{1}) || !reflect.DeepEqual(f.fetched, tc.ids) {
+				t.Fatalf("response=%s detail=%d pages=%v enriched=%v", w.Body, f.detail, f.pages, f.fetched)
 			}
 		})
 	}

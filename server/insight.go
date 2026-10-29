@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -230,30 +229,11 @@ func (s *InsightServer) handle(route insightRoute) (interface{}, int, error) {
 	case "version":
 		return insightVersion(), 0, nil
 	case "summary":
-		address, err := s.worker.GetAddress(address, 1, 1, api.AccountDetailsTokens, &api.AddressFilter{Vout: api.AddressFilterVoutOff}, "")
-		if err != nil {
-			return nil, insightAddressErrorCode(err), err
-		}
-		out, err := insightAddress(address)
-		return out, 500, err
+		return s.summary(route, address)
+	case "addrvalue":
+		return s.addrValue(route, address)
 	case "utxo":
-		rows, err := s.worker.GetAddressUtxo(address, false)
-		if err != nil {
-			return nil, insightAddressErrorCode(err), err
-		}
-		out := make([]insightUtxo, 0, len(rows))
-		for _, u := range rows {
-			amount, sat, err := insightMoney(u.AmountSat)
-			if err != nil {
-				return nil, 500, err
-			}
-			address := u.Address
-			if address == "" {
-				address = route.addresses[0]
-			}
-			out = append(out, insightUtxo{address, u.Txid, u.Vout, amount, sat, u.Height, u.Confirmations, u.Coinbase})
-		}
-		return out, 0, nil
+		return s.utxo(route, address)
 	case "history":
 		return s.history(route, address)
 	case "send":
@@ -266,76 +246,6 @@ func (s *InsightServer) handle(route insightRoute) (interface{}, int, error) {
 		return s.txs(route)
 	}
 	return nil, http.StatusNotImplemented, errors.New("route not implemented")
-}
-
-func insightOffset(value string, fallback int) (int, error) {
-	if value == "" {
-		return fallback, nil
-	}
-	for _, ch := range value {
-		if ch < '0' || ch > '9' {
-			return 0, errors.New("invalid offset")
-		}
-	}
-	n, err := strconv.Atoi(value)
-	if err != nil || n > 1000 {
-		return 0, fmt.Errorf("offset exceeds compatibility bound")
-	}
-	return n, nil
-}
-func (s *InsightServer) history(route insightRoute, addr string) (interface{}, int, error) {
-	from, err := insightOffset(route.from, 0)
-	if err != nil {
-		return nil, 400, err
-	}
-	to, err := insightOffset(route.to, 50)
-	if err != nil {
-		return nil, 400, err
-	}
-	if from > to {
-		return nil, 400, errors.New("invalid window")
-	}
-	prefix := to
-	if prefix == 0 {
-		prefix = 1
-	}
-	address, err := s.worker.GetAddress(addr, 1, prefix, api.AccountDetailsTxidHistory, &api.AddressFilter{Vout: api.AddressFilterVoutOff}, "")
-	if err != nil {
-		return nil, insightAddressErrorCode(err), err
-	}
-	if address == nil {
-		return nil, 500, errors.New("missing address")
-	}
-	ids := make([]string, 0, len(address.Txids))
-	seen := make(map[string]struct{}, len(address.Txids))
-	for _, id := range address.Txids {
-		if _, ok := seen[id]; !ok {
-			seen[id] = struct{}{}
-			ids = append(ids, id)
-		}
-	}
-	items := make([]*insightTx, 0)
-	end := to
-	if end > len(ids) {
-		end = len(ids)
-	}
-	for i := from; i < end; i++ {
-		tx, err := s.worker.GetTransaction(ids[i], false, false)
-		if err != nil {
-			return nil, 500, err
-		}
-		item, err := insightTransaction(tx)
-		if err != nil {
-			return nil, 500, err
-		}
-		items = append(items, item)
-	}
-	return struct {
-		TotalItems int          `json:"totalItems"`
-		From       int          `json:"from"`
-		To         int          `json:"to"`
-		Items      []*insightTx `json:"items"`
-	}{address.Txs + address.UnconfirmedTxs, from, from + len(items), items}, 0, nil
 }
 
 func insightAddressErrorCode(err error) int {

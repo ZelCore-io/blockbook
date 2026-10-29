@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/trezor/blockbook/bchain"
 )
@@ -75,12 +74,12 @@ func (s *InsightServer) rawTx(route insightRoute) (interface{}, int, error) {
 
 // txs serves txs?block=<hash>&pageNum=N: stock pages of 10, pageNum 0-based,
 // pagesTotal = ceil(TxCount/10). A page past the end has no txs.
-// txs?address= is the history route (Task 4); neither selector is 400.
+// txs?address= is served by txsByAddress; neither selector is 400.
 func (s *InsightServer) txs(route insightRoute) (interface{}, int, error) {
 	_, hasBlock := route.query["block"]
 	if !hasBlock {
-		if route.query.Get("address") != "" {
-			return nil, http.StatusNotImplemented, errors.New("txs by address not implemented")
+		if _, hasAddress := route.query["address"]; hasAddress {
+			return s.txsByAddress(route)
 		}
 		return nil, http.StatusBadRequest, errors.New("block or address required")
 	}
@@ -88,20 +87,9 @@ func (s *InsightServer) txs(route insightRoute) (interface{}, int, error) {
 	if !ok {
 		return nil, http.StatusBadRequest, errors.New("invalid block hash")
 	}
-	pageNum := 0
-	if values, ok := route.query["pageNum"]; ok {
-		value := ""
-		if len(values) > 0 {
-			value = values[0]
-		}
-		if !insightDigits(value) {
-			return nil, http.StatusBadRequest, errors.New("invalid pageNum")
-		}
-		n, err := strconv.Atoi(value)
-		if err != nil || n > insightMaxPageNum {
-			n = insightMaxPageNum
-		}
-		pageNum = n
+	pageNum, err := insightPageNum(route)
+	if err != nil {
+		return nil, http.StatusBadRequest, err
 	}
 	block, err := s.worker.GetBlock(hash, pageNum+1, insightTxsPageSize)
 	if err != nil {
