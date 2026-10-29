@@ -28,6 +28,8 @@ type insightWorker interface {
 	GetAddressUtxo(string, bool) (api.Utxos, error)
 	GetTransaction(string, bool, bool) (*api.Tx, error)
 	GetBlocks(page int, blocksOnPage int) (*api.Blocks, error)
+	GetBlock(bid string, page int, txsOnPage int) (*api.Block, error)
+	GetBlockRaw(bid string) (*api.BlockRaw, error)
 }
 
 // InsightServer is the optional eight-decimal Bitcoin compatibility listener.
@@ -215,6 +217,14 @@ func (s *InsightServer) handle(route insightRoute) (interface{}, int, error) {
 		return s.status(route)
 	case "sync":
 		return s.sync()
+	case "blocks":
+		return s.blocks(route)
+	case "block":
+		return s.block(route)
+	case "rawblock":
+		return s.rawBlock(route)
+	case "blockindex":
+		return s.blockIndex(route)
 	case "peer":
 		return insightPeer(), 0, nil
 	case "version":

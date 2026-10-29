@@ -34,6 +34,15 @@ type insightFake struct {
 	blocks  *api.Blocks
 	// blocksPage and blocksSize record the last GetBlocks call.
 	blocksPage, blocksSize int
+	// chain, when set, backs GetBlocks like the real index: page p of one-row
+	// pages is height best-(p-1). blocksCalls counts those calls.
+	chain       []db.BlockInfo
+	blocksCalls int
+	// blockByHash backs GetBlock (paged like the worker); rawBlock and rawErr
+	// back GetBlockRaw.
+	blockByHash map[string]*api.Block
+	rawBlock    *api.BlockRaw
+	rawErr      error
 }
 
 func (f *insightFake) GetSystemInfo(bool) (*api.SystemInfo, error) {
@@ -63,7 +72,35 @@ func (f *insightFake) GetTransaction(id string, _ bool, _ bool) (*api.Tx, error)
 }
 func (f *insightFake) GetBlocks(page int, size int) (*api.Blocks, error) {
 	f.blocksPage, f.blocksSize = page, size
+	f.blocksCalls++
+	if f.chain != nil {
+		out := &api.Blocks{}
+		for i := (page - 1) * size; i < page*size && i < len(f.chain); i++ {
+			out.Blocks = append(out.Blocks, f.chain[len(f.chain)-1-i])
+		}
+		return out, f.err
+	}
 	return f.blocks, f.err
+}
+func (f *insightFake) GetBlock(bid string, page int, size int) (*api.Block, error) {
+	b := f.blockByHash[bid]
+	if b == nil {
+		return nil, api.NewAPIError("Block not found", true)
+	}
+	out := *b
+	from, to := (page-1)*size, page*size
+	if to > len(b.Transactions) {
+		to = len(b.Transactions)
+	}
+	out.Transactions = nil
+	if from < to {
+		out.Transactions = b.Transactions[from:to]
+	}
+	out.Page, out.TotalPages = page, (b.TxCount+size-1)/size
+	return &out, f.err
+}
+func (f *insightFake) GetBlockRaw(bid string) (*api.BlockRaw, error) {
+	return f.rawBlock, f.rawErr
 }
 func insightAmount(n int64) *api.Amount { return (*api.Amount)(big.NewInt(n)) }
 func insightFixture() *insightFake {

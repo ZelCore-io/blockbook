@@ -156,3 +156,62 @@ func insightTransaction(tx *api.Tx) (*insightTx, error) {
 	}
 	return out, nil
 }
+
+// insightBlock is the stock block/:hash shape. chainwork, previousblockhash
+// and nextblockhash are omitted when unknown (no RPC, genesis, tip).
+type insightBlock struct {
+	Hash          string      `json:"hash"`
+	Size          int         `json:"size"`
+	Height        uint32      `json:"height"`
+	Version       interface{} `json:"version"`
+	MerkleRoot    string      `json:"merkleroot"`
+	Tx            []string    `json:"tx"`
+	Time          int64       `json:"time"`
+	Nonce         interface{} `json:"nonce"`
+	Bits          string      `json:"bits"`
+	Difficulty    interface{} `json:"difficulty"`
+	Chainwork     string      `json:"chainwork,omitempty"`
+	Confirmations int         `json:"confirmations"`
+	Prev          string      `json:"previousblockhash,omitempty"`
+	Next          string      `json:"nextblockhash,omitempty"`
+	Reward        json.Number `json:"reward"`
+	IsMainChain   bool        `json:"isMainChain"`
+	PoolInfo      struct{}    `json:"poolInfo"`
+}
+
+// insightBlockRow is one row of the blocks-by-date list. Stock's per-row
+// difficulty is omitted: the block index does not store it.
+type insightBlockRow struct {
+	Height      uint32   `json:"height"`
+	Size        uint32   `json:"size"`
+	Hash        string   `json:"hash"`
+	Time        int64    `json:"time"`
+	TxLength    uint32   `json:"txlength"`
+	PoolInfo    struct{} `json:"poolInfo"`
+	IsMainChain bool     `json:"isMainChain"`
+}
+
+type insightBlockPagination struct {
+	Next      string `json:"next"`
+	Prev      string `json:"prev"`
+	CurrentTs int64  `json:"currentTs"`
+	Current   string `json:"current"`
+	IsToday   bool   `json:"isToday"`
+	More      bool   `json:"more"`
+	MoreTs    *int64 `json:"moreTs,omitempty"`
+}
+
+type insightBlockList struct {
+	Blocks     []insightBlockRow      `json:"blocks"`
+	Length     int                    `json:"length"`
+	Pagination insightBlockPagination `json:"pagination"`
+}
+
+// insightNumberOrString renders a numeric daemon string as a JSON number, as
+// stock does for nonce and difficulty, and keeps anything else as a string.
+func insightNumberOrString(value string) interface{} {
+	if value != "" && (value[0] == '-' || value[0] >= '0' && value[0] <= '9') && json.Valid([]byte(value)) {
+		return json.Number(value)
+	}
+	return value
+}
