@@ -19,6 +19,9 @@ type Totals struct {
 	Changed   int `json:"changed"`
 	Extra     int `json:"extra"`
 	Expected  int `json:"expected"`
+	// RefBroken counts cases that must succeed where the reference answered non-2xx.
+	RefBroken int `json:"refBroken"`
+	OkCases   int `json:"okCases"`
 }
 
 // Report is the machine-readable output.
@@ -44,6 +47,12 @@ func buildReport(cfg *config, results []Result, loads []LoadResult, started time
 	}
 	rep.Totals.Paths = len(results)
 	for _, r := range results {
+		if r.Spec.Expect == "ok" || r.Spec.Expect == "new" || r.Spec.Expect == "" {
+			rep.Totals.OkCases++
+			if r.RefStatus/100 != 2 && r.Spec.Expect != "new" && !cfg.refLacks(r.Spec.Path) {
+				rep.Totals.RefBroken++
+			}
+		}
 		fail, any := false, false
 		for _, f := range r.Findings {
 			any = true
@@ -104,6 +113,9 @@ func (rep *Report) Summary() string {
 	verdict := "PASS"
 	if t.Failing > 0 {
 		verdict = "FAIL"
+	}
+	if t.OkCases > 0 && t.RefBroken*2 > t.OkCases {
+		fmt.Fprintf(&b, "**REFERENCE BROKEN**: the reference answered non-2xx on %d of %d cases that must succeed. Check -ref (host, port, prefix); this run proves nothing.\n\n", t.RefBroken, t.OkCases)
 	}
 	fmt.Fprintf(&b, "**%s**: %d paths, %d identical, %d with missing/changed (%d missing, %d changed), %d extra, %d expected\n\n",
 		verdict, t.Paths, t.Identical, t.Failing, t.Missing, t.Changed, t.Extra, t.Expected)

@@ -39,8 +39,9 @@ func (p pathSpec) String() string {
 // loadPaths reads one request per line: `GET path` or `POST path <json>`.
 // Blank lines and lines starting with # are skipped, except `#! ok|error|any`,
 // which sets the status class (default ok) for the lines that follow:
-// ok must answer 2xx, error must answer 4xx (malformed input), any only needs
-// both sides to agree. A 5xx fails in every class.
+// ok must answer 2xx on both sides, new is ok for a route the reference lacks
+// (a ref non-2xx is then reported as extra), error must answer 4xx (malformed
+// input), any only needs both sides to agree. A 5xx fails in every class.
 func loadPaths(r io.Reader) ([]pathSpec, error) {
 	var out []pathSpec
 	sc := bufio.NewScanner(r)
@@ -52,8 +53,8 @@ func loadPaths(r io.Reader) ([]pathSpec, error) {
 		line := strings.TrimSpace(sc.Text())
 		if class, ok := strings.CutPrefix(line, "#!"); ok {
 			class = strings.TrimSpace(class)
-			if class != "ok" && class != "error" && class != "any" {
-				return nil, fmt.Errorf("line %d: unknown class %q (want ok, error or any)", n, class)
+			if class != "ok" && class != "error" && class != "any" && class != "new" {
+				return nil, fmt.Errorf("line %d: unknown class %q (want ok, error, any or new)", n, class)
 			}
 			expect = class
 			continue
@@ -274,8 +275,20 @@ type config struct {
 	Ignores     []string
 	Origin      string
 	ZebraNew    bool
+	RefLacks    []string
 	NewAlt      string
 	NoOversize  bool
+}
+
+// refLacks reports whether the path's route is declared as missing on the reference.
+func (cfg *config) refLacks(path string) bool {
+	route, _ := splitPath(path)
+	for _, p := range cfg.RefLacks {
+		if route == p || strings.HasPrefix(route, p+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (cfg *config) runOne(c *client, spec pathSpec) Result {
@@ -299,7 +312,7 @@ func (cfg *config) runOne(c *client, spec pathSpec) Result {
 		OptRef: oref.Status, OptNew: onew.Status,
 		CORSRef: headerOf(oref, "Access-Control-Allow-Origin"), CORSNew: headerOf(onew, "Access-Control-Allow-Origin"),
 		LinkNew: headerOf(got, "Link")}
-	opts := Options{Expect: spec.Expect, Ignores: cfg.Ignores, ZebraNew: cfg.ZebraNew}
+	opts := Options{Expect: spec.Expect, Ignores: cfg.Ignores, ZebraNew: cfg.ZebraNew, RefLacks: cfg.refLacks(spec.Path)}
 	res.Findings = CompareResponse(ref, got, cfg.Mode, spec.Path, opts)
 	res.Findings = append(res.Findings, corsFindings(spec.Path, oref, onew)...)
 	if ref.Err == "" && got.Err == "" && ref.Status/100 == 2 && got.Status/100 == 2 {
@@ -308,7 +321,7 @@ func (cfg *config) runOne(c *client, spec pathSpec) Result {
 		}
 	}
 	if alt != nil {
-		for _, f := range CompareResponse(got, alt, "converter", spec.Path, Options{Expect: spec.Expect, Ignores: cfg.Ignores}) {
+		for _, f := range CompareResponse(got, alt, "converter", spec.Path, Options{Expect: spec.Expect, Ignores: cfg.Ignores, ZebraNew: cfg.ZebraNew}) {
 			f.Pointer = "[new-alt prefix] " + f.Pointer
 			if f.Kind == KindExtra || f.Kind == KindExpected {
 				continue
@@ -501,6 +514,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		ignore      = fs.String("ignore", "", "comma-separated JSON pointers to ignore; trailing * is a prefix, **/name matches a suffix")
 		zebraNew    = fs.Bool("zebra-new", false, "the listener's coin is Zebra-backed (ZEC): messages/verify 501 and estimatefee -1 are expected; without it they fail")
 		newAlt      = fs.String("new-alt", "", "second base URL of the same listener (the other prefix, /api vs /insight-api); every path must answer the same there")
+		refLacks    = fs.String("ref-lacks", "", "comma-separated routes the reference does not have (for example utils/estimatefee,currency,messages/verify): a ref non-2xx there is extra instead of changed")
 		noOversize  = fs.Bool("no-oversize", false, "drop @oversize POSTs (9 MiB bodies) from the run")
 		origin      = fs.String("origin", "https://insightcompare.invalid", "Origin header sent with OPTIONS")
 		seedBase    = fs.String("seed", "", "base URL used to discover sample paths (see -seed-kind)")
@@ -521,6 +535,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if normBase(*ref) != "" && normBase(*ref) == normBase(*newBase) {
 		fmt.Fprintln(stderr, "-ref and -new are the same URL: that compares a host with itself")
+		return 2
+	}
+	if *newAlt != "" && (normBase(*newAlt) == normBase(*newBase) || normBase(*newAlt) == normBase(*ref)) {
+		fmt.Fprintln(stderr, "-new-alt must differ from -new and -ref")
 		return 2
 	}
 	if *loadMax < 1 || *loadMax > 30 {
@@ -591,6 +609,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	cfg := &config{Ref: *ref, New: *newBase, Mode: *mode, Concurrency: max(1, *conc), Origin: *origin, ZebraNew: *zebraNew, NewAlt: *newAlt, NoOversize: *noOversize}
+	for _, p := range strings.Split(*refLacks, ",") {
+		if p = strings.Trim(strings.TrimSpace(p), "/"); p != "" {
+			cfg.RefLacks = append(cfg.RefLacks, p)
+		}
+	}
 	if cfg.NoOversize {
 		kept := specs[:0]
 		for _, sp := range specs {

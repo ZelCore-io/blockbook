@@ -98,6 +98,9 @@ type Options struct {
 	// ZebraNew says the listener's coin is Zebra-backed (ZEC): messages/verify
 	// answers 501 and estimatefee answers -1, both expected (E9).
 	ZebraNew bool
+	// RefLacks marks a route the reference does not have (-ref-lacks): a
+	// non-2xx on the ref with a 2xx on the listener is then extra, not changed.
+	RefLacks bool
 }
 
 // defaultIgnores are node-local fields that differ between two daemons. They
@@ -218,6 +221,16 @@ func (c *comparer) fromOffset() int {
 	return 0
 }
 
+// windowSize is to-from when the request carries both offsets.
+func (c *comparer) windowSize() (int, bool) {
+	f, e1 := strconv.Atoi(c.query.Get("from"))
+	t, e2 := strconv.Atoi(c.query.Get("to"))
+	if e1 != nil || e2 != nil || t < f || f < 0 {
+		return 0, false
+	}
+	return t - f, true
+}
+
 // deepPaging reports a from offset at or beyond 1000, the converter's cap
 // (spec Call 2).
 func (c *comparer) deepPaging() bool { return c.fromOffset() >= 1000 }
@@ -278,7 +291,12 @@ func isZeroNum(v interface{}) bool {
 }
 
 func (c *comparer) walkMap(ptr string, r, g map[string]interface{}) {
-	pending := isZeroNum(r["confirmations"]) || isZeroNum(g["confirmations"])
+	// Only the reference decides that a tx is pending. A listener that says 0
+	// where the reference has confirmations is a difference.
+	pending := isZeroNum(r["confirmations"])
+	if rc, ok := toRat(r["confirmations"]); ok && rc.Sign() > 0 && isZeroNum(g["confirmations"]) {
+		c.add(KindChanged, ptr+"/confirmations", r["confirmations"], g["confirmations"], "listener reports the tx pending, the reference has it confirmed")
+	}
 	for _, k := range sortedKeys(r) {
 		if ignoredKeys[k] || (pending && pendingTimeKeys[k]) {
 			continue
@@ -441,11 +459,32 @@ func (c *comparer) historyArray(ptr string, r, g []interface{}) {
 		}
 		return
 	}
+	// Below the converter's 1000 cap the listener page must be as long as the
+	// window asks for (the ref page length when no window is given), less the
+	// txs the history does not have. One off at the newest end is drift.
+	if from < 1000 {
+		want := refN
+		if w, ok := c.windowSize(); ok {
+			want = min(w, 1000)
+		}
+		if c.refTotal != nil {
+			tot, _ := c.refTotal.Float64()
+			want = min(want, max(0, int(tot)-from))
+		}
+		switch {
+		case gotN < want-1 || gotN > want+1:
+			c.add(KindChanged, ptr, fmt.Sprintf("%d items", refN), fmt.Sprintf("%d items", gotN),
+				fmt.Sprintf("listener page has %d items, %d expected for this window", gotN, want))
+			return
+		case gotN != want:
+			c.add(KindExpected, ptr, fmt.Sprintf("%d items", want), fmt.Sprintf("%d items", gotN), expectedRules["E10"].ID+": page length off by one at the newest end ("+expectedRules["E10"].Text+")")
+		}
+	}
 	// The converter's page starts at 0, the listener's at from. The txids the
-	// two pages share by construction, less a small drift budget, must be there.
+	// two pages share by construction, less one for drift, must be there.
 	exp := min(refN, from+gotN) - from
 	if exp > 0 {
-		slack := min(2, exp-1)
+		slack := min(1, exp-1)
 		if len(common) < exp-slack {
 			c.add(KindChanged, ptr, fmt.Sprintf("%d items", refN), fmt.Sprintf("%d items", gotN),
 				fmt.Sprintf("only %d txids in common, at least %d expected", len(common), exp-slack))
@@ -779,8 +818,10 @@ func CompareResponse(ref, got *Response, mode, path string, opts Options) []Find
 		switch {
 		case got.Status == 501 && opts.ZebraNew && route == "messages/verify":
 			mk(KindExpected, "http status", statusText(ref), statusText(got), "E9: "+expectedRules["E9"].Text)
-		case ref.Status == 404 && got.Status/100 == 2 && opts.Expect != "error":
-			mk(KindExtra, "http status", statusText(ref), statusText(got), "route absent on the reference; check it against stock Insight")
+		case ref.Status/100 != 2 && got.Status/100 == 2 && (opts.RefLacks || opts.Expect == "new"):
+			mk(KindExtra, "http status", statusText(ref), statusText(got), "route the reference lacks (declared); check it against stock Insight")
+		case ref.Status/100 != 2 && got.Status/100 == 2 && opts.Expect != "error" && opts.Expect != "any" && opts.Expect != "":
+			mk(KindChanged, "http status", statusText(ref), statusText(got), "reference broken: non-2xx on a case that must succeed")
 		default:
 			mk(KindChanged, "http status", statusText(ref), statusText(got), "")
 		}
@@ -791,7 +832,7 @@ func CompareResponse(ref, got *Response, mode, path string, opts Options) []Find
 	case got.Status/100 == 5 && !(got.Status == 501 && opts.ZebraNew && route == "messages/verify"):
 		mk(KindChanged, "http status", statusText(ref), statusText(got), "server error on both sides")
 		return out
-	case opts.Expect == "ok" && got.Status/100 != 2 && !(got.Status == 501 && opts.ZebraNew && route == "messages/verify"):
+	case (opts.Expect == "ok" || opts.Expect == "new") && got.Status/100 != 2 && !(got.Status == 501 && opts.ZebraNew && route == "messages/verify"):
 		mk(KindChanged, "http status", statusText(ref), statusText(got), "case is meant to succeed but both sides answered non-2xx")
 		return out
 	case opts.Expect == "error" && got.Status/100 == 2:

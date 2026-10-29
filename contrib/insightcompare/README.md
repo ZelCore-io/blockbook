@@ -79,7 +79,8 @@ any `missing` or `changed` finding exists, 2 on usage or safety errors, else 0.
 | `-load-paths`, `-load-pause` | paths used by the latency phase (default 12, at most 30) and pause between them |
 | `-ignore` | comma-separated JSON pointers to skip, added to the default set below; trailing `*` is a prefix, `**/name` a suffix |
 | `-zebra-new` | the listener's coin is Zebra-backed (ZEC): `messages/verify` 501 and `utils/estimatefee` -1 become expected (E9). Without it both fail |
-| `-new-alt` | other prefix of the same listener (`/api` vs `/insight-api`); every path must answer the same there. Otherwise run the tool twice, once per prefix |
+| `-new-alt` | other prefix of the same listener (`/api` vs `/insight-api`); every path must answer the same there, with the same `-zebra-new` setting as `-new`. Refused when equal to `-new` or `-ref`. Otherwise run the tool twice, once per prefix |
+| `-ref-lacks` | comma-separated routes the reference does not have (for example `utils/estimatefee,currency,messages/verify`): a ref non-2xx with a listener 2xx is then `extra`. Anywhere else it is `changed` ("reference broken") |
 | `-no-oversize` | drop the 9 MiB `@oversize` POST (send it to a production reference once, not every run) |
 | `-origin` | Origin header for the OPTIONS checks |
 | `-seed`, `-seed-kind`, `-blocks`, `-seed-txs`, `-seed-out`, `-empty`, `-pending`, `-mempool-url` | path discovery |
@@ -89,9 +90,13 @@ any `missing` or `changed` finding exists, 2 on usage or safety errors, else 0.
 
 ## Status classes
 
-A paths file sets the class of the lines after it with `#! ok`, `#! error` or `#! any` (default
-`ok`; the seed writes them). `ok` cases must answer 2xx on both sides: two 404s or two 500s are
-`changed`, not "identical". `error` cases (bad address, bad txid, malformed send, over-limit lists)
+A paths file sets the class of the lines after it with `#! ok`, `#! new`, `#! error` or `#! any`
+(default `ok`; the seed writes `ok`, `error` and `any`). `ok` cases must answer 2xx on both sides:
+two 404s or two 500s are `changed`, not "identical", and so is a reference non-2xx against a
+listener 2xx ("reference broken"). `new` is `ok` for a route the reference lacks: only there (or
+for routes named in `-ref-lacks`) a ref non-2xx is `extra`. When more than half of the cases that
+must succeed get a non-2xx from the reference, the summary opens with **REFERENCE BROKEN**.
+The `any` class is accepted as is: both sides answering the same 4xx passes. `error` cases (bad address, bad txid, malformed send, over-limit lists)
 must answer 4xx and the two sides must agree; a 2xx there is `changed`. `any` cases (windows the
 two sides may refuse differently) only need the statuses to match. A 5xx fails in every class. The
 tool refuses to run when `-ref` and `-new` are the same URL.
@@ -103,7 +108,8 @@ Always on, and `-ignore` only adds to them:
 - `confirmations`, `confirmationETABlocks`, `confirmationETASeconds` everywhere.
 - `/info/connections`, `/info/timeoffset`, `/info/proxy` (node-local, differ between two daemons).
 - `time`, `blocktime`, `blockTime`, `firstSeen`, `firstSeenTs`, `receivedTime` on a tx object whose
-  `confirmations` is 0 on either side (first-seen times of a pending tx). Confirmed txs compare them.
+  `confirmations` is 0 on the reference side (first-seen times of a pending tx). If the listener says 0
+where the reference has confirmations, that is `changed` and the times compare.
 - Tolerances, not ignores: `info.blocks`, `blockChainHeight`, `height`, `syncPercentage` +-3 on
   `status` and `sync`; `totalItems`, `txApperances`, `unconfirmedTxApperances` +-2; `currency`
   `data.rate` is presence only.
@@ -124,9 +130,11 @@ Findings have a kind. `missing` (key in ref, absent in new) and `changed` fail t
   numeric strings with numbers.
 - `items` and `txs` arrays match by `txid`; only txids on both sides are compared. The converter's
   page starts at 0 and the listener's at `from`, so the pages must share the txids their windows
-  overlap in (less a drift budget of 2); fewer is `changed`. An empty listener page is `changed`
+  overlap in (less a drift budget of 1); fewer is `changed`. Below `from` 1000 the listener page must also
+  be as long as the requested window (`to - from`, the ref page length when none is given, capped by what
+  the ref `totalItems` leaves after `from`); one off is drift (E10), more is `changed`. An empty listener page is `changed`
   unless the converter's `totalItems` is at or below `from`. Count and window differences beyond
-  that are `expected` (E3, or E8 when `from` >= 1000). Order of common txids is checked (ties
+  that are `expected` (E3; E8 when `from` >= 1000, the only case where the converter's cap excuses a different page). Order of common txids is checked (ties
   inside a block are expected). UTXO arrays match by `txid:vout`. `blocks` rows match by `hash`
   (an empty list fails). The `transactions` list compares as a set; empty or disjoint fails.
 - Each path also gets an `OPTIONS`: `Access-Control-Allow-Origin` must be present on both sides

@@ -165,7 +165,7 @@ func TestCompareStatusCode(t *testing.T) {
 		t.Fatal("501 outside messages/verify must fail even with -zebra-new")
 	}
 	absent := &Response{Status: 404, Body: []byte("Cannot GET")}
-	if fs := CompareResponse(absent, ok, "converter", "currency", Options{}); failing(fs) != 0 || fs[0].Kind != KindExtra {
+	if fs := CompareResponse(absent, ok, "converter", "currency", Options{RefLacks: true}); failing(fs) != 0 || fs[0].Kind != KindExtra {
 		t.Fatalf("ref 404 vs listener 200 must be extra, got %+v", fs)
 	}
 }
@@ -852,5 +852,141 @@ func TestRunNewAltAndClasses(t *testing.T) {
 	os.WriteFile(paths, []byte("#! error\nGET missing\n"), 0o644)
 	if code := run([]string{"-ref", ref.URL + "/api", "-new", nw.URL + "/api", "-paths", paths, "-out", filepath.Join(dir, "r3.md"), "-rate", "0"}, &out, &errb); code != 0 {
 		t.Fatalf("matching 404 on an error case is fine, got %d", code)
+	}
+}
+
+// --- fix round 2 ---
+
+func TestTruncatedListenerPageFails(t *testing.T) {
+	ref := j(t, `{"totalItems":50,"from":0,"to":50,"items":`+items(ids("t", 0, 50)...)+`}`)
+	for _, n := range []int{1, 3, 10, 47} {
+		got := j(t, fmt.Sprintf(`{"totalItems":50,"from":0,"to":50,"items":%s}`, items(ids("t", 0, n)...)))
+		if failing(Compare(ref, got, "converter", "addrs/X/txs?from=0&to=50")) != 1 {
+			t.Errorf("%d common items of a 50 item window must fail", n)
+		}
+	}
+	// One short at the newest end is drift, reported as expected.
+	got := j(t, `{"totalItems":50,"from":0,"to":50,"items":`+items(ids("t", 0, 49)...)+`}`)
+	fs := Compare(ref, got, "converter", "addrs/X/txs?from=0&to=50")
+	if failing(fs) != 0 || kinds(fs)[KindExpected] == 0 {
+		t.Fatalf("one short must be drift, got %+v", fs)
+	}
+	// A long page is also wrong.
+	got = j(t, `{"totalItems":50,"from":0,"to":50,"items":`+items(ids("t", 0, 50)...)+`}`)
+	long := j(t, `{"totalItems":50,"from":0,"to":50,"items":`+items(append(ids("t", 0, 50), "x1", "x2", "x3")...)+`}`)
+	if failing(Compare(ref, got, "converter", "addrs/X/txs?from=0&to=50")) != 0 || failing(Compare(ref, long, "converter", "addrs/X/txs?from=0&to=50")) != 1 {
+		t.Fatal("exact length passes, three too many fails")
+	}
+	// A narrower window answers its own size; the ref page is the whole page.
+	narrow := j(t, `{"totalItems":50,"from":0,"to":10,"items":`+items(ids("t", 0, 10)...)+`}`)
+	if failing(Compare(ref, narrow, "converter", "addrs/X/txs?from=0&to=10")) != 0 {
+		t.Fatal("ten items for a ten item window must pass")
+	}
+	if failing(Compare(ref, j(t, `{"totalItems":50,"from":0,"to":4,"items":`+items(ids("t", 0, 4)...)+`}`), "converter", "addrs/X/txs?from=0&to=10")) != 1 {
+		t.Fatal("four items for a ten item window must fail")
+	}
+	// A short history is not a short page: ref has 3 txs in total.
+	small := j(t, `{"totalItems":3,"items":`+items("a", "b", "c")+`}`)
+	if failing(Compare(small, small, "converter", "addrs/X/txs?from=0&to=50")) != 0 {
+		t.Fatal("identical short history must pass")
+	}
+}
+
+func TestRefNon2xxOnOkCaseFails(t *testing.T) {
+	ok := resp(t, 200, `{"a":1}`)
+	r404 := resp(t, 404, `{"status":"error"}`)
+	fs := CompareResponse(r404, ok, "converter", "status", Options{Expect: "ok"})
+	if failing(fs) != 1 || fs[0].Kind != KindChanged || !strings.Contains(fs[0].Note, "reference broken") {
+		t.Fatalf("got %+v", fs)
+	}
+	if failing(CompareResponse(resp(t, 502, `x`), ok, "converter", "status", Options{Expect: "ok"})) != 1 {
+		t.Fatal("ref 502 must fail")
+	}
+	// Declared absent routes stay extra, by class or by -ref-lacks.
+	for _, o := range []Options{{Expect: "new"}, {Expect: "ok", RefLacks: true}} {
+		fs = CompareResponse(r404, ok, "converter", "currency", o)
+		if failing(fs) != 0 || fs[0].Kind != KindExtra {
+			t.Fatalf("%+v: got %+v", o, fs)
+		}
+	}
+	// Both sides 404 on a declared absent route is still a failure.
+	if failing(CompareResponse(r404, resp(t, 404, `{}`), "converter", "currency", Options{Expect: "new"})) != 1 {
+		t.Fatal("listener 404 on a new route must fail")
+	}
+}
+
+func TestRefBrokenRunFailsLoudly(t *testing.T) {
+	dir := t.TempDir()
+	paths := filepath.Join(dir, "paths.txt")
+	os.WriteFile(paths, []byte("GET version\nGET sync\nGET peer\n"), 0o644)
+	ref := listener(map[string]string{}, true) // wrong prefix: every path 404
+	defer ref.Close()
+	nw := listener(map[string]string{"version": `{"v":1}`, "sync": `{"s":1}`, "peer": `{"p":1}`}, true)
+	defer nw.Close()
+	var out, errb bytes.Buffer
+	code := run([]string{"-ref", ref.URL + "/api", "-new", nw.URL + "/api", "-paths", paths, "-out", filepath.Join(dir, "r.md"), "-rate", "0"}, &out, &errb)
+	if code != 1 || !strings.Contains(out.String(), "REFERENCE BROKEN") {
+		t.Fatalf("got %d\n%s", code, out.String())
+	}
+	// Declaring the routes absent turns them into extras and the run passes.
+	out.Reset()
+	code = run([]string{"-ref", ref.URL + "/api", "-new", nw.URL + "/api", "-paths", paths, "-out", filepath.Join(dir, "r.md"), "-rate", "0", "-ref-lacks", "version,sync,peer"}, &out, &errb)
+	if code != 0 || strings.Contains(out.String(), "REFERENCE BROKEN") {
+		t.Fatalf("got %d\n%s", code, out.String())
+	}
+}
+
+func TestNewAltInheritsZebraAndIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	paths := filepath.Join(dir, "paths.txt")
+	os.WriteFile(paths, []byte("GET messages/verify\n"), 0o644)
+	mk := func(status int) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(204)
+				return
+			}
+			w.WriteHeader(status)
+			fmt.Fprint(w, `{"status":"error"}`)
+		}))
+	}
+	ref, nw, alt := mk(200), mk(501), mk(501)
+	defer ref.Close()
+	defer nw.Close()
+	defer alt.Close()
+	var out, errb bytes.Buffer
+	base := []string{"-ref", ref.URL + "/api", "-new", nw.URL + "/api", "-paths", paths, "-out", filepath.Join(dir, "r.md"), "-rate", "0"}
+	if code := run(append(base, "-zebra-new", "-new-alt", alt.URL+"/api"), &out, &errb); code != 0 {
+		t.Fatalf("501 on both listener prefixes with -zebra-new must pass, got %d\n%s", code, out.String())
+	}
+	for _, same := range []string{nw.URL + "/api/", ref.URL + "/api"} {
+		errb.Reset()
+		if code := run(append(base, "-new-alt", same), &out, &errb); code != 2 || !strings.Contains(errb.String(), "-new-alt") {
+			t.Fatalf("-new-alt %s must be refused, got %d", same, code)
+		}
+	}
+}
+
+func TestPendingIsDecidedByTheReference(t *testing.T) {
+	// Reference pending: first-seen times differ per node and are ignored.
+	if fs := Compare(j(t, `{"confirmations":0,"time":100}`), j(t, `{"confirmations":0,"time":105}`), "converter", "tx/a"); len(fs) != 0 {
+		t.Fatalf("got %+v", fs)
+	}
+	// Listener says 0, reference says 3: a difference, and the times compare.
+	fs := Compare(j(t, `{"confirmations":3,"time":100}`), j(t, `{"confirmations":0,"time":105}`), "converter", "tx/a")
+	if failing(fs) != 2 {
+		t.Fatalf("want confirmations and time to fail, got %+v", fs)
+	}
+	// Reference pending, listener already confirmed (a block landed): not a difference.
+	if fs := Compare(j(t, `{"confirmations":0,"time":100}`), j(t, `{"confirmations":1,"time":105}`), "converter", "tx/a"); failing(fs) != 0 {
+		t.Fatalf("got %+v", fs)
+	}
+}
+
+func TestNewClassInPathsFile(t *testing.T) {
+	specs, err := loadPaths(strings.NewReader("#! new\nGET currency\n"))
+	if err != nil || specs[0].Expect != "new" {
+		t.Fatal(err, specs)
 	}
 }
