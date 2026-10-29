@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
 	"strings"
@@ -28,6 +29,8 @@ type insightWorker interface {
 	GetBlocks(page int, blocksOnPage int) (*api.Blocks, error)
 	GetBlock(bid string, page int, txsOnPage int) (*api.Block, error)
 	GetBlockRaw(bid string) (*api.BlockRaw, error)
+	EstimateFee(blocks int, conservative bool) (big.Int, error)
+	GetCurrentFiatRates(currencies []string, token string) (*api.FiatTicker, error)
 }
 
 // InsightServer is the optional eight-decimal Bitcoin compatibility listener.
@@ -266,6 +269,12 @@ func (s *InsightServer) handle(route insightRoute) (interface{}, int, error) {
 		return s.rawTx(route)
 	case "txs":
 		return s.txs(route)
+	case "estimatefee":
+		return s.estimateFee(route)
+	case "currency":
+		return s.currency()
+	case "verify":
+		return s.verifyMessage(route)
 	}
 	return nil, http.StatusNotImplemented, errors.New("route not implemented")
 }

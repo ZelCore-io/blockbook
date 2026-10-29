@@ -60,6 +60,17 @@ type insightFake struct {
 	pages        []int
 	historyPages []int
 	pageHook     func(page, size int, ids []string) []string
+	// fees backs EstimateFee in sat/kB per block target, feeErr fails a
+	// target, feeCalls records the targets and the conservative flag.
+	fees     map[int]int64
+	feeErr   map[int]error
+	feeCalls []int
+	feeCons  []bool
+	// fiat and fiatErr back GetCurrentFiatRates; fiatArgs records the
+	// currencies and token of the last call.
+	fiat     *api.FiatTicker
+	fiatErr  error
+	fiatArgs []string
 }
 
 func (f *insightFake) GetSystemInfo(bool) (*api.SystemInfo, error) {
@@ -164,6 +175,18 @@ func (f *insightFake) GetBlock(bid string, page int, size int) (*api.Block, erro
 }
 func (f *insightFake) GetBlockRaw(bid string) (*api.BlockRaw, error) {
 	return f.rawBlock, f.rawErr
+}
+func (f *insightFake) EstimateFee(blocks int, conservative bool) (big.Int, error) {
+	f.feeCalls = append(f.feeCalls, blocks)
+	f.feeCons = append(f.feeCons, conservative)
+	if err := f.feeErr[blocks]; err != nil {
+		return big.Int{}, err
+	}
+	return *big.NewInt(f.fees[blocks]), nil
+}
+func (f *insightFake) GetCurrentFiatRates(currencies []string, token string) (*api.FiatTicker, error) {
+	f.fiatArgs = append(append([]string{}, currencies...), token)
+	return f.fiat, f.fiatErr
 }
 func insightAmount(n int64) *api.Amount { return (*api.Amount)(big.NewInt(n)) }
 func insightFixture() *insightFake {

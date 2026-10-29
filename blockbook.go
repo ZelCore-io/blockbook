@@ -396,7 +396,7 @@ func mainWithExitCode() int {
 					rpc = server.NewInsightRPC(call)
 				}
 			}
-			insightServer.SetBackend(rpc, internalState.GetNetwork())
+			insightServer.SetBackend(rpc, internalState.CoinShortcut)
 			err = insightServer.Start()
 		}
 		if err != nil {
