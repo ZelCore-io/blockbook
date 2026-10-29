@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
-	"strconv"
 	"strings"
 
 	"github.com/martinboehm/btcd/txscript"
@@ -117,25 +116,33 @@ type insightVin struct {
 }
 
 // insightVoutScript is the converter's vout.scriptPubKey (a clone of the
-// vout) with asm disassembled from the script hex.
+// Blockbook vout, so spending info is omitted when absent, as Blockbook
+// omits it) with asm disassembled from the script hex. Stock's scriptPubKey
+// keys (hex, asm, addresses, type) are all present.
 type insightVoutScript struct {
-	Value     json.Number `json:"value"`
-	N         int         `json:"n"`
-	Spent     bool        `json:"spent,omitempty"`
-	Hex       string      `json:"hex,omitempty"`
-	Addresses []string    `json:"addresses"`
-	IsAddress bool        `json:"isAddress"`
-	IsOwn     bool        `json:"isOwn,omitempty"`
-	Type      string      `json:"type,omitempty"`
-	Asm       string      `json:"asm,omitempty"`
+	Value       json.Number `json:"value"`
+	N           int         `json:"n"`
+	Spent       bool        `json:"spent,omitempty"`
+	SpentTxID   string      `json:"spentTxId,omitempty"`
+	SpentIndex  int         `json:"spentIndex,omitempty"`
+	SpentHeight int         `json:"spentHeight,omitempty"`
+	Hex         string      `json:"hex,omitempty"`
+	Addresses   []string    `json:"addresses"`
+	IsAddress   bool        `json:"isAddress"`
+	IsOwn       bool        `json:"isOwn,omitempty"`
+	Type        string      `json:"type,omitempty"`
+	Asm         string      `json:"asm,omitempty"`
 }
+
+// insightVout: spentTxId/spentIndex/spentHeight are null for an unspent (or
+// not looked up) output, as in stock; the converter never had these keys.
 type insightVout struct {
 	Value        json.Number       `json:"value"`
 	N            int               `json:"n"`
 	Spent        bool              `json:"spent,omitempty"`
-	SpentTxID    string            `json:"spentTxId,omitempty"`
-	SpentIndex   int               `json:"spentIndex,omitempty"`
-	SpentHeight  int               `json:"spentHeight,omitempty"`
+	SpentTxID    *string           `json:"spentTxId"`
+	SpentIndex   *int              `json:"spentIndex"`
+	SpentHeight  *int              `json:"spentHeight"`
 	Hex          string            `json:"hex,omitempty"`
 	Addresses    []string          `json:"addresses"`
 	IsAddress    bool              `json:"isAddress"`
@@ -173,14 +180,12 @@ type insightTx struct {
 	Vout                   []insightVout         `json:"vout"`
 }
 
-// insightSatString renders an amount as a decimal satoshi string after the
-// same safe-integer check as insightMoney.
-func insightSatString(a *api.Amount) (string, error) {
-	_, sat, err := insightMoney(a)
-	if err != nil {
-		return "", err
-	}
-	return strconv.FormatInt(sat, 10), nil
+// insightSatString renders an amount as a decimal satoshi string. Strings
+// carry any size, so there is no safe-integer bound (only JSON numbers have
+// one, in insightMoney).
+func insightSatString(a *api.Amount) string {
+	n := a.AsBigInt()
+	return n.String()
 }
 
 // insightTransaction is the one transaction transform shared by history,
@@ -193,7 +198,7 @@ func insightTransaction(tx *api.Tx) (*insightTx, error) {
 	if err != nil {
 		return nil, err
 	}
-	valueOut, valueOutSat, err := insightMoney(tx.ValueOutSat)
+	valueOut, _, err := insightMoney(tx.ValueOutSat)
 	if err != nil {
 		return nil, err
 	}
@@ -202,14 +207,12 @@ func insightTransaction(tx *api.Tx) (*insightTx, error) {
 		Blockhash: tx.Blockhash, BlockHash: tx.Blockhash, Blockheight: tx.Blockheight, BlockHeight: tx.Blockheight,
 		Blocktime: tx.Blocktime, BlockTime: tx.Blocktime, Time: tx.Blocktime, Confirmations: tx.Confirmations,
 		ConfirmationETABlocks: tx.ConfirmationETABlocks, ConfirmationETASeconds: tx.ConfirmationETASeconds,
-		Size: tx.Size, VSize: tx.VSize, Value: strconv.FormatInt(valueOutSat, 10), ValueOut: valueOut, Fees: fees,
+		Size: tx.Size, VSize: tx.VSize, Value: insightSatString(tx.ValueOutSat), ValueOut: valueOut, Fees: fees,
 		Rbf: tx.Rbf, Hex: tx.Hex, CoinSpecificData: tx.CoinSpecificData, ChainExtraData: tx.ChainExtraData,
 		Vin: make([]insightVin, 0, len(tx.Vin)), Vout: make([]insightVout, 0, len(tx.Vout)),
 	}
 	if tx.ValueInSat != nil {
-		if out.ValueIn, err = insightSatString(tx.ValueInSat); err != nil {
-			return nil, err
-		}
+		out.ValueIn = insightSatString(tx.ValueInSat)
 	}
 	out.IsCoinBase = len(tx.Vin) > 0 && tx.Vin[0].Coinbase != ""
 	for _, v := range tx.Vin {
@@ -238,11 +241,15 @@ func insightTransaction(tx *api.Tx) (*insightTx, error) {
 				}
 			}
 		}
-		out.Vout = append(out.Vout, insightVout{
-			Value: value, N: v.N, Spent: v.Spent, SpentTxID: v.SpentTxID, SpentIndex: v.SpentIndex, SpentHeight: v.SpentHeight,
-			Hex: v.Hex, Addresses: v.Addresses, IsAddress: v.IsAddress, IsOwn: v.IsOwn, Type: v.Type,
-			ScriptPubKey: insightVoutScript{Value: value, N: v.N, Spent: v.Spent, Hex: v.Hex, Addresses: v.Addresses, IsAddress: v.IsAddress, IsOwn: v.IsOwn, Type: v.Type, Asm: asm},
-		})
+		vout := insightVout{
+			Value: value, N: v.N, Spent: v.Spent, Hex: v.Hex, Addresses: v.Addresses, IsAddress: v.IsAddress, IsOwn: v.IsOwn, Type: v.Type,
+			ScriptPubKey: insightVoutScript{Value: value, N: v.N, Spent: v.Spent, SpentTxID: v.SpentTxID, SpentIndex: v.SpentIndex, SpentHeight: v.SpentHeight, Hex: v.Hex, Addresses: v.Addresses, IsAddress: v.IsAddress, IsOwn: v.IsOwn, Type: v.Type, Asm: asm},
+		}
+		if v.SpentTxID != "" {
+			spentTxID, spentIndex, spentHeight := v.SpentTxID, v.SpentIndex, v.SpentHeight
+			vout.SpentTxID, vout.SpentIndex, vout.SpentHeight = &spentTxID, &spentIndex, &spentHeight
+		}
+		out.Vout = append(out.Vout, vout)
 	}
 	return out, nil
 }

@@ -19,7 +19,7 @@ import (
 const (
 	insightBlocksDefaultLimit = 200 // stock BLOCK_LIMIT
 	insightBlocksMaxLimit     = 200
-	insightRPCBlockNotFound   = -5
+	insightRPCNotFound        = -5
 	insightTipRetries         = 3
 	insightBlockCacheSize     = 32
 )
@@ -48,11 +48,22 @@ func insightHash64(s string) (string, bool) {
 	return strings.ToLower(s), true
 }
 
-// insightBlockErrorCode maps a worker error: a public API error is an unknown
-// block (404), anything else is a backend failure.
-func insightBlockErrorCode(err error) int {
+// insightBlockNotFound is the worker's exact public text for an unknown
+// block. A backend failure reads "Block not found, <cause>" instead.
+const insightBlockNotFound = "Block not found"
+
+// insightTxNotFound is the worker's exact public text for an unknown tx. A
+// backend failure reads "Transaction '<txid>' not found (<cause>)" instead.
+func insightTxNotFound(txid string) string {
+	return "Transaction '" + txid + "' not found"
+}
+
+// insightNotFoundCode maps a worker error. The worker wraps both "unknown"
+// and backend failures in a public APIError, so only the exact not-found
+// text is 404; every other error is a generic 500.
+func insightNotFoundCode(err error, notFound string) int {
 	var apiErr *api.APIError
-	if errors.As(err, &apiErr) && apiErr.Public {
+	if errors.As(err, &apiErr) && apiErr.Public && apiErr.Text == notFound {
 		return http.StatusNotFound
 	}
 	return http.StatusInternalServerError
@@ -144,13 +155,13 @@ func (s *InsightServer) rawBlock(route insightRoute) (interface{}, int, error) {
 	}
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) || s.rpc == nil {
-		return nil, insightBlockErrorCode(err), err
+		return nil, insightNotFoundCode(err, insightBlockNotFound), err
 	}
 	// The index cannot serve the raw block (for example Zebra): ask the daemon.
 	var rawHex string
 	if rpcErr := s.rpc("getblock", []interface{}{hash, 0}, &rawHex); rpcErr != nil {
 		var re *bchain.RPCError
-		if errors.As(rpcErr, &re) && re.Code == insightRPCBlockNotFound {
+		if errors.As(rpcErr, &re) && re.Code == insightRPCNotFound {
 			return nil, http.StatusNotFound, rpcErr
 		}
 		return nil, http.StatusInternalServerError, rpcErr
@@ -288,7 +299,7 @@ func (s *InsightServer) block(route insightRoute) (interface{}, int, error) {
 	}
 	b, data, err := s.loadBlock(hash)
 	if err != nil {
-		return nil, insightBlockErrorCode(err), err
+		return nil, insightNotFoundCode(err, insightBlockNotFound), err
 	}
 	reward, _, err := insightMoney(data.Reward)
 	if err != nil {

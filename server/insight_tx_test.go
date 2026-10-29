@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"reflect"
 	"strings"
 	"testing"
@@ -115,13 +116,39 @@ func TestInsightTxSuperset(t *testing.T) {
 	if _, ok := vout0["spent"]; ok {
 		t.Error("spent:false must be omitted")
 	}
-	// Spending info, when the worker filled it, is passed through.
-	tx.Vout[0].Spent, tx.Vout[0].SpentTxID, tx.Vout[0].SpentIndex, tx.Vout[0].SpentHeight = true, "next", 3, 101
-	raw, _ = insightTxJSON(t, tx)
-	for _, field := range []string{`"spent":true`, `"spentTxId":"next"`, `"spentIndex":3`, `"spentHeight":101`} {
+	// Unspent: stock's spentTxId/spentIndex/spentHeight are null at the top
+	// level; the converter's scriptPubKey clone omits them (Blockbook did).
+	for _, key := range []string{"spentTxId", "spentIndex", "spentHeight"} {
+		if v, ok := vout0[key]; !ok || v != nil {
+			t.Errorf("unspent %s must be null: %s", key, raw)
+		}
+		if _, ok := spk0[key]; ok {
+			t.Errorf("unspent scriptPubKey has %s: %s", key, raw)
+		}
+	}
+	// Spending info, when the worker filled it, is passed through to the
+	// vout and its scriptPubKey clone; spentIndex 0 is a real index.
+	tx.Vout[0].Spent, tx.Vout[0].SpentTxID, tx.Vout[0].SpentIndex, tx.Vout[0].SpentHeight = true, "next", 0, 101
+	raw, m = insightTxJSON(t, tx)
+	for _, field := range []string{`"spent":true`, `"spentTxId":"next"`, `"spentIndex":0`, `"spentHeight":101`} {
 		if !strings.Contains(raw, field) {
 			t.Errorf("missing %s in %s", field, raw)
 		}
+	}
+	spk0 = insightObj(t, m, "vout", 0, "scriptPubKey").(map[string]interface{})
+	// The clone follows Blockbook's vout JSON, which omits spentIndex 0.
+	if _, ok := spk0["spentIndex"]; ok || spk0["spent"] != true || spk0["spentTxId"] != "next" || spk0["spentHeight"] != float64(101) {
+		t.Errorf("spent scriptPubKey clone: %v", spk0)
+	}
+	// Satoshi strings carry any size; only JSON numbers keep the safe-int 500.
+	large := &api.Tx{Txid: "large", ValueInSat: (*api.Amount)(new(big.Int).Lsh(big.NewInt(1), 60)), ValueOutSat: insightAmount(1)}
+	raw, _ = insightTxJSON(t, large)
+	if !strings.Contains(raw, `"valueIn":"1152921504606846976"`) {
+		t.Errorf("large valueIn: %s", raw)
+	}
+	large.ValueOutSat = insightAmount(9007199254740992)
+	if _, err := insightTransaction(large); err == nil {
+		t.Error("valueOut is a JSON number and must keep the safe-int bound")
 	}
 	// A pending tx keeps blockheight -1 under both names and omits the hash.
 	pending := &api.Tx{Txid: "p", Blockheight: -1, ValueOutSat: insightAmount(1), ConfirmationETABlocks: 2, ConfirmationETASeconds: 1200, Rbf: true}
@@ -215,12 +242,20 @@ func TestInsightTxRoutes(t *testing.T) {
 			t.Errorf("%s unknown: %d %s", route, w.Code, w.Body)
 		}
 	}
-	// bchain.ErrTxNotFound (not wrapped in an APIError) is also 404; any
-	// other worker error is a generic 500 that never echoes the cause.
+	// The real worker wraps every tx-cache failure in a public APIError: only
+	// its exact not-found text is 404; "not found (<cause>)" (a backend
+	// failure), other public errors and plain errors are a generic 500.
 	for _, tc := range []struct {
 		err  error
 		code int
-	}{{bchain.ErrTxNotFound, 404}, {fmt.Errorf("wrap: %w", bchain.ErrTxNotFound), 404}, {errors.New("http://user:password@secret/"), 500}} {
+	}{
+		{api.NewAPIError("Transaction '"+insightTestTxid+"' not found", true), 404},
+		{api.NewAPIError("Transaction '"+insightTestTxid+"' not found (connection refused http://user:password@secret/)", true), 500},
+		{api.NewAPIError("Transaction '"+insightTestUnknown+"' not found", true), 500},
+		{api.NewAPIError("Transaction '"+insightTestTxid+"' not found", false), 500},
+		{bchain.ErrTxNotFound, 500},
+		{errors.New("http://user:password@secret/"), 500},
+	} {
 		f := insightFixture()
 		f.err = tc.err
 		for _, route := range []string{"tx", "rawtx"} {
@@ -353,5 +388,37 @@ func TestInsightTxsByBlock(t *testing.T) {
 	w = insightRequest(insightTestServer(t, f), "GET", "/api/txs?block="+hash+"&pageNum=2", "")
 	if w.Code != 500 || strings.Contains(w.Body.String(), "secret") {
 		t.Fatalf("tx failure: %d %s", w.Code, w.Body)
+	}
+}
+
+// TestInsightBlockErrorShapes uses the real worker's error shapes: GetBlock
+// and GetBlockRaw answer an unknown block with exactly "Block not found" and
+// wrap backend failures as "Block not found, <cause>". Only the former is 404.
+func TestInsightBlockErrorShapes(t *testing.T) {
+	hash := strings.Repeat("11", 32)
+	for _, tc := range []struct {
+		err  error
+		code int
+	}{
+		{api.NewAPIError("Block not found", true), 404},
+		{api.NewAPIError("Block not found, connection refused http://user:password@secret/", true), 500},
+		{api.NewAPIError("Block not found", false), 500},
+		{errors.New("http://user:password@secret/"), 500},
+	} {
+		for _, path := range []string{"/api/block/" + hash, "/api/txs?block=" + hash} {
+			f := insightFixture()
+			insightBlockWithTxs(hash, 3, f)
+			f.err = tc.err
+			w := insightRequest(insightTestServer(t, f), "GET", path, "")
+			if w.Code != tc.code || strings.Contains(w.Body.String(), "secret") {
+				t.Errorf("%s %v: %d %s", path, tc.err, w.Code, w.Body)
+			}
+		}
+		f := insightFixture()
+		f.rawErr = tc.err
+		w := insightRequest(insightTestServer(t, f), "GET", "/api/rawblock/"+hash, "")
+		if w.Code != tc.code || strings.Contains(w.Body.String(), "secret") {
+			t.Errorf("rawblock %v: %d %s", tc.err, w.Code, w.Body)
+		}
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/trezor/blockbook/api"
 	"github.com/trezor/blockbook/bchain"
 )
 
@@ -18,16 +17,6 @@ const insightTxsPageSize = 10
 // that many pages, so a larger value is simply past the end.
 const insightMaxPageNum = 1 << 30
 
-// insightTxErrorCode maps a GetTransaction error: an unknown tx (public API
-// error or bchain.ErrTxNotFound) is 404, anything else a backend failure.
-func insightTxErrorCode(err error) int {
-	var apiErr *api.APIError
-	if errors.Is(err, bchain.ErrTxNotFound) || errors.As(err, &apiErr) && apiErr.Public {
-		return http.StatusNotFound
-	}
-	return http.StatusInternalServerError
-}
-
 // tx serves tx/:txid with spending info (spentTxId and friends) filled.
 func (s *InsightServer) tx(route insightRoute) (interface{}, int, error) {
 	txid, ok := insightHash64(route.arg)
@@ -36,7 +25,7 @@ func (s *InsightServer) tx(route insightRoute) (interface{}, int, error) {
 	}
 	tx, err := s.worker.GetTransaction(txid, true, false)
 	if err != nil {
-		return nil, insightTxErrorCode(err), err
+		return nil, insightNotFoundCode(err, insightTxNotFound(txid)), err
 	}
 	out, err := insightTransaction(tx)
 	if err != nil {
@@ -55,7 +44,7 @@ func (s *InsightServer) rawTx(route insightRoute) (interface{}, int, error) {
 	}
 	tx, err := s.worker.GetTransaction(txid, false, false)
 	if err != nil {
-		return nil, insightTxErrorCode(err), err
+		return nil, insightNotFoundCode(err, insightTxNotFound(txid)), err
 	}
 	if tx == nil {
 		return nil, http.StatusInternalServerError, errors.New("missing transaction")
@@ -67,7 +56,7 @@ func (s *InsightServer) rawTx(route insightRoute) (interface{}, int, error) {
 		}
 		if rpcErr := s.rpc("getrawtransaction", []interface{}{txid, 0}, &rawHex); rpcErr != nil {
 			var re *bchain.RPCError
-			if errors.As(rpcErr, &re) && re.Code == insightRPCBlockNotFound {
+			if errors.As(rpcErr, &re) && re.Code == insightRPCNotFound {
 				return nil, http.StatusNotFound, rpcErr
 			}
 			return nil, http.StatusInternalServerError, rpcErr
@@ -116,7 +105,7 @@ func (s *InsightServer) txs(route insightRoute) (interface{}, int, error) {
 	}
 	block, err := s.worker.GetBlock(hash, pageNum+1, insightTxsPageSize)
 	if err != nil {
-		return nil, insightBlockErrorCode(err), err
+		return nil, insightNotFoundCode(err, insightBlockNotFound), err
 	}
 	if block == nil {
 		return nil, http.StatusInternalServerError, errors.New("missing block")
