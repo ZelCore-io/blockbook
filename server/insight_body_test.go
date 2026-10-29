@@ -87,13 +87,49 @@ func TestInsightTrickledBodiesDoNotStarveSlots(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("status while bodies trickle: %d", resp.StatusCode)
 	}
-	// The deadline ends the stalled bodies with a 400 and frees them.
-	_ = conns[0].SetReadDeadline(time.Now().Add(5 * time.Second))
-	line, err := bufio.NewReader(conns[0]).ReadString('\n')
-	if err != nil || !strings.Contains(line, "400") {
-		t.Fatalf("stalled body not ended by the read deadline: %q %v", line, err)
+	// At most insightBodyReaders bodies are read at once: the rest get 503 at
+	// once, and the read deadline ends the stalled ones with a 400.
+	busy, ended := 0, 0
+	for _, c := range conns {
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		line, err := bufio.NewReader(c).ReadString('\n')
+		switch {
+		case err == nil && strings.Contains(line, "503"):
+			busy++
+		case err == nil && strings.Contains(line, "400"):
+			ended++
+		default:
+			t.Fatalf("stalled body not answered: %q %v", line, err)
+		}
+	}
+	if ended > insightBodyReaders || busy < len(conns)-insightBodyReaders {
+		t.Fatalf("body readers not capped: %d ended, %d busy", ended, busy)
+	}
+	if n := len(s.readers); n != 0 {
+		t.Fatalf("body readers held after the deadline: %d", n)
 	}
 	if n := len(s.slots); n != 0 {
 		t.Fatalf("slots held after the deadline: %d", n)
+	}
+}
+
+// A declared Content-Length above the limit is refused before any read.
+func TestInsightOversizedContentLengthRefused(t *testing.T) {
+	s := insightTestServer(t, insightFixture())
+	body := &blockingBody{reading: make(chan struct{}, 1), release: make(chan struct{})}
+	r := httptest.NewRequest("POST", "/api/tx/send", body)
+	r.ContentLength = insightBodyLimit + 1
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != 413 {
+		t.Fatalf("status %d", w.Code)
+	}
+	select {
+	case <-body.reading:
+		t.Fatal("oversized body was read")
+	default:
+	}
+	if n := len(s.readers); n != 0 {
+		t.Fatalf("reader slot leaked: %d", n)
 	}
 }

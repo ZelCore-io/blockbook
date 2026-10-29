@@ -25,6 +25,10 @@ const insightBodyLimit = 8 << 20
 // concurrency slot is taken.
 const insightBodyTimeout = 10 * time.Second
 
+// insightBodyReaders caps POST bodies read at once (with insightBodyLimit,
+// at most 128 MiB buffered), since body reads hold no concurrency slot.
+const insightBodyReaders = 16
+
 type insightWorker interface {
 	GetSystemInfo(bool) (*api.SystemInfo, error)
 	GetAddress(string, int, int, api.AccountDetails, *api.AddressFilter, string) (*api.Address, error)
@@ -45,6 +49,7 @@ type InsightServer struct {
 	broadcast func(string) (string, error)
 	ready     atomic.Bool
 	slots     chan struct{}
+	readers   chan struct{}
 	mu        sync.Mutex
 	closing   bool
 	started   bool
@@ -70,7 +75,7 @@ func NewInsightServer(binding string, chainType bchain.ChainType, decimals int, 
 	if worker == nil {
 		return nil, errors.New("Insight requires a query worker")
 	}
-	s := &InsightServer{worker: worker, broadcast: broadcast, slots: make(chan struct{}, 32), blockCache: newInsightBlockCache()}
+	s := &InsightServer{worker: worker, broadcast: broadcast, slots: make(chan struct{}, 32), readers: make(chan struct{}, insightBodyReaders), blockCache: newInsightBlockCache()}
 	s.http = &http.Server{Addr: binding, Handler: s, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	return s, nil
 }
@@ -158,6 +163,21 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The body is read, size-limited and parsed before a concurrency slot is
 	// taken, so clients that trickle a body cannot hold the 32 slots.
 	if r.Method == http.MethodPost {
+		// Refusals close the connection: net/http would otherwise drain the
+		// unread body before answering, which a trickling client can stall.
+		if r.ContentLength > insightBodyLimit {
+			w.Header().Set("Connection", "close")
+			insightError(w, 413, "Request body too large")
+			return
+		}
+		select {
+		case s.readers <- struct{}{}:
+		default:
+			w.Header().Set("Connection", "close")
+			w.Header().Set("Retry-After", "1")
+			insightError(w, 503, "Service busy")
+			return
+		}
 		timeout := s.bodyTimeout
 		if timeout <= 0 {
 			timeout = insightBodyTimeout
@@ -166,6 +186,7 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// server-wide ReadTimeout still applies then.
 		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(timeout))
 		body, code, err := insightReadBody(w, r)
+		<-s.readers
 		if err != nil {
 			code, message := insightErrorStatus(code)
 			insightError(w, code, message)

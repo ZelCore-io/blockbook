@@ -201,7 +201,8 @@ reads startup state that is changed during synchronization.
 At most 32 requests enter handlers concurrently. Excess work receives immediate 503 with
 `Retry-After: 1`; there is no waiting queue. A POST body is read (at most 8 MiB, within a 10
 second body deadline) before a slot is taken, so a client that trickles a body occupies a
-connection but no slot; it gets 400 when the deadline passes. HTTP limits are five seconds for
+connection but no slot; it gets 400 when the deadline passes. At most 16 bodies are read at once
+(503 beyond that), and a declared `Content-Length` above 8 MiB gets 413 before any read. HTTP limits are five seconds for
 headers, 30 seconds for reading, 60 seconds for writing and idle connections, and 1 MiB of headers.
 
 The listener does not rate-limit by source. HAProxy in front of it should: set
