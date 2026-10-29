@@ -89,9 +89,12 @@ type Config struct {
 		InternalBindingTemplate string `json:"internal_binding_template"`
 		PublicBindingTemplate   string `json:"public_binding_template"`
 		InsightBindingTemplate  string `json:"insight_binding_template,omitempty"`
-		ExplorerURL             string `json:"explorer_url"`
-		AdditionalParams        string `json:"additional_params"`
-		BlockChain              struct {
+		// InsightUI adds -insightui: the Insight listener also serves the
+		// public explorer for paths Insight does not match.
+		InsightUI        bool   `json:"insight_ui,omitempty"`
+		ExplorerURL      string `json:"explorer_url"`
+		AdditionalParams string `json:"additional_params"`
+		BlockChain       struct {
 			Parse                  bool   `json:"parse,omitempty"`
 			Subversion             string `json:"subversion,omitempty"`
 			AddressFormat          string `json:"address_format,omitempty"`
@@ -697,6 +700,9 @@ const insightBindHostEnv = "${BLOCKBOOK_INSIGHT_HOST}"
 func (c *Config) validateInsight() error {
 	port, binding := c.Ports.BlockbookInsight, c.Blockbook.InsightBindingTemplate
 	if port == 0 && binding == "" {
+		if c.Blockbook.InsightUI {
+			return fmt.Errorf("insight_ui requires the Insight listener (blockbook_insight and insight_binding_template)")
+		}
 		return nil
 	}
 	if port < 1 || port > 65535 || binding == "" {

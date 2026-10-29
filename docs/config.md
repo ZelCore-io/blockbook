@@ -107,6 +107,12 @@ Good examples of coin configuration are
        unit (see [env.md](env.md)). No other `$` reference is accepted, and an unset variable
        makes Blockbook refuse to start. This listener serves plain HTTP; the proxy provides public TLS. Only
        Bitcoin-type chains with eight decimals are eligible. See the [compatibility profile](insight-compatibility.md).
+    * `insight_ui` – Optional, default `false`. Adds *-insightui* after *-insight*: the Insight listener
+       also serves the public explorer (UI pages, static files, `/api/v2`, websocket) for every path
+       Insight itself does not match, so one hostname can serve both. Requires the Insight listener
+       (`ports.blockbook_insight` and `insight_binding_template`). Set `public_url` in
+       `block_chain.additional_params` with it, so pages on the second hostname carry the canonical
+       URL of the main explorer. See [Explorer UI on the listener](insight-compatibility.md#explorer-ui-on-the-listener).
     * `explorer_url` – URL of blockchain explorer. Leave empty for internal explorer.
     * `additional_params` – Additional params of exec command (see [Dogecoin definition](/configs/coins/dogecoin.json)).
     * `block_chain` – Configuration of BlockChain type that ensures communication with back-end service. All options

@@ -104,6 +104,13 @@ func (s *PublicServer) SetPublicURL(publicURL string) {
 	s.publicURL = strings.TrimRight(strings.TrimSpace(publicURL), "/")
 }
 
+// Handler returns the public server's HTTP handler, including its REST/UI rate
+// limiter, so another listener (the Insight -insightui fallback) can serve the
+// same explorer in-process.
+func (s *PublicServer) Handler() http.Handler {
+	return s.https.Handler
+}
+
 // NewPublicServer creates new public server http interface to blockbook and returns its handle
 // only basic functionality is mapped, to map all functions, call
 func NewPublicServer(binding string, certFiles string, db *db.RocksDB, chain bchain.BlockChain, mempool bchain.Mempool, txCache *db.TxCache, explorerURL string, metrics *common.Metrics, is *common.InternalState, fiatRates *fiat.FiatRates, debugMode bool) (*PublicServer, error) {

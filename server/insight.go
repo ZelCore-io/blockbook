@@ -64,6 +64,9 @@ type InsightServer struct {
 	feeCache    insightFeeCache
 	// ext holds the coin's own stock routes and tx labels (EnableExtension).
 	ext insightExtension
+	// fallback serves every request the Insight router does not match
+	// (SetFallback, the -insightui flag); nil keeps the Insight 404.
+	fallback http.Handler
 }
 
 func NewInsightServer(binding string, chainType bchain.ChainType, decimals int, worker insightWorker, broadcast func(string) (string, error)) (*InsightServer, error) {
@@ -104,6 +107,33 @@ func (s *InsightServer) Start() error {
 }
 func (s *InsightServer) SetReady() { s.ready.Store(true) }
 
+// SetFallback hands every request the Insight router does not match to h,
+// normally the public server's handler (explorer UI, /api/v2, websocket), so
+// one hostname serves both. Insight routes keep precedence. It must be called
+// before Start.
+func (s *InsightServer) SetFallback(h http.Handler) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.started {
+		return errors.New("Insight fallback must be set before Start")
+	}
+	s.fallback = h
+	return nil
+}
+
+// serveFallback passes an unmatched request to the fallback handler. It runs
+// before admission, so it takes no concurrency or body-reader slot and does
+// not depend on readiness. The listener's short WriteTimeout is lifted for
+// this request, matching the public server (no write timeout): explorer pages
+// and long API calls are bounded by the public server's own limits. The read
+// deadline was set at request start and equals the public ReadTimeout (30s);
+// a websocket upgrade clears the connection deadlines itself.
+func (s *InsightServer) serveFallback(w http.ResponseWriter, r *http.Request) {
+	// Not every ResponseWriter supports deadlines (test recorders).
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	s.fallback.ServeHTTP(w, r)
+}
+
 // Shutdown closes admission before waiting. Legacy worker calls cannot cancel:
 // even when HTTP's deadline expires, the owner must not close their DB or chain.
 func (s *InsightServer) Shutdown(ctx context.Context) error {
@@ -137,13 +167,17 @@ func insightError(w http.ResponseWriter, code int, message string) {
 }
 
 func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	route, methods, ok := s.match(r)
+	if !ok && s.fallback != nil {
+		s.serveFallback(w, r)
+		return
+	}
 	sourceURL, sourceLabel := sourceLink(common.GetVersionInfo().GitCommit)
 	w.Header().Set("Link", fmt.Sprintf("<%s>; rel=\"source\"; title=\"%s\"", sourceURL, sourceLabel))
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Expose-Headers", "Link")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	route, methods, ok := s.match(r)
 	if !ok {
 		insightError(w, 404, "Route not found")
 		return

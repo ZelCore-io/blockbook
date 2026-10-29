@@ -740,6 +740,8 @@ func TestInsightServiceConfiguration(t *testing.T) {
 				{"wrong port", `,"blockbook_insight":9876`, `,"insight_binding_template":"127.0.0.1:1234"`, true},
 				{"invalid template", `,"blockbook_insight":9876`, `,"insight_binding_template":"{{broken"`, true},
 				{"unsafe whitespace", `,"blockbook_insight":9876`, `,"insight_binding_template":"127.0.0.1:9876 -public=0.0.0.0:80"`, true},
+				{"ui", `,"blockbook_insight":9876`, `,"insight_binding_template":"127.0.0.1:{{.Ports.BlockbookInsight}}","insight_ui":true`, false},
+				{"ui without listener", "", `,"insight_ui":true`, true},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					dir := t.TempDir()
@@ -783,7 +785,15 @@ func TestInsightServiceConfiguration(t *testing.T) {
 					if strings.Contains(service, "Wants=") {
 						t.Fatal("synthetic coin unexpectedly wants a backend")
 					}
-					if tc.name == "enabled" {
+					// -insightui is rendered only for the coin that opts in.
+					if strings.Contains(service, "-insightui") != (tc.name == "ui") {
+						t.Fatalf("incorrect -insightui flag for %s: %s", tc.name, service)
+					}
+					if tc.name == "ui" {
+						if !strings.Contains(service, " -insight=127.0.0.1:9876 -insightui ") {
+							t.Fatalf("Insight UI flags missing from actual service: %s", data)
+						}
+					} else if tc.name == "enabled" {
 						if !strings.Contains(string(data), " -insight=127.0.0.1:9876 ") {
 							t.Fatalf("Insight flag missing from actual service: %s", data)
 						}
@@ -804,7 +814,8 @@ func TestInsightServiceConfiguration(t *testing.T) {
 }
 
 func TestInsightProductionCoinConfigs(t *testing.T) {
-	for _, alias := range []string{"bitcoin", "zcash"} {
+	// Only firo serves the explorer UI on the Insight listener (insight_ui).
+	for alias, wantUI := range map[string]bool{"bitcoin": false, "zcash": false, "firo": true} {
 		t.Run(alias, func(t *testing.T) {
 			cfg, err := LoadConfig("../../configs", alias)
 			if err != nil {
@@ -829,6 +840,9 @@ func TestInsightProductionCoinConfigs(t *testing.T) {
 			}
 			if !strings.Contains(string(unit), " -insight=${BLOCKBOOK_INSIGHT_HOST}:9876 ") {
 				t.Fatalf("%s unit lacks the Insight flag:\n%s", alias, unit)
+			}
+			if cfg.Blockbook.InsightUI != wantUI || strings.Contains(string(unit), " -insightui ") != wantUI {
+				t.Fatalf("%s -insightui = %v, want %v:\n%s", alias, !wantUI, wantUI, unit)
 			}
 		})
 	}
