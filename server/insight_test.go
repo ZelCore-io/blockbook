@@ -54,10 +54,12 @@ type insightFake struct {
 	spending   []bool
 	txErr      map[string]error
 	clampPages bool
-	// pages records the page of every GetAddress call; pageHook rewrites
-	// the txids of a history page (e.g. to inject a duplicate).
-	pages    []int
-	pageHook func(page int, ids []string) []string
+	// pages records the page of every GetAddress call, historyPages only
+	// those of txid-history calls; pageHook rewrites the txids of a history
+	// page (e.g. to inject a duplicate).
+	pages        []int
+	historyPages []int
+	pageHook     func(page, size int, ids []string) []string
 }
 
 func (f *insightFake) GetSystemInfo(bool) (*api.SystemInfo, error) {
@@ -82,6 +84,7 @@ func (f *insightFake) GetAddress(_ string, page, size int, d api.AccountDetails,
 	if d < api.AccountDetailsTxidHistory {
 		return &out, nil
 	}
+	f.historyPages = append(f.historyPages, page)
 	// address.Txids is the merged pending+confirmed sequence; page it like
 	// computeAccountPaging, which clamps a page past the end to the last page.
 	ids := f.address.Txids
@@ -98,7 +101,7 @@ func (f *insightFake) GetAddress(_ string, page, size int, d api.AccountDetails,
 	}
 	out.Txids = append([]string{}, ids[lo:hi]...)
 	if f.pageHook != nil {
-		out.Txids = f.pageHook(page, out.Txids)
+		out.Txids = f.pageHook(page, size, out.Txids)
 	}
 	out.Paging = api.Paging{Page: page, TotalPages: last, ItemsOnPage: size}
 	return &out, nil
@@ -215,7 +218,7 @@ func TestInsightContracts(t *testing.T) {
 					t.Errorf("missing %s in %s", v, w.Body)
 				}
 			}
-			if tc.name == "history" && (!reflect.DeepEqual(f.fetched, []string{"a", "b"}) || f.prefix != 1000 || f.detail != api.AccountDetailsTxidHistory) {
+			if tc.name == "history" && (!reflect.DeepEqual(f.fetched, []string{"a", "b"}) || f.prefix != 2 || f.detail != api.AccountDetailsTxidHistory) {
 				t.Fatalf("query/enrichment: %+v", f)
 			}
 			if tc.name == "summary" && f.detail != api.AccountDetailsTxidHistory {
@@ -232,12 +235,13 @@ func TestInsightInvalidRequests(t *testing.T) {
 		{"GET", "/unknown", "", 404}, {"OPTIONS", "/unknown", "", 404}, {"POST", "/api/status", "", 405}, {"GET", "/api/tx/send", "", 405},
 		{"POST", "/api/sync", "", 405}, {"OPTIONS", "/insight-api/status", "", 204},
 		{"GET", "/api/addr", "", 400}, {"GET", "/api/addrs/A,B/txs", "", 400},
-		{"GET", "/api/addrs/A/txs?from=-1", "", 400}, {"GET", "/api/addrs/A/txs?to=1001", "", 400},
-		{"GET", "/api/addrs/A/txs?to=1000", "", 200}, {"GET", "/api/addrs/A/txs?from=2000&to=3000", "", 200}, {"GET", "/api/addrs/A/txs//5", "", 400}, {"GET", "/api/addrs/A/txs/0/", "", 200},
-		{"GET", "/api/addrs/A/txs/0//", "", 400}, {"GET", "/api/addr//balance", "", 400}, {"GET", "/api/txs?address=", "", 400},
-		{"GET", "/api/txs?address=A,B", "", 400}, {"GET", "/api/addr/A?from=x", "", 400}, {"GET", "/api/addr/A?from=0&to=1000", "", 200},
+		{"GET", "/api/addrs/A/txs?from=-1&to=5", "", 400}, {"GET", "/api/addrs/A/txs?from=0&to=1001", "", 400},
+		{"GET", "/api/addrs/A/txs?to=1001", "", 200}, {"GET", "/api/addrs/A/txs?from=-1", "", 200},
+		{"GET", "/api/addrs/A/txs?from=0&to=1000", "", 200}, {"GET", "/api/addrs/A/txs?from=2000&to=3000", "", 200}, {"GET", "/api/addrs/A/txs//5", "", 200}, {"GET", "/api/addrs/A/txs/0/", "", 200},
+		{"GET", "/api/addrs/A/txs/0//", "", 200}, {"GET", "/api/addrs/A/txs/1/x", "", 400}, {"GET", "/api/addr//balance", "", 400}, {"GET", "/api/txs?address=", "", 400},
+		{"GET", "/api/txs?address=A,B", "", 400}, {"GET", "/api/addr/A?from=x&to=1", "", 400}, {"GET", "/api/addr/A?from=x", "", 200}, {"GET", "/api/addr/A?from=0&to=1000", "", 200},
 		{"GET", "/api/addr/A?from=0&to=1001", "", 400},
-		{"GET", "/api/addrs/A/txs?from=2&to=1", "", 400}, {"GET", "/api/addrs/A/txs?from=1.5", "", 400},
+		{"GET", "/api/addrs/A/txs?from=2&to=1", "", 400}, {"GET", "/api/addrs/A/txs?from=1.5&to=3", "", 400},
 		{"POST", "/api/tx/send", `{}`, 400}, {"POST", "/api/tx/send", `{"rawtx":1}`, 400},
 		{"POST", "/api/tx/send", `{"rawtx":"a"}`, 400}, {"POST", "/api/tx/send", `{"rawtx":"gg"}`, 400},
 		{"POST", "/api/tx/send", `{"rawtx":""}`, 400}, {"POST", "/api/tx/send", `{"rawtx":"aa"} {}`, 400},
@@ -355,14 +359,19 @@ func TestInsightHistoryWindows(t *testing.T) {
 		query    string
 		from, to int
 		detail   api.AccountDetails
+		history  []int
 		ids      []string
 	}{
-		{"", 0, 4, api.AccountDetailsTxidHistory, []string{"pending", "a", "b", "c"}},
-		{"?from=0&to=1", 0, 1, api.AccountDetailsTxidHistory, []string{"pending"}},
-		{"?from=1&to=2", 1, 2, api.AccountDetailsTxidHistory, []string{"a"}},
-		{"?from=2&to=4", 2, 4, api.AccountDetailsTxidHistory, []string{"b", "c"}},
-		{"?from=0&to=0", 0, 0, api.AccountDetailsTokens, nil},
-		{"?from=1000&to=1000", 1000, 1000, api.AccountDetailsTokens, nil},
+		// The worker page size is the window size, so the window lies in at
+		// most two worker pages; an empty window reads the totals alone.
+		{"", 0, 4, api.AccountDetailsTxidHistory, []int{1}, []string{"pending", "a", "b", "c"}},
+		{"?from=0&to=1", 0, 1, api.AccountDetailsTxidHistory, []int{1}, []string{"pending"}},
+		{"?from=1&to=2", 1, 2, api.AccountDetailsTxidHistory, []int{2}, []string{"a"}},
+		{"?from=2&to=4", 2, 4, api.AccountDetailsTxidHistory, []int{2}, []string{"b", "c"}},
+		{"?from=0&to=0", 0, 0, api.AccountDetailsTokens, nil, nil},
+		{"?from=1000&to=1000", 1000, 1000, api.AccountDetailsTokens, nil, nil},
+		{"?from=3", 0, 4, api.AccountDetailsTxidHistory, []int{1}, []string{"pending", "a", "b", "c"}},
+		{"?to=3", 0, 4, api.AccountDetailsTxidHistory, []int{1}, []string{"pending", "a", "b", "c"}},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
 			f := insightFixture()
@@ -374,10 +383,8 @@ func TestInsightHistoryWindows(t *testing.T) {
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil {
 				t.Fatal(w)
 			}
-			// A window inside the first worker page reads only page 1; an
-			// empty window reads the totals alone.
-			if out.TotalItems != 4 || out.From != tc.from || out.To != tc.to || f.detail != tc.detail || !reflect.DeepEqual(f.pages, []int{1}) || !reflect.DeepEqual(f.fetched, tc.ids) {
-				t.Fatalf("response=%s detail=%d pages=%v enriched=%v", w.Body, f.detail, f.pages, f.fetched)
+			if out.TotalItems != 4 || out.From != tc.from || out.To != tc.to || f.detail != tc.detail || !reflect.DeepEqual(f.historyPages, tc.history) || !reflect.DeepEqual(f.fetched, tc.ids) {
+				t.Fatalf("response=%s detail=%d history pages=%v enriched=%v", w.Body, f.detail, f.historyPages, f.fetched)
 			}
 		})
 	}

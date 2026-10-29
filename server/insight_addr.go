@@ -10,8 +10,6 @@ import (
 )
 
 const (
-	// insightHistoryPage is the worker page size used for address history.
-	insightHistoryPage = 1000
 	// insightMaxWindow is the largest to-from of one history window.
 	insightMaxWindow = 1000
 	// insightMaxHistoryPage bounds the worker page number so the worker's
@@ -26,23 +24,21 @@ const (
 
 var insightHistoryFilter = &api.AddressFilter{Vout: api.AddressFilterVoutOff}
 
-// insightWindow parses a from/to history window. Both are digits only; an
-// absent value defaults to 0 and defTo. from <= to and to-from <= 1000; to
-// has no upper bound (deep paging).
+// insightWindow parses a from/to history window. As in stock, the window
+// is used only when both are given; otherwise it is 0..defTo. Both are
+// digits only, from <= to and to-from <= 1000; to has no upper bound (deep
+// paging).
 func insightWindow(fromStr, toStr string, defTo int) (from, to int, err error) {
-	parse := func(value string, fallback int) (int, error) {
-		if value == "" {
-			return fallback, nil
-		}
-		if !insightDigits(value) {
-			return 0, errors.New("invalid offset")
-		}
-		return strconv.Atoi(value)
+	if fromStr == "" || toStr == "" {
+		return 0, defTo, nil
 	}
-	if from, err = parse(fromStr, 0); err != nil {
+	if !insightDigits(fromStr) || !insightDigits(toStr) {
+		return 0, 0, errors.New("invalid offset")
+	}
+	if from, err = strconv.Atoi(fromStr); err != nil {
 		return 0, 0, err
 	}
-	if to, err = parse(toStr, defTo); err != nil {
+	if to, err = strconv.Atoi(toStr); err != nil {
 		return 0, 0, err
 	}
 	if from > to || to-from > insightMaxWindow {
@@ -53,36 +49,44 @@ func insightWindow(fromStr, toStr string, defTo int) (from, to int, err error) {
 
 // addressPages returns the deduplicated txids in [from,to) of the address's
 // merged newest-first sequence (pending first, then confirmed: Blockbook's
-// paged order, see computeAccountPaging), plus the first worker answer for
-// the summary and the total Txs+UnconfirmedTxs. It reads at most two worker
-// pages of insightHistoryPage. Offsets are positions in the worker's
-// sequence, so consecutive windows tile it without gaps; a txid repeated
-// inside one window is returned once. An empty window reads only the totals.
-// The int is the HTTP status for an error.
+// paged order, see computeAccountPaging), plus a worker answer for the
+// summary and the total Txs+UnconfirmedTxs. The int is the HTTP status for
+// an error.
+//
+// The worker page size is the window size, so the window lies in at most two
+// worker pages and the worker reads about `to` txids, not a fixed 1000. A
+// window that does not start on the first page is preceded by a cheap totals
+// query, and a window at or past the end stops there, so a huge from never
+// makes the worker scan the whole history. Offsets are positions in the
+// worker's sequence, so consecutive windows tile it without gaps; a txid
+// repeated inside one window is returned once.
 func (s *InsightServer) addressPages(address string, from, to int) (*api.Address, []string, int, int, error) {
-	if from >= to {
-		head, err := s.worker.GetAddress(address, 1, 1, api.AccountDetailsTokens, insightHistoryFilter, "")
-		if err != nil {
-			return nil, nil, 0, insightAddressErrorCode(err), err
-		}
-		if head == nil {
-			return nil, nil, 0, http.StatusInternalServerError, errors.New("missing address")
-		}
-		return head, []string{}, head.Txs + head.UnconfirmedTxs, 0, nil
-	}
-	first, last := from/insightHistoryPage+1, (to-1)/insightHistoryPage+1
-	var head *api.Address
-	var ids []string
-	for page := first; page <= last; page++ {
-		a, err := s.worker.GetAddress(address, min(page, insightMaxHistoryPage), insightHistoryPage, api.AccountDetailsTxidHistory, insightHistoryFilter, "")
+	size := to - from
+	if size <= 0 || from >= size {
+		a, err := s.worker.GetAddress(address, 1, 1, api.AccountDetailsTokens, insightHistoryFilter, "")
 		if err != nil {
 			return nil, nil, 0, insightAddressErrorCode(err), err
 		}
 		if a == nil {
 			return nil, nil, 0, http.StatusInternalServerError, errors.New("missing address")
 		}
-		if head == nil {
-			head = a
+		if total := a.Txs + a.UnconfirmedTxs; size <= 0 || from >= total {
+			return a, []string{}, total, 0, nil
+		}
+	}
+	first, last := from/size+1, (to-1)/size+1
+	var paged *api.Address
+	var ids []string
+	for page := first; page <= last; page++ {
+		a, err := s.worker.GetAddress(address, min(page, insightMaxHistoryPage), size, api.AccountDetailsTxidHistory, insightHistoryFilter, "")
+		if err != nil {
+			return nil, nil, 0, insightAddressErrorCode(err), err
+		}
+		if a == nil {
+			return nil, nil, 0, http.StatusInternalServerError, errors.New("missing address")
+		}
+		if paged == nil {
+			paged = a
 		}
 		// The worker clamps a page past the end to the last page.
 		if a.Page != page {
@@ -90,7 +94,9 @@ func (s *InsightServer) addressPages(address string, from, to int) (*api.Address
 		}
 		ids = append(ids, a.Txids...)
 	}
-	base := (first - 1) * insightHistoryPage
+	// The paged answer's totals match the sequence the offsets index.
+	head := paged
+	base := (first - 1) * size
 	lo, hi := min(from-base, len(ids)), min(to-base, len(ids))
 	out := make([]string, 0, hi-lo)
 	seen := make(map[string]struct{}, hi-lo)
@@ -101,13 +107,6 @@ func (s *InsightServer) addressPages(address string, from, to int) (*api.Address
 		}
 	}
 	return head, out, head.Txs + head.UnconfirmedTxs, 0, nil
-}
-
-// addressTxids is addressPages without the summary: the window's txids and
-// total = Txs + UnconfirmedTxs.
-func (s *InsightServer) addressTxids(address string, from, to int) (ids []string, total int, err error) {
-	_, ids, total, _, err = s.addressPages(address, from, to)
-	return ids, total, err
 }
 
 // insightOwnTx returns a copy of tx with isOwn set on the inputs and outputs

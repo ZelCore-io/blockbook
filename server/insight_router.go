@@ -107,10 +107,10 @@ func insightMatch(r *http.Request) (insightRoute, []string, bool) {
 				methods = insightGetPost
 			}
 			if n > 2 {
-				route.from = insightPathOffset(parts[2])
+				route.from = parts[2]
 			}
 			if n > 3 {
-				route.to = insightPathOffset(parts[3])
+				route.to = parts[3]
 			}
 		case n == 3 && parts[2] == "utxo":
 			route.kind, route.addresses = "multiutxo", strings.Split(parts[1], ",")
@@ -121,10 +121,10 @@ func insightMatch(r *http.Request) (insightRoute, []string, bool) {
 		case n >= 3 && n <= 5 && parts[2] == "txs":
 			route.kind, single = "history", parts[1]
 			if n > 3 {
-				route.from = insightPathOffset(parts[3])
+				route.from = parts[3]
 			}
 			if n > 4 {
-				route.to = insightPathOffset(parts[4])
+				route.to = parts[4]
 			}
 		}
 	}
@@ -141,16 +141,6 @@ func insightMatch(r *http.Request) (insightRoute, []string, bool) {
 		route.to = query.Get("to")
 	}
 	return route, methods, true
-}
-
-// insightPathOffset keeps an empty path offset (addrs/A/txs//5) malformed
-// rather than absent: it is not replaced by the query value or the default,
-// and the window parser rejects it.
-func insightPathOffset(segment string) string {
-	if segment == "" {
-		return "/"
-	}
-	return segment
 }
 
 // insightSingleAddress returns the one address of a single-address route.

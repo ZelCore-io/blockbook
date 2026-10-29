@@ -56,20 +56,25 @@ func TestInsightHistoryDeepPaging(t *testing.T) {
 	for _, tc := range []struct {
 		query    string
 		code     int
-		pages    []int
+		history  []int // txid-history worker pages
+		size     int   // their page size: the window size
+		totals   bool  // a cheap totals query came first
 		from, to int
 		ids      []string
 	}{
-		{"?from=1500&to=1510", 200, []int{2}, 1500, 1510, insightSeq("c", 1498, 1508)},
-		{"?from=990&to=1010", 200, []int{1, 2}, 990, 1010, insightSeq("c", 988, 1008)},
-		{"?from=2500&to=2600", 200, []int{3}, 2500, 2502, []string{"c2498", "c2499"}},
-		{"?from=3000&to=3001", 200, []int{4}, 3000, 3000, []string{}},
-		// to-from <= 1000 (spec/plan rule; the brief's 0..1001 example conflicts with it).
-		{"?from=0&to=1000", 200, []int{1}, 0, 1000, append([]string{"p0", "p1"}, insightSeq("c", 0, 998)...)},
-		{"?from=5&to=1005", 200, []int{1, 2}, 5, 1005, insightSeq("c", 3, 1003)},
-		{"?from=0&to=1001", 400, nil, 0, 0, nil},
-		{"?from=5&to=1006", 400, nil, 0, 0, nil},
-		{"?from=999999999999999&to=1000000000000000", 200, []int{insightMaxHistoryPage}, 999999999999999, 999999999999999, []string{}},
+		{"?from=1500&to=1510", 200, []int{151}, 10, true, 1500, 1510, insightSeq("c", 1498, 1508)},
+		{"?from=990&to=1010", 200, []int{50, 51}, 20, true, 990, 1010, insightSeq("c", 988, 1008)},
+		{"?from=2500&to=2600", 200, []int{26}, 100, true, 2500, 2502, []string{"c2498", "c2499"}},
+		// Past the end: the totals answer it, no history page is read.
+		{"?from=2502&to=2600", 200, nil, 0, true, 2502, 2502, []string{}},
+		{"?from=3000&to=3001", 200, nil, 0, true, 3000, 3000, []string{}},
+		{"?from=999999999999999&to=1000000000000000", 200, nil, 0, true, 999999999999999, 999999999999999, []string{}},
+		// The wallet's hot path: one worker page of 50, no totals query.
+		{"?from=0&to=50", 200, []int{1}, 50, false, 0, 50, append([]string{"p0", "p1"}, insightSeq("c", 0, 48)...)},
+		{"?from=0&to=1000", 200, []int{1}, 1000, false, 0, 1000, append([]string{"p0", "p1"}, insightSeq("c", 0, 998)...)},
+		{"?from=5&to=1005", 200, []int{1, 2}, 1000, false, 5, 1005, insightSeq("c", 3, 1003)},
+		{"?from=0&to=1001", 400, nil, 0, false, 0, 0, nil},
+		{"?from=5&to=1006", 400, nil, 0, false, 0, 0, nil},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
 			f := insightDeepFixture()
@@ -91,13 +96,31 @@ func TestInsightHistoryDeepPaging(t *testing.T) {
 			if out.TotalItems != 2502 || out.From != tc.from || out.To != tc.to || !reflect.DeepEqual(ids, tc.ids) {
 				t.Fatalf("total=%d from=%d to=%d ids=%v", out.TotalItems, out.From, out.To, ids)
 			}
-			if !reflect.DeepEqual(f.pages, tc.pages) || f.prefix != 1000 || f.detail != api.AccountDetailsTxidHistory {
-				t.Fatalf("worker pages %v size %d detail %d", f.pages, f.prefix, f.detail)
+			if !reflect.DeepEqual(f.historyPages, tc.history) || (tc.history != nil && f.prefix != tc.size) {
+				t.Fatalf("worker history pages %v size %d", f.historyPages, f.prefix)
 			}
-			if !reflect.DeepEqual(f.fetched, append([]string(nil), tc.ids...)) && !(len(f.fetched) == 0 && len(tc.ids) == 0) {
+			if totals := len(f.pages) > len(f.historyPages); totals != tc.totals {
+				t.Fatalf("totals query %v, pages %v", totals, f.pages)
+			}
+			if len(tc.ids) > 0 && !reflect.DeepEqual(f.fetched, tc.ids) || len(tc.ids) == 0 && len(f.fetched) != 0 {
 				t.Fatalf("enriched %v", f.fetched)
 			}
 		})
+	}
+}
+
+// The totals can run ahead of the list the worker pages (a tx confirmed
+// between reads); the worker then clamps the page and nothing is returned.
+func TestInsightHistoryClampedPage(t *testing.T) {
+	f := insightDeepFixture()
+	f.address.Txs = 5000
+	w := insightRequest(insightTestServer(t, f), "GET", "/api/addrs/A/txs?from=3000&to=3010", "")
+	var out insightHistoryOut
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil || len(out.Items) != 0 || out.To != 3000 || out.TotalItems != 5002 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if !reflect.DeepEqual(f.historyPages, []int{301}) || len(f.fetched) != 0 {
+		t.Fatalf("history pages %v fetched %v", f.historyPages, f.fetched)
 	}
 }
 
@@ -124,10 +147,11 @@ func TestInsightHistoryWindowsTile(t *testing.T) {
 
 func TestInsightHistoryDeepPagingAcrossPages(t *testing.T) {
 	f := insightDeepFixture()
-	// The worker repeats page 1's last id as page 2's first.
-	f.pageHook = func(page int, ids []string) []string {
-		if page == 2 {
-			return append([]string{f.address.Txids[999]}, ids...)
+	// The window 995..1005 reads pages 100 and 101 of 10; the worker
+	// repeats page 100's last id as page 101's first.
+	f.pageHook = func(page, size int, ids []string) []string {
+		if page == 101 {
+			return append([]string{f.address.Txids[(page-1)*size-1]}, ids...)
 		}
 		return ids
 	}
@@ -138,8 +162,8 @@ func TestInsightHistoryDeepPagingAcrossPages(t *testing.T) {
 	}
 	ids := insightHistoryIDs(out)
 	want := []string{"c993", "c994", "c995", "c996", "c997", "c998", "c999", "c1000", "c1001"}
-	if !reflect.DeepEqual(ids, want) || out.To != 995+len(want) {
-		t.Fatalf("to=%d ids=%v", out.To, ids)
+	if !reflect.DeepEqual(ids, want) || out.To != 995+len(want) || !reflect.DeepEqual(f.historyPages, []int{100, 101}) {
+		t.Fatalf("to=%d ids=%v pages=%v", out.To, ids, f.historyPages)
 	}
 }
 
@@ -198,8 +222,20 @@ func TestInsightAddrTransactions(t *testing.T) {
 	if !strings.HasPrefix(w.Body.String(), strings.TrimSuffix(insightMasterSummary, "}\n")+`,"transactions":["p0","p1",`) {
 		t.Fatalf("summary prefix: %.300s", w.Body)
 	}
-	if len(f.fetched) != 0 || !reflect.DeepEqual(f.pages, []int{1}) {
-		t.Fatalf("fetched %d txs, pages %v", len(f.fetched), f.pages)
+	// Bounded like stock: one worker page of 1000, no totals query.
+	if len(f.fetched) != 0 || !reflect.DeepEqual(f.pages, []int{1}) || f.prefix != 1000 {
+		t.Fatalf("fetched %d txs, pages %v, size %d", len(f.fetched), f.pages, f.prefix)
+	}
+	// A window is used only when both from and to are given (stock).
+	for _, path := range []string{"/api/addr/A?from=1500", "/api/addr/A?to=2", "/api/addr/A?from=x"} {
+		f := insightDeepFixture()
+		w := insightRequest(insightTestServer(t, f), "GET", path, "")
+		var out struct {
+			Transactions []string `json:"transactions"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil || len(out.Transactions) != 1000 || out.Transactions[0] != "p0" {
+			t.Fatalf("%s: %d %.200s", path, w.Code, w.Body)
+		}
 	}
 
 	for _, tc := range []struct {
