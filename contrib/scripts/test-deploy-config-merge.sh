@@ -222,6 +222,14 @@ msg=$(fake insight_runtime_check 10.100.0.5 9876 1 2>&1 || true)
 check 'insight runtime: message names the holder and the converter' bash -c 'grep -q "node(4242)" <<< "$1" && grep -q "converter" <<< "$1"' _ "$msg"
 msg=$(fake insight_runtime_check 10.100.0.9 9999 1 2>&1 || true)
 check 'insight runtime: message names the address' bash -c 'grep -q "10.100.0.9 is not an address" <<< "$1"' _ "$msg"
+failbin=$work/failbin
+mkdir -p "$failbin"
+cp "$fakebin/ip" "$failbin/ip"
+printf '#!/bin/sh\nexit 1\n' > "$failbin/ss"
+chmod +x "$failbin"/ip "$failbin"/ss
+# deploy calls the check inside an && list, where errexit is off: run it the same way
+ss_failed() { PATH=$failbin:$PATH FAKE_IP_OUT=$ip_out bash -c 'source "$1"; if insight_runtime_check 10.100.0.5 9999 1; then echo passed; else echo refused; fi' _ "$here/deploy-blockbook.sh" 2>/dev/null; }
+check 'insight runtime: a failing ss fails the check' [ "$(ss_failed)" = refused ]
 check 'insight probe: 200 passes' fake insight_probe 10.100.0.5 9876
 CURL_CODE=503; check 'insight probe: 503 (not ready) passes' fake insight_probe 10.100.0.5 9876
 CURL_CODE=000; check 'insight probe: refused connection fails' refused fake insight_probe 10.100.0.5 9876

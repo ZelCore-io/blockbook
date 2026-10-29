@@ -34,8 +34,9 @@
 # host (ip -o -4 addr show), when the port is held by a process other than this coin's running
 # blockbook (ss -ltnp; stop and disable the Node converter first), and when the package in build/
 # lacks the Insight flag. After the restart the listener is probed (GET /api/status, 200 or 503);
-# a refused connection is a failed check and triggers the rollback. The check also runs with --skip-build and --use-package-unit. Note that a host
-# unit or ExecStart drop-in kept without --use-package-unit never gets the flag.
+# a refused connection is a failed check and triggers the rollback. The check also runs with
+# --skip-build and --use-package-unit. Note that a host unit or ExecStart drop-in kept without
+# --use-package-unit never gets the flag.
 #
 # Only the blockbook-<coin> package is built and installed. The backend package is never
 # built, installed or restarted, and the index database is never touched.
@@ -242,7 +243,7 @@ insight_port_holders() {
 # stopped: HOST must be assigned to this machine, and PORT must be free or held by OWNPID (the
 # running blockbook of this coin on a redeploy). Needs ip and ss. Prints the reason on failure.
 insight_runtime_check() {
-    local host=$1 port=$2 own=$3 holders
+    local host=$1 port=$2 own=$3 listeners holders
     if ! command -v ip >/dev/null || ! command -v ss >/dev/null; then
         echo 'ip and ss are required to check the Insight bind address and port.' >&2
         return 1
@@ -251,7 +252,12 @@ insight_runtime_check() {
         echo "BLOCKBOOK_INSIGHT_HOST=$host is not an address assigned to this host (ip -o -4 addr show); Blockbook would fail to bind. Nothing was stopped or installed." >&2
         return 1
     fi
-    holders=$(ss -ltnp | insight_port_holders "$port" "$own" | paste -sd, -)
+    # ss must succeed: an empty listing from a failed ss would read as a free port.
+    if ! listeners=$(ss -ltnp); then
+        echo "ss -ltnp failed, so the holder of port $port cannot be checked. Nothing was stopped or installed." >&2
+        return 1
+    fi
+    holders=$(insight_port_holders "$port" "$own" <<<"$listeners" | paste -sd, -) || return 1
     if [[ -n $holders ]]; then
         echo "Port $port is already held by $holders, so Blockbook's Insight listener could not bind. If that is the insight-to-blockbook converter (Node), stop and disable it first, then run this script again. Nothing was stopped or installed." >&2
         return 1
