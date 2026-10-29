@@ -61,10 +61,55 @@ they run on separate hosts. The listener serves plain HTTP; public TLS and perim
 policy belong at the existing proxy, and the private interface should be reachable only by the
 trusted proxy.
 
+## Explorer UI on the listener
+
+A coin may also serve the normal Blockbook explorer on the Insight port, so one hostname (for
+Firo, `explorer.firo.zelcore.io` behind HAProxy) answers both the Insight API and the UI. It is
+opt-in per coin with `"blockbook": { "insight_ui": true }`, which adds `-insightui` after
+`-insight=...` in the generated unit; the build rejects it without the Insight listener, and
+Blockbook refuses to start with `-insightui` but no `-insight` or `-public`. Only
+`configs/coins/firo.json` sets it; BTC and ZEC keep the listener exactly as before (unknown
+paths are the Insight JSON 404).
+
+With it on, the Insight router still answers first. Every route in the table below, under
+`/api/` and `/insight-api/`, behaves exactly as without the flag, including OPTIONS and 405, and
+where both servers know a path (`/api/tx/:txid`, `/api/block/:hash`, `/api/block-index/:height`,
+`/api/rawtx/:txid`, `/api/status` and so on) Insight wins. Any other request is handed in-process
+to the public server's own handler (`PublicServer.Handler`): `/`, `/tx/`, `/address/`, `/block/`,
+`/blocks`, `/search`, `/static/`, `/api/v2/...`, `/api/v1/...`, `/websocket`, `/robots.txt`,
+`/sitemap.xml` and the rest. A path neither knows gets the public server's 404 page.
+
+- **Limits.** A fallthrough request is dispatched before Insight admission. It takes none of the
+  32 concurrency slots or 16 body-reader slots, does not wait for Insight readiness and gets none
+  of the Insight CORS or `Link` headers. The public REST/UI rate limiter applies to it, as on the
+  public port.
+- **Timeouts.** The listener's 60 s `WriteTimeout` is lifted for that request
+  (`http.ResponseController`), matching the public server, which has no write timeout. The
+  30 s request read timeout is the same on both servers. A websocket upgrade clears the
+  connection deadlines, so websocket clients stay connected through the listener port. The
+  connection-level limits stay the listener's: 5 s to send headers (public: 10 s) and 60 s
+  keep-alive idle (public: 120 s).
+- **Proxy and TLS.** The listener is plain HTTP behind the proxy. Nothing in the public handler
+  depends on `r.TLS` except the fallback base URL of robots/sitemap/llms.txt, which honours
+  `X-Forwarded-Proto` and is not used at all once `public_url` is set. No cookie is marked
+  `Secure`. The websocket origin check compares the `Origin` header with
+  `<COIN>_WS_ALLOWED_ORIGINS` (see [env.md](env.md)); if that list is set, add the second
+  hostname to it. Client IPs for the rate limiter come from the same trusted-proxy headers as on
+  the public port.
+- **SEO.** The UI on the second hostname is duplicate content. With `public_url` set
+  (`https://blockbook.firo.zelcore.io` for Firo), every page served through the listener carries
+  `<link rel="canonical">`, `og:url` and JSON-LD for the main explorer host, and `robots.txt`,
+  `sitemap.xml` and `llms.txt` advertise only that host. Without `public_url` they would echo the
+  request's own Host, so set it whenever `insight_ui` is on.
+- **Shutdown.** The listener drains in-flight UI requests with its own deadline before the
+  public server stops; websocket connections belong to the public websocket server and are
+  drained by its shutdown, before the database closes.
+
 ## HTTP contract
 
 Every route is served under both `/api/` and `/insight-api/`. OPTIONS on any known path is 204,
-a known path with the wrong method is 405 with `Allow`, and unknown paths are 404.
+a known path with the wrong method is 405 with `Allow`, and unknown paths are 404 (or, with
+`-insightui`, go to the public explorer as described above).
 
 | Method and path | Response |
 | --- | --- |

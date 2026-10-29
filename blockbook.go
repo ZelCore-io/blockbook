@@ -76,6 +76,8 @@ var (
 
 	insightBinding = flag.String("insight", "", "optional Insight HTTP binding host:port behind a trusted reverse proxy (default disabled)")
 
+	insightUI = flag.Bool("insightui", false, "serve the public explorer (UI, /api/v2, websocket) on the Insight listener for paths Insight does not match; requires -insight and -public")
+
 	certFiles = flag.String("certfile", "", "to enable SSL specify path to certificate files without extension, expecting <certfile>.crt and <certfile>.key (default no SSL)")
 
 	explorerContentURL   = flag.String("explorercontenturl", "", "optional HTTPS dashboard public content URL including coin filter (default disabled)")
@@ -377,6 +379,10 @@ func mainWithExitCode() int {
 	}
 
 	var insightServer *server.InsightServer
+	if *insightUI && (*insightBinding == "" || publicServer == nil) {
+		glog.Error("-insightui requires -insight and -public")
+		return exitCodeFatal
+	}
 	if *insightBinding != "" {
 		worker, workerErr := api.NewWorker(index, chain, mempool, txCache, metrics, internalState, fiatRates)
 		if workerErr != nil {
@@ -399,6 +405,9 @@ func mainWithExitCode() int {
 			insightServer.SetBackend(rpc, internalState.CoinShortcut)
 			if ext, ok := parser.(server.InsightExtensionProvider); ok {
 				err = insightServer.EnableExtension(ext.InsightExtension())
+			}
+			if err == nil && *insightUI {
+				err = insightServer.SetFallback(publicServer.Handler())
 			}
 			if err == nil {
 				err = insightServer.Start()
