@@ -57,7 +57,10 @@ Coins without `ports.blockbook_insight` are not checked or changed.
 On BTC and ZEC hosts the listener takes over port 9876 from the converter (the converter is
 stopped and disabled, not removed), so HAProxy needs no change. Port 9876 is registered for both
 coins in the "blockbook insight" column of [ports.md](ports.md); two coins may share it because
-they run on separate hosts. The listener serves plain HTTP; public TLS and perimeter request
+they run on separate hosts. Firo's listener takes port 3001 from the stock Insight
+(bitcore `insight-api-zcoin`), which HAProxy already targets for explorer.firo, so only the new
+blockbook.firo hostnames need proxy changes. bitcore must be stopped first, and on our Firo hosts
+firod runs as bitcore's child, so firod moves to its own service before the switch. The listener serves plain HTTP; public TLS and perimeter request
 policy belong at the existing proxy, and the private interface should be reachable only by the
 trusted proxy.
 
