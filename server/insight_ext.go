@@ -66,14 +66,16 @@ const insightCacheErrTTL = 5 * time.Second
 // its result or error. When a refresh fails the last good value is served
 // (stale-on-error); with no good value the error is served for
 // insightCacheErrTTL. A caller whose context ends stops waiting; the load
-// carries on and fills the cache for the next one.
+// carries on and fills the cache for the next one. errTTL, when set, replaces
+// insightCacheErrTTL for this cache.
 type insightCached struct {
-	mu    sync.Mutex
-	at    time.Time
-	value interface{}
-	err   error
-	errAt time.Time
-	call  *insightCacheCall
+	errTTL time.Duration
+	mu     sync.Mutex
+	at     time.Time
+	value  interface{}
+	err    error
+	errAt  time.Time
+	call   *insightCacheCall
 }
 
 type insightCacheCall struct {
@@ -90,7 +92,11 @@ func (c *insightCached) get(ctx context.Context, ttl time.Duration, load func() 
 		c.mu.Unlock()
 		return v, nil
 	}
-	if c.err != nil && now.Sub(c.errAt) < insightCacheErrTTL {
+	errTTL := c.errTTL
+	if errTTL <= 0 {
+		errTTL = insightCacheErrTTL
+	}
+	if c.err != nil && now.Sub(c.errAt) < errTTL {
 		v, err := c.value, c.err
 		c.mu.Unlock()
 		if v != nil {

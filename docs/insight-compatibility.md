@@ -71,16 +71,21 @@ Firo, `explorer.firo.zelcore.io` behind HAProxy) answers both the Insight API an
 opt-in per coin with `"blockbook": { "insight_ui": true }`, which adds `-insightui` after
 `-insight=...` in the generated unit; the build rejects it without the Insight listener, and
 Blockbook refuses to start with `-insightui` but no `-insight` or `-public`. Only
-`configs/coins/firo.json` sets it; BTC and ZEC keep the listener exactly as before (unknown
-paths are the Insight JSON 404).
+`configs/coins/firo.json` and `configs/coins/zclassic.json` set it; BTC and ZEC keep the
+listener exactly as before (unknown paths are the Insight JSON 404).
 
 With it on, the Insight router still answers first. Every route in the table below, under
 `/api/` and `/insight-api/`, behaves exactly as without the flag, including OPTIONS and 405, and
 where both servers know a path (`/api/tx/:txid`, `/api/block/:hash`, `/api/block-index/:height`,
-`/api/rawtx/:txid`, `/api/status` and so on) Insight wins. Any other request is handed in-process
-to the public server's own handler (`PublicServer.Handler`): `/`, `/tx/`, `/address/`, `/block/`,
-`/blocks`, `/search`, `/static/`, `/api/v2/...`, `/api/v1/...`, `/websocket`, `/robots.txt`,
-`/sitemap.xml` and the rest. A path neither knows gets the public server's 404 page.
+`/api/rawtx/:txid`, `/api/status` and so on) Insight wins. Any other path under `/api/` or
+`/insight-api/` (and `/api`, `/api/`, `/insight-api` themselves) is the Insight JSON 404 with the
+Insight CORS headers, as on stock, except Blockbook's versioned APIs `/api/v1/...` and
+`/api/v2/...`. So `/api/nosuchroute` no longer reaches the public server's `/api/` status page,
+and Blockbook's unversioned API paths (`/api/xpub/`, `/api/balancehistory/`, `/api/sendtx/`, ...)
+are not served on this listener; use their `/api/v2/` forms. Every other request is handed
+in-process to the public server's own handler (`PublicServer.Handler`): `/`, `/tx/`, `/address/`,
+`/block/`, `/blocks`, `/search`, `/static/`, `/api/v2/...`, `/api/v1/...`, `/websocket`,
+`/robots.txt`, `/sitemap.xml` and the rest. A path neither knows gets the public server's 404 page.
 
 - **Limits.** A fallthrough request is dispatched before Insight admission. It takes none of the
   32 concurrency slots or 16 body-reader slots, does not wait for Insight readiness and gets none
@@ -112,13 +117,21 @@ to the public server's own handler (`PublicServer.Handler`): `/`, `/tx/`, `/addr
 
 ## HTTP contract
 
-Every route is served under both `/api/` and `/insight-api/`. OPTIONS on any known path is 204,
+Every route is served under both `/api/` and `/insight-api/`. Empty segments right after the
+prefix are dropped before matching, so `/api//addr/A` is `/api/addr/A`: stock serves that form
+(Express mounts the API router with an optional slash after the prefix), and about 5% of ZCL's
+stock traffic uses it. Nothing else is normalized: an empty segment anywhere else is still an
+empty argument (`/api/addr//balance` and `/api//addr//balance` are 400, never the address
+`balance`), `.` and `..` are ordinary segments that match no route, a doubled slash before the
+prefix (`//api/...`) is not the prefix, and with `-insightui` a request handed to the public
+server keeps its path as sent. OPTIONS on any known path is 204,
 a known path with the wrong method is 405 with `Allow`, and unknown paths are 404 (or, with
-`-insightui`, go to the public explorer as described above).
+`-insightui`, go to the public explorer as described above, except unknown paths under the Insight
+prefixes, which stay the Insight 404).
 
 | Method and path | Response |
 | --- | --- |
-| `GET status` | `{info:{blocks,version,protocolversion,difficulty,errors}}`. `?q=getDifficulty` gives `{difficulty}`, `?q=getBestBlockHash` the backend best hash, `?q=getLastBlockHash` `{syncTipHash,lastblockhash}` from the index tip |
+| `GET status` | `{info:{blocks,version,protocolversion,difficulty,errors,network,testnet,relayfee}}`: `network` (`livenet`, `testnet`, else the daemon's chain name) and `testnet` from the daemon's chain, `relayfee` (coins/kB) from `getnetworkinfo`, cached 10 minutes; each is left out when unknown (no chain name, no daemon RPC or a failed call), and stock's `timeoffset`, `connections` and `proxy` are not served. `?q=getDifficulty` gives `{difficulty}`, `?q=getBestBlockHash` the backend best hash, `?q=getLastBlockHash` `{syncTipHash,lastblockhash}` from the index tip |
 | `GET sync` | `{status,blockChainHeight,syncPercentage,height,error,type}`; `finished` only when Blockbook is in sync, `blockChainHeight` is the daemon height and `height` the index height |
 | `GET peer` | `{connected:true,host:"127.0.0.1",port:null}` |
 | `GET version` | `{version}` of this build |
@@ -126,14 +139,14 @@ a known path with the wrong method is 405 with `Allow`, and unknown paths are 40
 | `GET block/:hash` | Block with txids, reward (coinbase outputs minus block fees), confirmations and `isMainChain` |
 | `GET rawblock/:hash` | `{rawblock}` hex |
 | `GET block-index/:height` | `{blockHash}` |
-| `GET tx/:txid` | Transaction in the superset shape below. `spentTxId`, `spentIndex` and `spentHeight` come from the extended index when the coin has one (BTC); without it (ZEC) `spent` is still true/false but `spentTxId` is null, because finding a spender would walk the whole history of each spent output's address |
+| `GET tx/:txid` | Transaction in the superset shape below. `spentTxId`, `spentIndex` and `spentHeight` come from the extended index when the coin has one (BTC, `-extendedindex`); without it (ZEC, Firo) `spent` is still true/false but `spentTxId`, `spentIndex` and `spentHeight` are null, because finding a spender would walk the whole history of each spent output's address (the Firo dev fund has over 900k txs). Turning on `-extendedindex` needs a full resync. Stock's special-tx payload fields (`extraPayload`, `cbTx`, `proReg`, `proUpServ`, ...) are not served: Blockbook does not keep them in the index, and this route does not request the daemon's verbose JSON |
 | `GET rawtx/:txid` | `{rawtx}` hex |
 | `GET txs?block=<hash>&pageNum=N` | `{pagesTotal,txs}`, 10 transactions per page |
 | `GET txs?address=A&pageNum=N` | `{pagesTotal,txs}`, 10 per page, newest first with pending first |
 | `POST tx/send` | JSON or form `{rawtx:"..."}` to `{txid:"..."}` |
 | `GET addr/:address[/:noTxList]` | Balance summary with explicit zeros, string `balanceSat`, numeric other satoshi fields, `txApperances`, `unconfirmedTxApperances` and a `transactions` txid list (default window 0..1000) |
 | `GET addr/:address/balance`, `totalReceived`, `totalSent`, `unconfirmedBalance` | Bare satoshi integer, as stock Insight. The converter answered the full address summary object on these paths; this is expected difference E11 in `contrib/insightcompare` |
-| `GET addr/:address/utxo` | Array of address, txid, vout, amount, satoshis, height, confirmations and coinbase when known; the full set, not capped |
+| `GET addr/:address/utxo` | Array of address, txid, vout, `scriptPubKey`, amount, satoshis, height, confirmations and coinbase when known; the full set, not capped. `scriptPubKey` is the hex output script of the address's index descriptor (no per-output lookup), which is the output script for P2PKH, P2SH, witness and Firo exchange addresses. Outputs the index folds into another descriptor show that descriptor's script: a P2PK output shows the P2PKH script (stock: the P2PK script), and a Firo Spark name fee output shows its leading P2PKH script, not the full script with the Spark name payload. It is left out if the address does not parse |
 | `GET addrs/:address/txs?from=0&to=50` | `{totalItems,from,to,items}` for one address; exclusive-end offsets |
 | `GET addrs/A,B/txs`, `POST addrs/txs` | Merged history of at most 20 addresses, same shape |
 | `GET addrs/A,B/utxo`, `GET addrs/A,B/unspent`, `POST addrs/utxo` | Concatenated unspent rows of at most 100 addresses; `unspent` returns confirmed outputs only |
@@ -141,6 +154,7 @@ a known path with the wrong method is 405 with `Allow`, and unknown paths are 40
 | `GET utils/estimatefee?nbBlocks=2,3` | `{"2":<coins/kB>,...}`; `-1` when the daemon cannot estimate |
 | `GET currency` | `{status:200,data:{rate:<USD>,short:"<TICKER>"}}`; rate 0 without a fiat source (Firo: stock shape, see [Firo extension](#firo-extension)) |
 | `GET`/`POST messages/verify` | `{result:<bool>}` from the daemon's `verifymessage` |
+| `GET statistics/circulating-supply` | The coin supply in coins as a bare number (`text/html; charset=utf-8`, as stock's `res.send`), or `{"circulatingSupply":"<n>"}` with `?format=object`; read from the daemon, cached 10 minutes; the UTXO-scan fallback is opt-in per coin, otherwise a daemon without a cheap source gives the unknown-route 404 (see [Circulating supply](#circulating-supply)) |
 
 For adapter compatibility, a single address can instead be supplied by `?address=...` on `addr`,
 `addr/utxo` and `addrs/txs`. History also accepts `addrs/:address/txs/:from[/:to]` and
@@ -161,7 +175,12 @@ numbers; `fees` is 0 when unknown), `isCoinBase` (only for a coinbase) and optio
 `value`, `valueSat`, `hex`, `coinbase`) and add `addr`, `scriptSig{hex,asm}`, `doubleSpentTxID`
 and a `scriptPubKey` clone of the vin keys. `vout` entries keep `value`, `n`, `hex`, `addresses`
 (OP_RETURN text included, null when absent), `isAddress`, `type`, spent fields, and add
-`scriptPubKey{value,n,spent,hex,addresses,isAddress,type,asm}`. History items also set `isOwn` on
+`scriptPubKey{value,n,spent,hex,addresses,isAddress,type,asm}`. `scriptPubKey.type` is a coin
+label when there is one (Firo), else classified from the script with stock's (bitcore address)
+names: `pubkeyhash` (also for P2PK, which is indexed under its P2PKH address), `scripthash`,
+`witnesspubkeyhash`, `witnessscripthash`, `taproot`, plus bitcoind's `nulldata` and `multisig`,
+which stock leaves out; it is omitted for other scripts. The converter's top-level `type` is
+unchanged. History items also set `isOwn` on
 inputs and outputs that belong to the requested address, or to any requested address for the
 merged routes.
 
@@ -239,6 +258,54 @@ All known paths set public CORS headers on every response. Socket.IO and events 
 Stock fields the converter never returned (for example a block's `minedBy`) are not emitted.
 For a ZEC node only the transparent pool is indexed, so shielded asset semantics are not covered.
 
+### Circulating supply
+
+`statistics/circulating-supply` is the only stock `statistics/*` route served; it is generic
+(no coin branch) and reads the daemon with the cheapest source it offers:
+
+1. `getblockchaininfo` `chainSupply.chainValueZat` when it is present and monitored (zcashd 5+,
+   Zebra);
+2. else the sum of `getblockchaininfo` `valuePools[].chainValueZat` when they include the
+   `transparent` pool;
+3. else, only for a coin that opts in, `gettxoutsetinfo` `total_amount` (the transparent UTXO
+   set) plus every shielded pool in `valuePools` (zcashd before 5, zclassicd, fluxd). A coin
+   without `valuePools` (Bitcoin, Firo, ...) would get `total_amount` alone: unspent outputs,
+   without provably unspendable ones.
+
+The third source is a full scan of the daemon's UTXO set, which anyone could trigger on a public
+listener, so it is off by default. A coin enables it with
+`"blockbook": { "block_chain": { "additional_params": { "insight_supply_utxo_scan": true } } }`
+(rendered into `blockchaincfg.json` and read by Blockbook at startup); only
+`configs/coins/zclassic.json` sets it. Without the opt-in, and on a daemon with neither
+`chainSupply` nor a transparent value pool (Bitcoin, Firo, Flux), the route is the unknown-route
+404 `{"status":"error","error":"Route not found"}`, exactly as before the route existed, and
+`gettxoutsetinfo` is never called; only the cheap `getblockchaininfo` is. Without daemon RPC it
+is the same 404.
+
+All arithmetic is in integer satoshis; the answer is formatted with trailing zeros trimmed
+(`21`, `9888988.88890124`). A reported pool that the daemon does not monitor makes the total
+unknown: the route answers 501 rather than a short number. It is also 501 when an opted-in
+daemon has no `gettxoutsetinfo`. Other failures are the generic 500.
+
+The value is cached 10 minutes and loaded single-flight (one daemon call shared by concurrent
+requests, stale value served if a refresh fails), so an opted-in coin runs at most one scan per
+10 minutes. A failed load (and the no-source answer) is remembered for 5 minutes instead of the
+usual 5 seconds: older zcashd-lineage daemons (zclassicd 2.1) hold `cs_main` during the scan, and
+a scan that outlives Blockbook's RPC timeout keeps running in the daemon, so it must not be
+restarted by every request.
+
+**ZCL differs from stock.** Stock insight-api computes the value from a hardcoded per-coin
+emission formula (its `SupplyHelper`), not from the chain. On ZCL the deployed stock answered
+`41249575` at height 3,302,466, which is exactly `(height - 2500) * 12.5`: a flat 12.5 ZCL per
+block with no halvings, about twice ZCL's 21M cap. The listener's figure is what the chain holds and will be much lower. Consumers of this
+route (about 215 requests a day on ZCL, likely market-data fetchers) will see that change.
+
+Not served (Insight 404 with CORS headers): the other stock `statistics/*` routes
+(`total-supply`, `supply`, `fees`, `network-hash`, `pools`, `pools-last-hour`, `transactions`,
+`outputs`, `difficulty`, `total`, `balance-intervals`, `richer-than`,
+`richest-addresses-list`), `/api/supply`, and `markets/info` (about 15k requests together in
+18 months of ZCL stock logs). They need stock's Mongo statistics or a market feed.
+
 ## Firo extension
 
 A coin whose chain parser implements `InsightExtension() string` (the
@@ -264,7 +331,11 @@ controller makes through bitcore-node-zcoin:
 The masternode filter is stock's: `filter` from the body (JSON or form), else the path, else the
 query. A comma-separated list matches each item; an item with `-` is an exact
 `txhash-outidx`, anything else a substring of the entry's JSON; results keep list order per
-item with duplicates dropped. A filter is capped at 4 KiB and 100 distinct items (repeated
+item with duplicates dropped. A JSON array of strings as the body `filter` gets what stock's
+code does with it: the elements joined by `,` are one substring of the entry's JSON (no split, no
+exact match), so `["a","b"]` is usually 200 `[]`, `[]` returns all nodes and a one-element array
+works like that string as a substring. An array with a `","` or `"-"` element (stock throws and
+answers 200 `{}`) or with non-string elements, and any other non-string filter, is a 400. A filter is capped at 4 KiB and 100 distinct items (repeated
 items count once); a larger one, in any of the three forms, is a 400 JSON error. Each entry's
 JSON is built once per cached list, and the scan stops when the client goes away. On the recorded mainnet list (7287 nodes) the unfiltered array is
 byte-identical to stock's apart from `id`, which is the listener's own counter (stock's is a
@@ -299,12 +370,24 @@ only; the index and the V1/V2 APIs are unchanged. For a Spark spend, `getsparkna
 (a name, or firod's "Invalid spark name tx hash", is cached 10 minutes per txid, up to 4096
 entries in two generations; any other error, such as "Unknown transaction." for a tx firod
 cannot find yet, a transport failure or warm-up, is not cached) decides whether it registers a Spark name; if so
-the tx gets stock's `sparkData` `{name,address,validUntil[,additionalInfo]}` and a first output
-`{n:0,value:0,type:"sparkname",addresses:["Sparkname"]}` (its `scriptPubKey` carries `hex:""`
-and `asm:""`, as stock's), and the outputs are renumbered, as stock does. So on a Spark name
-registration tx the tx-detail `vout` numbering is shifted by one from the chain's, exactly as on
-stock: a consumer must take outpoints (txid and vout index) from the `utxo` route, not from the
-tx detail. Stock makes that call for every transaction; here only Spark spends trigger it.
+the tx gets stock's `sparkData` `{name,address,validUntil[,additionalInfo]}`. The newer upstream
+explorer (insight-api-firo master) also inserts a synthetic first output
+`{n:0,value:0,type:"sparkname",addresses:["Sparkname"]}` and renumbers the outputs; the deployed
+stock insight-api-zcoin 0.4.5 does not, and neither does this listener, so `vout[].n` is always
+the on-chain output index and can be used as an outpoint. Stock makes that call for every
+transaction; here only Spark spends trigger it.
+
+The Spark name fee output itself (`sparknamefee` in firod: a P2PKH script followed by
+`OP_SPARKNAMEID <name> OP_DROP <spark address> OP_DROP`, paid to the dev fund on type 11
+registrations since about block 1,300,000) is indexed by the Firo parser under its P2PKH address,
+so it counts in that address's balance, history and utxos, as in firod's address index. In Insight
+output it keeps its full `hex` and `asm` (`OP_SPARKNAMEID` shows as `OP_UNKNOWN225`), its
+`addresses` are the P2PKH address and `scriptPubKey.type` is `pubkeyhash`, as stock. An exchange
+output's `scriptPubKey.type` is `expubkeyhash`. A database indexed before this parser change keeps
+these outputs under the full script (no address): it needs a full resync for the dev-fund
+balance, history and utxos to be right. `-rollback` cannot reach back to the first Spark name
+fee output (between blocks 1,300,000 and 1,350,000), because Firo keeps the per-block data needed
+to disconnect only for the last `block_addresses_to_keep` (300) blocks.
 
 ## Readiness and shutdown
 

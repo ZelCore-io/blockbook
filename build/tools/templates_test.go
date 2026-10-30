@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"text/template"
+
+	"github.com/trezor/blockbook/common"
 )
 
 func TestResolveBuildEnvDefaultsToDev(t *testing.T) {
@@ -815,12 +817,12 @@ func TestInsightServiceConfiguration(t *testing.T) {
 }
 
 func TestInsightProductionCoinConfigs(t *testing.T) {
-	// Only firo serves the explorer UI on the Insight listener (insight_ui), and it takes
-	// port 3001 from the stock Insight it replaces; BTC and ZEC took 9876 from the converter.
+	// Only firo and zclassic serve the explorer UI on the Insight listener (insight_ui).
+	// Firo takes port 3001 from the stock Insight it replaces; the others listen on 9876.
 	for alias, want := range map[string]struct {
 		ui   bool
 		port int
-	}{"bitcoin": {false, 9876}, "zcash": {false, 9876}, "firo": {true, 3001}} {
+	}{"bitcoin": {false, 9876}, "zcash": {false, 9876}, "firo": {true, 3001}, "zclassic": {true, 9876}} {
 		wantUI := want.ui
 		t.Run(alias, func(t *testing.T) {
 			cfg, err := LoadConfig("../../configs", alias)
@@ -849,6 +851,18 @@ func TestInsightProductionCoinConfigs(t *testing.T) {
 			}
 			if cfg.Blockbook.InsightUI != wantUI || strings.Contains(string(unit), " -insightui ") != wantUI {
 				t.Fatalf("%s -insightui = %v, want %v:\n%s", alias, !wantUI, wantUI, unit)
+			}
+			// Only zclassic opts in to the circulating-supply UTXO scan.
+			bcfg, err := os.ReadFile(filepath.Join(out, "blockbook/blockchaincfg.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var parsed common.Config
+			if err := json.Unmarshal(bcfg, &parsed); err != nil {
+				t.Fatal(err)
+			}
+			if parsed.InsightSupplyUTXOScan != (alias == "zclassic") {
+				t.Fatalf("%s insight_supply_utxo_scan = %v", alias, parsed.InsightSupplyUTXOScan)
 			}
 		})
 	}
