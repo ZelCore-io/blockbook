@@ -14,6 +14,11 @@ const firstBlockWithSpecialTransactions = 1028160
 // DashRPC is an interface to JSON-RPC bitcoind service
 type DashRPC struct {
 	*btc.BitcoinRPC
+	// FirstBlockWithSpecialTransactions is the DIP3 activation height. Blocks from
+	// this height on may carry special transactions that the bitcoin block parser
+	// cannot read, so they are fetched transaction by transaction. Dash forks that
+	// reuse DashRPC set their own activation height here.
+	FirstBlockWithSpecialTransactions uint32
 }
 
 // NewDashRPC returns new DashRPC instance
@@ -24,7 +29,8 @@ func NewDashRPC(config json.RawMessage, pushHandler func(bchain.NotificationType
 	}
 
 	s := &DashRPC{
-		b.(*btc.BitcoinRPC),
+		BitcoinRPC:                        b.(*btc.BitcoinRPC),
+		FirstBlockWithSpecialTransactions: firstBlockWithSpecialTransactions,
 	}
 	s.RPCMarshaler = btc.JSONMarshalerV1{}
 
@@ -60,7 +66,7 @@ func (b *DashRPC) Initialize() error {
 
 // GetBlock returns block with given hash
 func (b *DashRPC) GetBlock(hash string, height uint32) (*bchain.Block, error) {
-	if hash == "" && height < firstBlockWithSpecialTransactions {
+	if hash == "" && height < b.FirstBlockWithSpecialTransactions {
 		return b.BitcoinRPC.GetBlock(hash, height)
 	}
 
