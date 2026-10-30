@@ -818,11 +818,11 @@ func TestInsightServiceConfiguration(t *testing.T) {
 
 func TestInsightProductionCoinConfigs(t *testing.T) {
 	// Only firo and zclassic serve the explorer UI on the Insight listener (insight_ui).
-	// Firo takes port 3001 from the stock Insight it replaces; the others listen on 9876.
+	// Firo and Zclassic take port 3001 from the stock Insight they replace; the others listen on 9876.
 	for alias, want := range map[string]struct {
 		ui   bool
 		port int
-	}{"bitcoin": {false, 9876}, "zcash": {false, 9876}, "firo": {true, 3001}, "zclassic": {true, 9876}} {
+	}{"bitcoin": {false, 9876}, "zcash": {false, 9876}, "firo": {true, 3001}, "zclassic": {true, 3001}} {
 		wantUI := want.ui
 		t.Run(alias, func(t *testing.T) {
 			cfg, err := LoadConfig("../../configs", alias)
