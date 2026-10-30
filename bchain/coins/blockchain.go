@@ -129,6 +129,11 @@ func init() {
 	// Zclassic shares Zcash's network magic and t1/t3 address versions, so it
 	// uses the Zcash parameters and parser as they are.
 	BlockChainFactories["Zclassic"] = zec.NewZCashRPC
+	// Zero (ZER) is a zcashd fork with Zcash's t1/t3 address versions. Its
+	// pchMessageStart is "ZERO", not Zcash's, but Blockbook talks to the daemon
+	// over RPC and never uses the peer-to-peer magic, so the Zcash parameters
+	// and parser are used as they are.
+	BlockChainFactories["Zero"] = zec.NewZCashRPC
 	BlockChainFactories["Ravencoin"] = ravencoin.NewRavencoinRPC
 	BlockChainFactories["Ritocoin"] = ritocoin.NewRitocoinRPC
 	BlockChainFactories["Divi"] = divi.NewDiviRPC
