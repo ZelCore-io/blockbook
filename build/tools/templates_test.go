@@ -3,6 +3,7 @@ package build
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -817,14 +818,19 @@ func TestInsightServiceConfiguration(t *testing.T) {
 
 func TestInsightProductionCoinConfigs(t *testing.T) {
 	// Only firo and zclassic serve the explorer UI on the Insight listener (insight_ui).
-	for alias, wantUI := range map[string]bool{"bitcoin": false, "zcash": false, "firo": true, "zclassic": true} {
+	// Firo takes port 3001 from the stock Insight it replaces; the others listen on 9876.
+	for alias, want := range map[string]struct {
+		ui   bool
+		port int
+	}{"bitcoin": {false, 9876}, "zcash": {false, 9876}, "firo": {true, 3001}, "zclassic": {true, 9876}} {
+		wantUI := want.ui
 		t.Run(alias, func(t *testing.T) {
 			cfg, err := LoadConfig("../../configs", alias)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.Ports.BlockbookInsight != 9876 {
-				t.Fatalf("insight port = %d, want 9876", cfg.Ports.BlockbookInsight)
+			if cfg.Ports.BlockbookInsight != want.port {
+				t.Fatalf("insight port = %d, want %d", cfg.Ports.BlockbookInsight, want.port)
 			}
 			if err := cfg.validateInsight(); err != nil {
 				t.Fatal(err)
@@ -840,7 +846,7 @@ func TestInsightProductionCoinConfigs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(unit), " -insight=${BLOCKBOOK_INSIGHT_HOST}:9876 ") {
+			if !strings.Contains(string(unit), fmt.Sprintf(" -insight=${BLOCKBOOK_INSIGHT_HOST}:%d ", want.port)) {
 				t.Fatalf("%s unit lacks the Insight flag:\n%s", alias, unit)
 			}
 			if cfg.Blockbook.InsightUI != wantUI || strings.Contains(string(unit), " -insightui ") != wantUI {
