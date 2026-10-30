@@ -60,7 +60,9 @@ coins in the "blockbook insight" column of [ports.md](ports.md); two coins may s
 they run on separate hosts. Firo's listener takes port 3001 from the stock Insight
 (bitcore `insight-api-zcoin`), which HAProxy already targets for explorer.firo, so only the new
 blockbook.firo hostnames need proxy changes. bitcore must be stopped first, and on our Firo hosts
-firod runs as bitcore's child, so firod moves to its own service before the switch. The listener serves plain HTTP; public TLS and perimeter request
+firod runs as bitcore's child, so firod moves to its own service before the switch. Zclassic's
+and Zero's listeners likewise take port 3001 from the stock Insight that serves explorer.zcl and
+explorer.zer, so the stock Insight must be stopped before Blockbook starts. The listener serves plain HTTP; public TLS and perimeter request
 policy belong at the existing proxy, and the private interface should be reachable only by the
 trusted proxy.
 
@@ -71,7 +73,7 @@ Firo, `explorer.firo.zelcore.io` behind HAProxy) answers both the Insight API an
 opt-in per coin with `"blockbook": { "insight_ui": true }`, which adds `-insightui` after
 `-insight=...` in the generated unit; the build rejects it without the Insight listener, and
 Blockbook refuses to start with `-insightui` but no `-insight` or `-public`. Only
-`configs/coins/firo.json` and `configs/coins/zclassic.json` set it; BTC and ZEC keep the
+`configs/coins/firo.json`, `configs/coins/zclassic.json` and `configs/coins/zero.json` set it; BTC and ZEC keep the
 listener exactly as before (unknown paths are the Insight JSON 404).
 
 With it on, the Insight router still answers first. Every route in the table below, under
