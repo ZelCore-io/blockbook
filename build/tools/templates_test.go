@@ -814,8 +814,8 @@ func TestInsightServiceConfiguration(t *testing.T) {
 }
 
 func TestInsightProductionCoinConfigs(t *testing.T) {
-	// Only firo serves the explorer UI on the Insight listener (insight_ui).
-	for alias, wantUI := range map[string]bool{"bitcoin": false, "zcash": false, "firo": true} {
+	// Only firo and zclassic serve the explorer UI on the Insight listener (insight_ui).
+	for alias, wantUI := range map[string]bool{"bitcoin": false, "zcash": false, "firo": true, "zclassic": true} {
 		t.Run(alias, func(t *testing.T) {
 			cfg, err := LoadConfig("../../configs", alias)
 			if err != nil {

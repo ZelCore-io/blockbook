@@ -126,6 +126,9 @@ func init() {
 	BlockChainFactories["NULS"] = nuls.NewNulsRPC
 	BlockChainFactories["VIPSTARCOIN"] = vipstarcoin.NewVIPSTARCOINRPC
 	BlockChainFactories["Flux"] = zec.NewZCashRPC
+	// Zclassic shares Zcash's network magic and t1/t3 address versions, so it
+	// uses the Zcash parameters and parser as they are.
+	BlockChainFactories["Zclassic"] = zec.NewZCashRPC
 	BlockChainFactories["Ravencoin"] = ravencoin.NewRavencoinRPC
 	BlockChainFactories["Ritocoin"] = ritocoin.NewRitocoinRPC
 	BlockChainFactories["Divi"] = divi.NewDiviRPC
