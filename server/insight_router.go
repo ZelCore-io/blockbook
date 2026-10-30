@@ -89,6 +89,12 @@ func insightMatch(r *http.Request) (insightRoute, []string, bool) {
 		if n == 2 && parts[1] == "verify" {
 			route.kind, methods = "verify", insightGetPost
 		}
+	case "statistics":
+		// Only circulating-supply; the other stock statistics/* routes
+		// (and markets/*) are not served and stay the Insight 404.
+		if n == 2 && parts[1] == "circulating-supply" {
+			route.kind = "circulatingsupply"
+		}
 	case "addr":
 		switch {
 		case n == 1:
@@ -159,13 +165,34 @@ func insightMatch(r *http.Request) (insightRoute, []string, bool) {
 }
 
 // insightPathParts returns the path segments after the "api" or
-// "insight-api" prefix.
+// "insight-api" prefix (insightSegments).
 func insightPathParts(r *http.Request) ([]string, bool) {
-	parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
+	parts := insightSegments(r)
 	if len(parts) < 3 || parts[0] != "" || (parts[1] != "api" && parts[1] != "insight-api") {
 		return nil, false
 	}
 	return parts[2:], true
+}
+
+// insightSegments splits the request path on "/" after dropping one trailing
+// slash. Empty segments right after a leading "api" or "insight-api" prefix
+// are dropped, so /api//addr/A is /api/addr/A: stock serves that form
+// (Express mounts the API router with an optional slash after the prefix, and
+// about 5% of ZCL's stock traffic uses it). Only those empty segments go.
+// Everywhere else an empty segment stays an empty argument (/api/addr//balance
+// is a 400, not the address "balance"), "." and ".." stay ordinary segments
+// that match no route, and the request itself is unchanged, so a fallthrough
+// to the -insightui handler sees the path as sent.
+func insightSegments(r *http.Request) []string {
+	parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
+	if len(parts) > 3 && parts[0] == "" && (parts[1] == "api" || parts[1] == "insight-api") && parts[2] == "" {
+		i := 2
+		for i < len(parts)-1 && parts[i] == "" {
+			i++
+		}
+		parts = append(parts[:2], parts[i:]...)
+	}
+	return parts
 }
 
 // insightOwnsPath reports whether an unmatched path still belongs to the
@@ -174,7 +201,7 @@ func insightPathParts(r *http.Request) ([]string, bool) {
 // (and those prefixes themselves) except Blockbook's versioned APIs /api/v1/
 // and /api/v2/, which the explorer UI and Blockbook clients use.
 func insightOwnsPath(r *http.Request) bool {
-	parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
+	parts := insightSegments(r)
 	if len(parts) < 2 || parts[0] != "" {
 		return false
 	}

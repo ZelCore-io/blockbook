@@ -68,8 +68,8 @@ Firo, `explorer.firo.zelcore.io` behind HAProxy) answers both the Insight API an
 opt-in per coin with `"blockbook": { "insight_ui": true }`, which adds `-insightui` after
 `-insight=...` in the generated unit; the build rejects it without the Insight listener, and
 Blockbook refuses to start with `-insightui` but no `-insight` or `-public`. Only
-`configs/coins/firo.json` sets it; BTC and ZEC keep the listener exactly as before (unknown
-paths are the Insight JSON 404).
+`configs/coins/firo.json` and `configs/coins/zclassic.json` set it; BTC and ZEC keep the
+listener exactly as before (unknown paths are the Insight JSON 404).
 
 With it on, the Insight router still answers first. Every route in the table below, under
 `/api/` and `/insight-api/`, behaves exactly as without the flag, including OPTIONS and 405, and
@@ -114,7 +114,14 @@ in-process to the public server's own handler (`PublicServer.Handler`): `/`, `/t
 
 ## HTTP contract
 
-Every route is served under both `/api/` and `/insight-api/`. OPTIONS on any known path is 204,
+Every route is served under both `/api/` and `/insight-api/`. Empty segments right after the
+prefix are dropped before matching, so `/api//addr/A` is `/api/addr/A`: stock serves that form
+(Express mounts the API router with an optional slash after the prefix), and about 5% of ZCL's
+stock traffic uses it. Nothing else is normalized: an empty segment anywhere else is still an
+empty argument (`/api/addr//balance` and `/api//addr//balance` are 400, never the address
+`balance`), `.` and `..` are ordinary segments that match no route, a doubled slash before the
+prefix (`//api/...`) is not the prefix, and with `-insightui` a request handed to the public
+server keeps its path as sent. OPTIONS on any known path is 204,
 a known path with the wrong method is 405 with `Allow`, and unknown paths are 404 (or, with
 `-insightui`, go to the public explorer as described above, except unknown paths under the Insight
 prefixes, which stay the Insight 404).
@@ -144,6 +151,7 @@ prefixes, which stay the Insight 404).
 | `GET utils/estimatefee?nbBlocks=2,3` | `{"2":<coins/kB>,...}`; `-1` when the daemon cannot estimate |
 | `GET currency` | `{status:200,data:{rate:<USD>,short:"<TICKER>"}}`; rate 0 without a fiat source (Firo: stock shape, see [Firo extension](#firo-extension)) |
 | `GET`/`POST messages/verify` | `{result:<bool>}` from the daemon's `verifymessage` |
+| `GET statistics/circulating-supply` | The coin supply in coins as a bare number (`text/html; charset=utf-8`, as stock's `res.send`), or `{"circulatingSupply":"<n>"}` with `?format=object`; read from the daemon, cached 10 minutes (see [Circulating supply](#circulating-supply)) |
 
 For adapter compatibility, a single address can instead be supplied by `?address=...` on `addr`,
 `addr/utxo` and `addrs/txs`. History also accepts `addrs/:address/txs/:from[/:to]` and
@@ -246,6 +254,43 @@ generic 503. Error JSON has shape `{status:"error",error:"..."}`. Only the exact
 All known paths set public CORS headers on every response. Socket.IO and events are not served.
 Stock fields the converter never returned (for example a block's `minedBy`) are not emitted.
 For a ZEC node only the transparent pool is indexed, so shielded asset semantics are not covered.
+
+### Circulating supply
+
+`statistics/circulating-supply` is the only stock `statistics/*` route served; it is generic
+(no coin branch) and reads the daemon with the cheapest source it offers:
+
+1. `getblockchaininfo` `chainSupply.chainValueZat` when it is present and monitored (zcashd 5+,
+   Zebra);
+2. else the sum of `getblockchaininfo` `valuePools[].chainValueZat` when they include the
+   `transparent` pool;
+3. else `gettxoutsetinfo` `total_amount` (the transparent UTXO set) plus every shielded pool in
+   `valuePools` (zcashd before 5, zclassicd, fluxd). Coins without `valuePools` (Bitcoin, Firo,
+   ...) get `total_amount` alone: unspent outputs, without provably unspendable ones.
+
+All arithmetic is in integer satoshis; the answer is formatted with trailing zeros trimmed
+(`21`, `9888988.88890124`). A reported pool that the daemon does not monitor makes the total
+unknown: the route answers 501 rather than a short number. It is also 501 without daemon RPC or
+when the daemon has no `gettxoutsetinfo`. Other failures are the generic 500.
+
+The value is cached 10 minutes and loaded single-flight (one daemon call shared by concurrent
+requests, stale value served if a refresh fails). A failed load is remembered for 5 minutes
+instead of the usual 5 seconds: `gettxoutsetinfo` scans the whole UTXO set, older zcashd-lineage
+daemons (zclassicd 2.1) hold `cs_main` while they do, and a scan that outlives Blockbook's RPC
+timeout keeps running in the daemon, so it must not be restarted by every request. On a large
+UTXO set (Bitcoin) the scan can exceed the RPC timeout every time; the route then answers 500.
+
+**Difference from stock.** Stock insight-api computes the value from a hardcoded per-coin
+emission formula (its `SupplyHelper`), not from the chain. On ZCL the deployed stock answered
+`41249575` at height 3,302,466, which is exactly `(height - 2500) * 12.5`: a flat 12.5 ZCL per
+block with no halvings, about twice ZCL's 21M cap. The listener's figure is what the chain holds and will be much lower. Consumers of this
+route (about 215 requests a day on ZCL, likely market-data fetchers) will see that change.
+
+Not served (Insight 404 with CORS headers): the other stock `statistics/*` routes
+(`total-supply`, `supply`, `fees`, `network-hash`, `pools`, `pools-last-hour`, `transactions`,
+`outputs`, `difficulty`, `total`, `balance-intervals`, `richer-than`,
+`richest-addresses-list`), `/api/supply`, and `markets/info` (about 15k requests together in
+18 months of ZCL stock logs). They need stock's Mongo statistics or a market feed.
 
 ## Firo extension
 

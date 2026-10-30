@@ -72,6 +72,8 @@ type InsightServer struct {
 	parser bchain.BlockChainParser
 	// relayFee caches the daemon's relay fee for status (getnetworkinfo).
 	relayFee insightCached
+	// supply caches statistics/circulating-supply.
+	supply insightCached
 }
 
 func NewInsightServer(binding string, chainType bchain.ChainType, decimals int, worker insightWorker, broadcast func(string) (string, error)) (*InsightServer, error) {
@@ -86,6 +88,7 @@ func NewInsightServer(binding string, chainType bchain.ChainType, decimals int, 
 		return nil, errors.New("Insight requires a query worker")
 	}
 	s := &InsightServer{worker: worker, broadcast: broadcast, slots: make(chan struct{}, 32), readers: make(chan struct{}, insightBodyReaders), blockCache: newInsightBlockCache()}
+	s.supply.errTTL = insightSupplyErrTTL
 	s.http = &http.Server{Addr: binding, Handler: s, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	return s, nil
 }
@@ -270,6 +273,12 @@ func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		insightError(w, code, message)
 		return
 	}
+	if text, ok := value.(insightText); ok {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(text))
+		return
+	}
 	insightJSON(w, 200, value)
 }
 
@@ -361,6 +370,8 @@ func (s *InsightServer) handle(route insightRoute) (interface{}, int, error) {
 		return s.currency()
 	case "verify":
 		return s.verifyMessage(route)
+	case "circulatingsupply":
+		return s.circulatingSupply(route)
 	}
 	return nil, http.StatusNotImplemented, errors.New("route not implemented")
 }
