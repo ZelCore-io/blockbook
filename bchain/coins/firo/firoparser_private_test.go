@@ -394,3 +394,138 @@ func TestFiroDecodeRejectsOversizedExtra(t *testing.T) {
 		t.Fatal("FiroDecode accepted a truncated extra payload")
 	}
 }
+
+// sparkNameFeeScript is vout 0 of mainnet tx 01676aed2042918c00c6db8fd12732c897f064bc7110c84fe1902a1d8433131d
+// (block 1400176, a type 11 Spark name registration): 1 FIRO to the dev fund
+// aFA2TbqG9cnhhzX5Yny2pBJRK5EaEqLCH7, which firod reports as type "sparknamefee".
+// OP_DUP OP_HASH160 9e6778ee... OP_EQUALVERIFY OP_CHECKSIG OP_SPARKNAMEID "connect" OP_DROP <144-byte Spark address> OP_DROP
+const (
+	sparkNameFeeScript     = "76a9149e6778ee1011af76f6f800873032ea8e15ada4ca88ace107636f6e6e656374754c90736d3168646770337932793579376b636a68653068726a6e6674706e6c617a777067397932393567777636736d3766656b7a736677703773656839783771346a67306e306d616b6379343270773534326668706e7337307130776c3936787a3230386d6439746763723675347a636872646a6a64383866346763353375737867636668366334326636716e327778686775"
+	sparkNameFeeBaseScript = "76a9149e6778ee1011af76f6f800873032ea8e15ada4ca88ac"
+	sparkNameFeeAddress    = "aFA2TbqG9cnhhzX5Yny2pBJRK5EaEqLCH7"
+)
+
+func TestSparkNameFee(t *testing.T) {
+	p := mainnetParser()
+	script, _ := hex.DecodeString(sparkNameFeeScript)
+
+	if got := sparkNameFeeBase(script); hex.EncodeToString(got) != sparkNameFeeBaseScript {
+		t.Fatalf("sparkNameFeeBase = %x, want %s", got, sparkNameFeeBaseScript)
+	}
+
+	// the output is indexed under the descriptor of the plain address
+	desc, err := p.GetAddrDescFromVout(&bchain.Vout{ScriptPubKey: bchain.ScriptPubKey{Hex: sparkNameFeeScript}})
+	if err != nil || hex.EncodeToString(desc) != sparkNameFeeBaseScript {
+		t.Errorf("GetAddrDescFromVout = %x, %v; want %s", desc, err, sparkNameFeeBaseScript)
+	}
+	addrDesc, err := p.GetAddrDescFromAddress(sparkNameFeeAddress)
+	if err != nil || !bytes.Equal(addrDesc, desc) {
+		t.Errorf("GetAddrDescFromAddress(%s) = %x, %v; want the vout descriptor %x", sparkNameFeeAddress, addrDesc, err, desc)
+	}
+	for _, d := range [][]byte{desc, script} {
+		addrs, searchable, err := p.GetAddressesFromAddrDesc(d)
+		if err != nil || !searchable || len(addrs) != 1 || addrs[0] != sparkNameFeeAddress {
+			t.Errorf("GetAddressesFromAddrDesc(%x) = %v, %v, %v; want [%s], true", d, addrs, searchable, err, sparkNameFeeAddress)
+		}
+	}
+
+	// raw transaction (mempool path, FiroParser.ParseTx); the output keeps its full script
+	mtx := wire.NewMsgTx(1)
+	prev, _ := hex.DecodeString("1b0500756ae8218ab14a80f7d5d65520f0fa82ad8757c7b0a359f24276e211ae")
+	var prevHash [32]byte
+	copy(prevHash[:], prev)
+	mtx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: prevHash, Index: 1}, Sequence: 0xffffffff})
+	mtx.AddTxOut(wire.NewTxOut(100000000, script))
+	mtx.AddTxOut(wire.NewTxOut(5, []byte{0x6a, 0x01, 0x01}))
+	var buf bytes.Buffer
+	if err := mtx.Serialize(&buf); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := p.ParseTx(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// verbose JSON of firod (FiroRPC.GetTransaction path)
+	txJSON := `{"txid":"` + raw.Txid + `","version":1,"locktime":0,"vin":[{"txid":"` + raw.Vin[0].Txid + `","vout":1,"scriptSig":{"asm":"","hex":""},"sequence":4294967295}],` +
+		`"vout":[{"value":1.00000000,"n":0,"scriptPubKey":{"asm":"","hex":"` + sparkNameFeeScript + `","type":"sparknamefee","addresses":["` + sparkNameFeeAddress + `"]}},` +
+		`{"value":0.00000005,"n":1,"scriptPubKey":{"asm":"OP_RETURN 01","hex":"6a0101","type":"nulldata"}}]}`
+	fromJSON, err := p.ParseTxFromJson(json.RawMessage(txJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tx := range map[string]*bchain.Tx{"ParseTx": raw, "ParseTxFromJson": fromJSON} {
+		if len(tx.Vout) != 2 {
+			t.Fatalf("%s: len(Vout) = %d", name, len(tx.Vout))
+		}
+		v := tx.Vout[0]
+		if v.N != 0 || v.ValueSat.Cmp(big.NewInt(100000000)) != 0 || v.ScriptPubKey.Hex != sparkNameFeeScript {
+			t.Errorf("%s: vout 0 = n %d, value %v, hex %s", name, v.N, &v.ValueSat, v.ScriptPubKey.Hex)
+		}
+		if a := v.ScriptPubKey.Addresses; len(a) != 1 || a[0] != sparkNameFeeAddress {
+			t.Errorf("%s: vout 0 addresses = %v, want [%s]", name, a, sparkNameFeeAddress)
+		}
+		d, err := p.GetAddrDescFromVout(&tx.Vout[0])
+		if err != nil || hex.EncodeToString(d) != sparkNameFeeBaseScript {
+			t.Errorf("%s: GetAddrDescFromVout = %x, %v", name, d, err)
+		}
+		d, err = p.GetAddrDescFromVout(&tx.Vout[1])
+		if err != nil || hex.EncodeToString(d) != "6a0101" {
+			t.Errorf("%s: OP_RETURN descriptor = %x, %v", name, d, err)
+		}
+	}
+}
+
+// TestSparkNameFeeStrict checks that only firod's exact CScript::IsSparkNameFee
+// template is reduced to its P2PKH prefix; anything else keeps its full script.
+func TestSparkNameFeeStrict(t *testing.T) {
+	p := mainnetParser()
+	const base = sparkNameFeeBaseScript
+	name := "07636f6e6e656374" // push "connect"
+	addr := "03616263"         // push "abc"
+	long := strings.Repeat("ab", 0x100)
+	valid := []struct{ name, script string }{
+		{"short pushes", base + "e1" + name + "75" + addr + "75"},
+		{"PUSHDATA1", base + "e1" + "4c03616263" + "75" + "4c03616263" + "75"},
+		{"PUSHDATA2", base + "e1" + "4d0001" + long + "75" + addr + "75"},
+		{"PUSHDATA4", base + "e1" + name + "75" + "4e00010000" + long + "75"},
+		{"mainnet tx", sparkNameFeeScript},
+	}
+	for _, tt := range valid {
+		d, err := p.GetAddrDescFromVout(&bchain.Vout{ScriptPubKey: bchain.ScriptPubKey{Hex: tt.script}})
+		if err != nil || hex.EncodeToString(d) != base {
+			t.Errorf("%s: descriptor = %x, %v; want %s", tt.name, d, err, base)
+		}
+	}
+	invalid := []struct{ name, script string }{
+		{"plain P2PKH", base},
+		{"no payload", base + "e1"},
+		{"other opcode", base + "e2" + name + "75" + addr + "75"},
+		{"exchange opcode", base + "e0" + name + "75" + addr + "75"},
+		{"missing last drop", base + "e1" + name + "75" + addr},
+		{"missing first drop", base + "e1" + name + addr + "75"},
+		{"one pair only", base + "e1" + name + "75"},
+		{"three pairs", base + "e1" + name + "75" + addr + "75" + addr + "75"},
+		{"trailing byte", base + "e1" + name + "75" + addr + "75" + "00"},
+		{"empty name", base + "e1" + "00" + "75" + addr + "75"},
+		{"empty PUSHDATA1", base + "e1" + "4c00" + "75" + addr + "75"},
+		{"OP_1 as name", base + "e1" + "51" + "75" + addr + "75"},
+		{"non-push opcode", base + "e1" + "76" + "75" + addr + "75"},
+		{"push past end", base + "e1" + "0a6162" + "75"},
+		{"PUSHDATA1 past end", base + "e1" + "4c"},
+		{"PUSHDATA2 past end", base + "e1" + "4d01"},
+		{"PUSHDATA4 huge", base + "e1" + "4effffffff" + "616263" + "75"},
+		{"P2SH prefix", "a914" + base[6:46] + "87" + "e1" + name + "75" + addr + "75"},
+		{"bad P2PKH", "76a9" + "13" + base[6:44] + "88ac" + "e1" + name + "75" + addr + "75"},
+		{"no OP_CHECKSIG", base[:48] + "87" + "e1" + name + "75" + addr + "75"},
+	}
+	for _, tt := range invalid {
+		d, err := p.GetAddrDescFromVout(&bchain.Vout{ScriptPubKey: bchain.ScriptPubKey{Hex: tt.script}})
+		if err != nil || hex.EncodeToString(d) != tt.script {
+			t.Errorf("%s: descriptor = %x, %v; want the full script", tt.name, d, err)
+		}
+		script, _ := hex.DecodeString(tt.script)
+		if sparkNameFeeBase(script) != nil {
+			t.Errorf("%s: sparkNameFeeBase accepted %s", tt.name, tt.script)
+		}
+	}
+}
