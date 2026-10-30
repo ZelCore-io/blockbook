@@ -65,7 +65,8 @@ func TestInsightUIFallbackRouting(t *testing.T) {
 		{"GET", "/static/css/main.css"},
 		{"GET", "/websocket"},
 		{"GET", "/robots.txt"},
-		{"GET", "/api/tx/a/b"},
+		{"GET", "/api/v1/tx/a"},
+		{"GET", "/api/v2"},
 	} {
 		w := insightRequest(s, tc.method, tc.path, "")
 		if w.Code != 200 || w.Body.String() != "public "+tc.method+" "+tc.path || w.Header().Get("X-Public") != "1" {
@@ -74,6 +75,25 @@ func TestInsightUIFallbackRouting(t *testing.T) {
 		// Insight's CORS and source headers are not forced onto public responses.
 		if w.Header().Get("Access-Control-Allow-Origin") != "" || w.Header().Get("Link") != "" {
 			t.Fatalf("%s %s carries Insight headers: %v", tc.method, tc.path, w.Header())
+		}
+	}
+	// Unknown paths under the Insight prefixes (other than Blockbook's /api/v1/
+	// and /api/v2/) are the Insight JSON 404 with CORS headers, as on stock,
+	// not the public server's status page or its unversioned API.
+	for _, tc := range []struct{ method, path string }{
+		{"GET", "/api/nosuchroute"},
+		{"GET", "/api/tx/a/b"},
+		{"GET", "/api"},
+		{"GET", "/api/"},
+		{"GET", "/api/xpub/x"},
+		{"POST", "/api/sendtx/"},
+		{"GET", "/insight-api"},
+		{"GET", "/insight-api/v2/tx/a"},
+		{"OPTIONS", "/api/nosuchroute"},
+	} {
+		w := insightRequest(s, tc.method, tc.path, "")
+		if w.Code != 404 || w.Body.String() != "{\"status\":\"error\",\"error\":\"Route not found\"}\n" || w.Header().Get("X-Public") != "" || w.Header().Get("Access-Control-Allow-Origin") != "*" {
+			t.Fatalf("%s %s: %d %q %v", tc.method, tc.path, w.Code, w.Body.String(), w.Header())
 		}
 	}
 	// A truly unknown path gets the public server's 404, not the Insight JSON.

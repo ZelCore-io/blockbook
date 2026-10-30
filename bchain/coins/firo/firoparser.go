@@ -32,6 +32,7 @@ const (
 	OpSparkSMint               = 0xd2
 	OpSparkSpend               = 0xd3
 	OpExchangeAddr             = 0xe0
+	OpSparkNameID              = 0xe1
 
 	MainnetMagic wire.BitcoinNet = 0xe3d9fef1
 	TestnetMagic wire.BitcoinNet = 0xcffcbeea
@@ -128,12 +129,104 @@ func isExchangeScript(script []byte) bool {
 		script[24] == 0x88 && script[25] == 0xac
 }
 
-// outputScriptToAddresses adds exchange addresses ("EX...") to the bitcoin script decoding
+// p2pkhScriptLen is the length of OP_DUP OP_HASH160 <20 bytes> OP_EQUALVERIFY OP_CHECKSIG
+const p2pkhScriptLen = 25
+
+// sparkNameFeeBase returns the leading P2PKH script of a Spark name fee
+// output, or nil if script is not one. It mirrors CScript::IsSparkNameFee of
+// firod (src/script/script.cpp): a P2PKH script, OP_SPARKNAMEID, then exactly
+// <non-empty push> OP_DROP <non-empty push> OP_DROP (the Spark name and the
+// Spark address) and nothing more. firod's Solver gives such a script the type
+// TX_SPARKNAMEFEE and the P2PKH address (GetBaseScriptFromSparkNameFee), and
+// only a key hash destination can be built (GetScriptForSparkNameFee), so there
+// is no P2SH variant.
+func sparkNameFeeBase(script []byte) []byte {
+	if len(script) < p2pkhScriptLen+5 ||
+		script[0] != 0x76 || script[1] != 0xa9 || script[2] != 0x14 ||
+		script[23] != 0x88 || script[24] != 0xac || script[25] != OpSparkNameID {
+		return nil
+	}
+	pc := p2pkhScriptLen + 1
+	for i := 0; i < 2; i++ {
+		next, ok := nonEmptyPushEnd(script, pc)
+		if !ok || next >= len(script) || script[next] != 0x75 { // OP_DROP
+			return nil
+		}
+		pc = next + 1
+	}
+	if pc != len(script) {
+		return nil
+	}
+	return script[:p2pkhScriptLen]
+}
+
+// nonEmptyPushEnd reads the data push opcode at script[pc] (a direct push or
+// OP_PUSHDATA1/2/4, as CScript::GetOp) and returns the position after its
+// data. ok is false for any other opcode, an empty push or a push that runs
+// past the end of the script.
+func nonEmptyPushEnd(script []byte, pc int) (int, bool) {
+	if pc >= len(script) {
+		return 0, false
+	}
+	op := script[pc]
+	pc++
+	var n uint64
+	switch {
+	case op >= 0x01 && op <= 0x4b:
+		n = uint64(op)
+	case op == 0x4c: // OP_PUSHDATA1
+		if len(script)-pc < 1 {
+			return 0, false
+		}
+		n = uint64(script[pc])
+		pc++
+	case op == 0x4d: // OP_PUSHDATA2
+		if len(script)-pc < 2 {
+			return 0, false
+		}
+		n = uint64(binary.LittleEndian.Uint16(script[pc:]))
+		pc += 2
+	case op == 0x4e: // OP_PUSHDATA4
+		if len(script)-pc < 4 {
+			return 0, false
+		}
+		n = uint64(binary.LittleEndian.Uint32(script[pc:]))
+		pc += 4
+	default:
+		return 0, false
+	}
+	if n == 0 || n > uint64(len(script)-pc) {
+		return 0, false
+	}
+	return pc + int(n), true
+}
+
+// outputScriptToAddresses adds exchange addresses ("EX...") and the P2PKH
+// address of Spark name fee outputs to the bitcoin script decoding
 func (p *FiroParser) outputScriptToAddresses(script []byte) ([]string, bool, error) {
 	if isExchangeScript(script) && len(p.exchangeAddrPrefix) > 0 {
 		return []string{p.encodeExchangeAddress(script[4:24])}, true, nil
 	}
+	if base := sparkNameFeeBase(script); base != nil {
+		return p.baseOutputScriptToAddressesFunc(base)
+	}
 	return p.baseOutputScriptToAddressesFunc(script)
+}
+
+// GetAddrDescFromVout returns internal address representation (descriptor) of
+// given transaction output. A Spark name fee output is indexed under its
+// leading P2PKH script, so it belongs to the same address descriptor (balance,
+// history and utxos) as plain payments to that address, as in firod's address
+// index.
+func (p *FiroParser) GetAddrDescFromVout(output *bchain.Vout) (bchain.AddressDescriptor, error) {
+	ad, err := p.BitcoinLikeParser.GetAddrDescFromVout(output)
+	if err != nil {
+		return ad, err
+	}
+	if base := sparkNameFeeBase(ad); base != nil {
+		return base, nil
+	}
+	return ad, nil
 }
 
 func base58Checksum(b []byte) []byte {

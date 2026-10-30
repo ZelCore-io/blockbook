@@ -262,12 +262,16 @@ func TestInsightFiroRoutesOnlyForFiro(t *testing.T) {
 
 const insightFiroSparkNameTx = "db857913ed2fe72910d6e0a2463a4dfb4b01e3a361c3f5d02128322bec5f3146"
 
+// insightFiroSparkNameFeeScript is vout 0 of mainnet tx 01676aed...: P2PKH of
+// the dev fund aFA2TbqG... + OP_SPARKNAMEID "connect" OP_DROP <Spark address> OP_DROP.
+const insightFiroSparkNameFeeScript = "76a9149e6778ee1011af76f6f800873032ea8e15ada4ca88ace107636f6e6e656374754c90736d3168646770337932793579376b636a68653068726a6e6674706e6c617a777067397932393567777636736d3766656b7a736677703773656839783771346a67306e306d616b6379343270773534326668706e7337307130776c3936787a3230386d6439746763723675347a636872646a6a64383866346763353375737867636668366334326636716e327778686775"
+
 func insightFiroTx() *api.Tx {
 	return &api.Tx{
 		Txid: insightFiroSparkNameTx, ValueOutSat: insightAmount(100000000), FeesSat: insightAmount(3618),
 		Vin: []api.Vin{{N: 0, Hex: "d3", ValueSat: insightAmount(0), Addresses: []string{"SparkSpend"}}},
 		Vout: []api.Vout{
-			{N: 0, ValueSat: insightAmount(100000000), Hex: "76a9149e6778ee1011af76f6f800873032ea8e15ada4ca88ac", Addresses: []string{"aBZwvHh7S2kdGa1a3Q5L8nP5mR4tQe6Yrm"}, IsAddress: true},
+			{N: 0, ValueSat: insightAmount(100000000), Hex: insightFiroSparkNameFeeScript, Addresses: []string{"aFA2TbqG9cnhhzX5Yny2pBJRK5EaEqLCH7"}, IsAddress: true},
 			{N: 1, ValueSat: insightAmount(0), Hex: "d20160", Addresses: []string{"SparkSMint"}},
 		},
 	}
@@ -300,19 +304,21 @@ func TestInsightFiroTxLabels(t *testing.T) {
 	if string(out.SparkData) != insightCompact(t, fix.RPC.Getsparknametxdetails[insightFiroSparkNameTx]) {
 		t.Errorf("sparkData %s", out.SparkData)
 	}
-	if len(out.Vout) != 3 || out.Vout[0].ScriptPubKey.Type != "sparkname" || out.Vout[0].ScriptPubKey.Addresses[0] != "Sparkname" {
-		t.Fatalf("no sparkname output: %s", w.Body.String())
+	// no synthetic "sparkname" output: n is the on-chain output index
+	if len(out.Vout) != 2 {
+		t.Fatalf("got %d outputs, want the 2 on-chain ones: %s", len(out.Vout), w.Body.String())
 	}
 	for i, v := range out.Vout {
 		if v.N != i || v.ScriptPubKey.N != i {
 			t.Errorf("vout %d numbered %d/%d", i, v.N, v.ScriptPubKey.N)
 		}
 	}
-	if v := out.Vout[2].ScriptPubKey; v.Type != "sparksmint" || len(v.Addresses) != 1 || v.Addresses[0] != "Sparksmint" {
+	if v := out.Vout[1].ScriptPubKey; v.Type != "sparksmint" || len(v.Addresses) != 1 || v.Addresses[0] != "Sparksmint" {
 		t.Errorf("sparksmint output %+v", v)
 	}
-	if out.Vout[1].ScriptPubKey.Type != "" || out.Vout[1].ScriptPubKey.Addresses[0] != "aBZwvHh7S2kdGa1a3Q5L8nP5mR4tQe6Yrm" {
-		t.Errorf("transparent output changed %+v", out.Vout[1])
+	// the Spark name fee output keeps its address, with stock's type
+	if v := out.Vout[0].ScriptPubKey; v.Type != "pubkeyhash" || len(v.Addresses) != 1 || v.Addresses[0] != "aFA2TbqG9cnhhzX5Yny2pBJRK5EaEqLCH7" {
+		t.Errorf("Spark name fee output %+v", out.Vout[0])
 	}
 	insightRequest(s, "GET", "/api/tx/"+insightFiroSparkNameTx, "")
 	if rpc.calls["getsparknametxdetails"] != 1 {
@@ -574,26 +580,40 @@ func TestInsightFiroSparkNameCache(t *testing.T) {
 	}
 }
 
+// The Spark name fee output keeps its full script; history items of the
+// address number outputs as tx/:txid does (the on-chain index).
 func TestInsightFiroSparkNameOutputJSON(t *testing.T) {
 	s, f, _, _ := insightFiroSetup(t)
 	f.txs[insightFiroSparkNameTx] = insightFiroTx()
-	body := insightRequest(s, "GET", "/api/tx/"+insightFiroSparkNameTx, "").Body.String()
-	var out struct {
-		Vout []struct {
-			ScriptPubKey map[string]json.RawMessage `json:"scriptPubKey"`
-		} `json:"vout"`
-	}
-	if err := json.Unmarshal([]byte(body), &out); err != nil || len(out.Vout) != 3 {
-		t.Fatalf("%v %.300s", err, body)
-	}
-	if string(out.Vout[0].ScriptPubKey["hex"]) != `""` || string(out.Vout[0].ScriptPubKey["asm"]) != `""` {
-		t.Errorf("sparkname scriptPubKey %s", body)
-	}
-	if !strings.Contains(body, `"scriptPubKey":{"value":0,"n":0,"hex":"","addresses":["Sparkname"],"isAddress":false,"type":"sparkname","asm":""}`) {
-		t.Errorf("sparkname output %s", body)
-	}
-	if string(out.Vout[1].ScriptPubKey["hex"]) != `"76a9149e6778ee1011af76f6f800873032ea8e15ada4ca88ac"` {
-		t.Errorf("other output changed %s", body)
+	f.address = &api.Address{AddrStr: "aFA2TbqG9cnhhzX5Yny2pBJRK5EaEqLCH7", BalanceSat: insightAmount(0), UnconfirmedBalanceSat: insightAmount(0), Txs: 1, Txids: []string{insightFiroSparkNameTx}}
+	for _, path := range []string{"/api/tx/" + insightFiroSparkNameTx, "/api/addrs/aFA2TbqG9cnhhzX5Yny2pBJRK5EaEqLCH7/txs?from=0&to=1"} {
+		body := insightRequest(s, "GET", path, "").Body.String()
+		var tx struct {
+			Vout []struct {
+				N            int                        `json:"n"`
+				ScriptPubKey map[string]json.RawMessage `json:"scriptPubKey"`
+			} `json:"vout"`
+			SparkData json.RawMessage `json:"sparkData"`
+		}
+		var hist struct {
+			Items []json.RawMessage `json:"items"`
+		}
+		raw := []byte(body)
+		if json.Unmarshal(raw, &hist) == nil && len(hist.Items) == 1 {
+			raw = hist.Items[0]
+		}
+		if err := json.Unmarshal(raw, &tx); err != nil || len(tx.Vout) != 2 {
+			t.Fatalf("%s: %v %.300s", path, err, body)
+		}
+		if tx.Vout[0].N != 0 || string(tx.Vout[0].ScriptPubKey["hex"]) != `"`+insightFiroSparkNameFeeScript+`"` {
+			t.Errorf("%s: Spark name fee output %.400s", path, body)
+		}
+		if !strings.HasPrefix(string(tx.Vout[0].ScriptPubKey["asm"]), `"OP_DUP OP_HASH160 9e6778ee1011af76f6f800873032ea8e15ada4ca OP_EQUALVERIFY OP_CHECKSIG OP_UNKNOWN225 636f6e6e656374 OP_DROP`) {
+			t.Errorf("%s: asm %s", path, tx.Vout[0].ScriptPubKey["asm"])
+		}
+		if len(tx.SparkData) == 0 {
+			t.Errorf("%s: no sparkData", path)
+		}
 	}
 }
 
@@ -608,5 +628,72 @@ func TestInsightCachedLoaderPanic(t *testing.T) {
 	v, err := c.get(context.Background(), time.Minute, func() (interface{}, error) { return 1, nil })
 	if err == nil && v != nil {
 		t.Fatal("error was not remembered for insightCacheErrTTL")
+	}
+}
+
+// A JSON array filter does what stock's code makes of it: the elements joined
+// by "," are one substring of each entry's JSON (200, possibly []). An array
+// stock's code throws on, or with non-string elements, is refused.
+func TestInsightFiroArrayFilter(t *testing.T) {
+	s, _, _, _ := insightFiroSetup(t)
+	post := func(body string) (int, []json.RawMessage) {
+		r := httptest.NewRequest("POST", "/api/masternode/listmasternodesarray", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		var out struct {
+			Result []json.RawMessage `json:"result"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return w.Code, out.Result
+	}
+	_, all := post(`{}`)
+	if len(all) < 3 {
+		t.Fatalf("fixture has %d nodes", len(all))
+	}
+	for _, tc := range []struct {
+		body string
+		want int
+	}{
+		{`{"filter":["aKs8csbHpTWYwzfyRhFiZN4in83qLweTRD"]}`, 1},
+		{`{"filter":["aKs8csbHpTWYwzfyRhFiZN4in83qLweTRD","23.88.21.154"]}`, 0},
+		{`{"filter":["33a48424836ba49c9eefbafe174b12ef156c1587cf3b9636ac348133f367b852-1"]}`, 0},
+		{`{"filter":[]}`, len(all)},
+		{`{"filter":[""]}`, len(all)},
+	} {
+		code, got := post(tc.body)
+		if code != 200 || len(got) != tc.want {
+			t.Errorf("%s: %d, %d rows, want 200 and %d", tc.body, code, len(got), tc.want)
+		}
+	}
+	for _, body := range []string{`{"filter":[","]}`, `{"filter":["a","-"]}`, `{"filter":[1]}`, `{"filter":[["a"]]}`, `{"filter":{"a":1}}`, `{"filter":["` + strings.Repeat("a", insightFiroFilterMax+1) + `"]}`} {
+		if code, _ := post(body); code != 400 {
+			t.Errorf("%.60s: got %d, want 400", body, code)
+		}
+	}
+}
+
+// Exchange outputs and Spark name fee outputs get bitcore's address type.
+func TestInsightFiroAddressTypes(t *testing.T) {
+	s, _, _, _ := insightFiroSetup(t)
+	tx := &api.Tx{
+		Txid: "x", ValueOutSat: insightAmount(3), FeesSat: insightAmount(0),
+		Vout: []api.Vout{
+			{ValueSat: insightAmount(1), Hex: "e076a914db14fb77c6517377c08ae36a8688d874eaa95a9f88ac", Addresses: []string{"EXXaSB8H9NUcFscQFuEMeKYTAKpq2BYjxdVS"}, IsAddress: true},
+			{N: 1, ValueSat: insightAmount(1), Hex: insightFiroSparkNameFeeScript, Addresses: []string{"aFA2TbqG9cnhhzX5Yny2pBJRK5EaEqLCH7"}, IsAddress: true},
+			{N: 2, ValueSat: insightAmount(1), Hex: "76a9149e6778ee1011af76f6f800873032ea8e15ada4ca88ace1", Addresses: []string{}},
+		},
+	}
+	out, err := s.transaction(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{"expubkeyhash", "pubkeyhash", ""} {
+		if got := out.Vout[i].ScriptPubKey.Type; got != want {
+			t.Errorf("vout %d: type %q, want %q", i, got, want)
+		}
+		if out.Vout[i].Type != "" {
+			t.Errorf("vout %d: converter type %q", i, out.Vout[i].Type)
+		}
 	}
 }
