@@ -38,20 +38,33 @@ type insightValuePool struct {
 	ChainValueZat json.Number `json:"chainValueZat"`
 }
 
+// SetSupplyUTXOScan allows statistics/circulating-supply to fall back to
+// gettxoutsetinfo (blockchaincfg "insight_supply_utxo_scan"). Call it before
+// Start. Off by default.
+func (s *InsightServer) SetSupplyUTXOScan(on bool) {
+	s.supplyUTXOScan = on
+}
+
 // circulatingSupply serves statistics/circulating-supply: the amount of coins
 // that exist on chain, in coins, as a bare number string, or as
 // {"circulatingSupply":"<n>"} with ?format=object. Stock insight-api computes
 // it from a per-coin emission formula; here it is read from the daemon (see
-// insightLoadSupply), so it needs daemon RPC (501 without it) and answers 501
-// when the daemon has no usable source.
+// insightLoadSupply). Without daemon RPC, or without a cheap source when the
+// UTXO scan is not enabled, it is the unknown-route 404, as before the route
+// existed; it answers 501 when the daemon reports a pool it does not track or
+// has no gettxoutsetinfo.
 func (s *InsightServer) circulatingSupply(route insightRoute) (interface{}, int, error) {
+	notFound := &insightClientError{http.StatusNotFound, "Route not found"}
 	if s.rpc == nil {
-		return nil, http.StatusNotImplemented, errors.New("no daemon RPC")
+		return nil, http.StatusNotFound, notFound
 	}
 	v, err := s.supply.get(route.ctx, insightSupplyTTL, func() (interface{}, error) {
-		return insightLoadSupply(s.rpc)
+		return insightLoadSupply(s.rpc, s.supplyUTXOScan)
 	})
 	if err != nil {
+		if errors.Is(err, errInsightSupplyNoSource) {
+			return nil, http.StatusNotFound, notFound
+		}
 		var rpcErr *bchain.RPCError
 		if errors.As(err, &rpcErr) && rpcErr.Code == insightRPCMethodNotFound {
 			return nil, http.StatusNotImplemented, err
@@ -74,6 +87,10 @@ func (s *InsightServer) circulatingSupply(route insightRoute) (interface{}, int,
 	return insightText(supply), 0, nil
 }
 
+// errInsightSupplyNoSource means the daemon has no cheap supply source and the
+// UTXO scan is not enabled.
+var errInsightSupplyNoSource = errors.New("no supply source")
+
 // errInsightSupplyUnknown means the daemon reports a shielded pool whose value
 // it does not track, so the total cannot be stated.
 var errInsightSupplyUnknown = errors.New("value pool not monitored")
@@ -84,13 +101,14 @@ var errInsightSupplyUnknown = errors.New("value pool not monitored")
 //  1. getblockchaininfo chainSupply (zcashd 5+, Zebra), when monitored;
 //  2. getblockchaininfo valuePools, when they include the transparent pool
 //     and every pool is monitored;
-//  3. gettxoutsetinfo total_amount (the transparent UTXO set, a full scan)
-//     plus every shielded value pool from getblockchaininfo (zcashd before 5,
-//     zclassicd, fluxd). Coins without valuePools (Bitcoin, Firo, ...) get
-//     total_amount alone.
+//  3. only with utxoScan: gettxoutsetinfo total_amount (the transparent UTXO
+//     set, a full scan) plus every shielded value pool from getblockchaininfo
+//     (zcashd before 5, zclassicd, fluxd). Coins without valuePools (Bitcoin,
+//     Firo, ...) get total_amount alone. Without utxoScan the result is
+//     errInsightSupplyNoSource.
 //
 // A pool that is reported but not monitored makes the total unknown.
-func insightLoadSupply(rpc InsightRPC) (interface{}, error) {
+func insightLoadSupply(rpc InsightRPC, utxoScan bool) (interface{}, error) {
 	var info struct {
 		ChainSupply *insightValuePool  `json:"chainSupply"`
 		ValuePools  []insightValuePool `json:"valuePools"`
@@ -121,6 +139,9 @@ func insightLoadSupply(rpc InsightRPC) (interface{}, error) {
 		}
 	}
 	if !transparent {
+		if !utxoScan {
+			return nil, errInsightSupplyNoSource
+		}
 		var utxo struct {
 			TotalAmount json.Number `json:"total_amount"`
 		}

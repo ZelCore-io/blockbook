@@ -47,12 +47,47 @@ const insightOldZcashdInfo = `{"chain":"main","blocks":3302466,"valuePools":[` +
 // gettxoutsetinfo of the same daemon (transparent UTXO set).
 const insightOldZcashdUtxo = `{"height":3302466,"bestblock":"00","transactions":1,"txouts":2,"bytes_serialized":3,"hash_serialized":"ab","total_amount":9876543.21000000}`
 
+// insightSupplySetup returns a listener with the UTXO-scan opt-in on, as
+// configs/coins/zclassic.json sets it.
 func insightSupplySetup(t *testing.T, rpc *insightSupplyRPC) *InsightServer {
 	t.Helper()
 	rpc.calls = map[string]int{}
 	s := insightTestServer(t, insightFixture())
 	s.SetBackend(rpc.call, "ZCL")
+	s.SetSupplyUTXOScan(true)
 	return s
+}
+
+// Without the opt-in, a daemon with no cheap source gets the unknown-route
+// 404 (as before the route existed) and is never asked for a UTXO scan; the
+// cheap sources still answer.
+func TestInsightCirculatingSupplyUTXOScanOptIn(t *testing.T) {
+	for _, info := range []string{insightOldZcashdInfo, `{"chain":"main","blocks":10}`} {
+		rpc := &insightSupplyRPC{info: info, utxo: insightOldZcashdUtxo, calls: map[string]int{}}
+		s := insightTestServer(t, insightFixture())
+		s.SetBackend(rpc.call, "BTC")
+		for _, path := range []string{"/api/statistics/circulating-supply", "/api/statistics/circulating-supply?format=object"} {
+			w := insightRequest(s, "GET", path, "")
+			if w.Code != 404 || strings.TrimSpace(w.Body.String()) != `{"status":"error","error":"Route not found"}` {
+				t.Fatalf("default off %s: %d %s", path, w.Code, w.Body.String())
+			}
+		}
+		if rpc.calls["gettxoutsetinfo"] != 0 {
+			t.Fatalf("default off scanned the UTXO set: %v", rpc.calls)
+		}
+	}
+	rpc := &insightSupplyRPC{info: `{"chainSupply":{"monitored":true,"chainValueZat":150000000}}`, calls: map[string]int{}}
+	s := insightTestServer(t, insightFixture())
+	s.SetBackend(rpc.call, "ZEC")
+	if w := insightRequest(s, "GET", "/api/statistics/circulating-supply", ""); w.Code != 200 || w.Body.String() != "1.5" {
+		t.Fatalf("cheap source without opt-in: %d %s", w.Code, w.Body.String())
+	}
+	// opt-in on: the scan is used
+	rpc = &insightSupplyRPC{info: insightOldZcashdInfo, utxo: insightOldZcashdUtxo}
+	s = insightSupplySetup(t, rpc)
+	if w := insightRequest(s, "GET", "/api/statistics/circulating-supply", ""); w.Code != 200 || w.Body.String() != "9888988.88890124" || rpc.calls["gettxoutsetinfo"] != 1 {
+		t.Fatalf("opt-in: %d %s %v", w.Code, w.Body.String(), rpc.calls)
+	}
 }
 
 func TestInsightCirculatingSupplyOldZcashd(t *testing.T) {
@@ -121,7 +156,7 @@ func TestInsightCirculatingSupplySources(t *testing.T) {
 func TestInsightCirculatingSupplyErrors(t *testing.T) {
 	// no daemon RPC
 	s := insightTestServer(t, insightFixture())
-	if w := insightRequest(s, "GET", "/api/statistics/circulating-supply", ""); w.Code != 501 || !strings.Contains(w.Body.String(), `"error":"Not supported"`) {
+	if w := insightRequest(s, "GET", "/api/statistics/circulating-supply", ""); w.Code != 404 || !strings.Contains(w.Body.String(), `"error":"Route not found"`) {
 		t.Fatalf("no rpc: %d %s", w.Code, w.Body.String())
 	}
 	// a shielded pool the daemon does not track makes the total unknown

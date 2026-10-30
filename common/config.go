@@ -23,6 +23,11 @@ type Config struct {
 	// PublicURL is the public, load-balanced base URL of this coin's explorer (e.g.
 	// https://blockbook.btc.example.com), used for canonical links and the sitemap. Optional.
 	PublicURL string `json:"public_url"`
+	// InsightSupplyUTXOScan lets the Insight listener's statistics/circulating-supply
+	// fall back to gettxoutsetinfo, a full scan of the daemon's UTXO set, when the
+	// daemon has no cheap supply source (chainSupply or a transparent value pool).
+	// Off by default: on a public listener anyone could trigger the scan.
+	InsightSupplyUTXOScan bool `json:"insight_supply_utxo_scan"`
 }
 
 // GetConfig loads and parses the config file and returns Config struct

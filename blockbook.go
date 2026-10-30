@@ -404,6 +404,7 @@ func mainWithExitCode() int {
 			}
 			insightServer.SetBackend(rpc, internalState.CoinShortcut)
 			insightServer.SetChainParser(parser)
+			insightServer.SetSupplyUTXOScan(config.InsightSupplyUTXOScan)
 			if ext, ok := parser.(server.InsightExtensionProvider); ok {
 				err = insightServer.EnableExtension(ext.InsightExtension())
 			}

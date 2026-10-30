@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"text/template"
+
+	"github.com/trezor/blockbook/common"
 )
 
 func TestResolveBuildEnvDefaultsToDev(t *testing.T) {
@@ -843,6 +845,18 @@ func TestInsightProductionCoinConfigs(t *testing.T) {
 			}
 			if cfg.Blockbook.InsightUI != wantUI || strings.Contains(string(unit), " -insightui ") != wantUI {
 				t.Fatalf("%s -insightui = %v, want %v:\n%s", alias, !wantUI, wantUI, unit)
+			}
+			// Only zclassic opts in to the circulating-supply UTXO scan.
+			bcfg, err := os.ReadFile(filepath.Join(out, "blockbook/blockchaincfg.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var parsed common.Config
+			if err := json.Unmarshal(bcfg, &parsed); err != nil {
+				t.Fatal(err)
+			}
+			if parsed.InsightSupplyUTXOScan != (alias == "zclassic") {
+				t.Fatalf("%s insight_supply_utxo_scan = %v", alias, parsed.InsightSupplyUTXOScan)
 			}
 		})
 	}

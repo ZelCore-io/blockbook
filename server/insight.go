@@ -74,6 +74,9 @@ type InsightServer struct {
 	relayFee insightCached
 	// supply caches statistics/circulating-supply.
 	supply insightCached
+	// supplyUTXOScan allows the supply's gettxoutsetinfo fallback
+	// (SetSupplyUTXOScan).
+	supplyUTXOScan bool
 }
 
 func NewInsightServer(binding string, chainType bchain.ChainType, decimals int, worker insightWorker, broadcast func(string) (string, error)) (*InsightServer, error) {

@@ -151,7 +151,7 @@ prefixes, which stay the Insight 404).
 | `GET utils/estimatefee?nbBlocks=2,3` | `{"2":<coins/kB>,...}`; `-1` when the daemon cannot estimate |
 | `GET currency` | `{status:200,data:{rate:<USD>,short:"<TICKER>"}}`; rate 0 without a fiat source (Firo: stock shape, see [Firo extension](#firo-extension)) |
 | `GET`/`POST messages/verify` | `{result:<bool>}` from the daemon's `verifymessage` |
-| `GET statistics/circulating-supply` | The coin supply in coins as a bare number (`text/html; charset=utf-8`, as stock's `res.send`), or `{"circulatingSupply":"<n>"}` with `?format=object`; read from the daemon, cached 10 minutes (see [Circulating supply](#circulating-supply)) |
+| `GET statistics/circulating-supply` | The coin supply in coins as a bare number (`text/html; charset=utf-8`, as stock's `res.send`), or `{"circulatingSupply":"<n>"}` with `?format=object`; read from the daemon, cached 10 minutes; the UTXO-scan fallback is opt-in per coin, otherwise a daemon without a cheap source gives the unknown-route 404 (see [Circulating supply](#circulating-supply)) |
 
 For adapter compatibility, a single address can instead be supplied by `?address=...` on `addr`,
 `addr/utxo` and `addrs/txs`. History also accepts `addrs/:address/txs/:from[/:to]` and
@@ -264,23 +264,34 @@ For a ZEC node only the transparent pool is indexed, so shielded asset semantics
    Zebra);
 2. else the sum of `getblockchaininfo` `valuePools[].chainValueZat` when they include the
    `transparent` pool;
-3. else `gettxoutsetinfo` `total_amount` (the transparent UTXO set) plus every shielded pool in
-   `valuePools` (zcashd before 5, zclassicd, fluxd). Coins without `valuePools` (Bitcoin, Firo,
-   ...) get `total_amount` alone: unspent outputs, without provably unspendable ones.
+3. else, only for a coin that opts in, `gettxoutsetinfo` `total_amount` (the transparent UTXO
+   set) plus every shielded pool in `valuePools` (zcashd before 5, zclassicd, fluxd). A coin
+   without `valuePools` (Bitcoin, Firo, ...) would get `total_amount` alone: unspent outputs,
+   without provably unspendable ones.
+
+The third source is a full scan of the daemon's UTXO set, which anyone could trigger on a public
+listener, so it is off by default. A coin enables it with
+`"blockbook": { "block_chain": { "additional_params": { "insight_supply_utxo_scan": true } } }`
+(rendered into `blockchaincfg.json` and read by Blockbook at startup); only
+`configs/coins/zclassic.json` sets it. Without the opt-in, and on a daemon with neither
+`chainSupply` nor a transparent value pool (Bitcoin, Firo, Flux), the route is the unknown-route
+404 `{"status":"error","error":"Route not found"}`, exactly as before the route existed, and
+`gettxoutsetinfo` is never called; only the cheap `getblockchaininfo` is. Without daemon RPC it
+is the same 404.
 
 All arithmetic is in integer satoshis; the answer is formatted with trailing zeros trimmed
 (`21`, `9888988.88890124`). A reported pool that the daemon does not monitor makes the total
-unknown: the route answers 501 rather than a short number. It is also 501 without daemon RPC or
-when the daemon has no `gettxoutsetinfo`. Other failures are the generic 500.
+unknown: the route answers 501 rather than a short number. It is also 501 when an opted-in
+daemon has no `gettxoutsetinfo`. Other failures are the generic 500.
 
 The value is cached 10 minutes and loaded single-flight (one daemon call shared by concurrent
-requests, stale value served if a refresh fails). A failed load is remembered for 5 minutes
-instead of the usual 5 seconds: `gettxoutsetinfo` scans the whole UTXO set, older zcashd-lineage
-daemons (zclassicd 2.1) hold `cs_main` while they do, and a scan that outlives Blockbook's RPC
-timeout keeps running in the daemon, so it must not be restarted by every request. On a large
-UTXO set (Bitcoin) the scan can exceed the RPC timeout every time; the route then answers 500.
+requests, stale value served if a refresh fails), so an opted-in coin runs at most one scan per
+10 minutes. A failed load (and the no-source answer) is remembered for 5 minutes instead of the
+usual 5 seconds: older zcashd-lineage daemons (zclassicd 2.1) hold `cs_main` during the scan, and
+a scan that outlives Blockbook's RPC timeout keeps running in the daemon, so it must not be
+restarted by every request.
 
-**Difference from stock.** Stock insight-api computes the value from a hardcoded per-coin
+**ZCL differs from stock.** Stock insight-api computes the value from a hardcoded per-coin
 emission formula (its `SupplyHelper`), not from the chain. On ZCL the deployed stock answered
 `41249575` at height 3,302,466, which is exactly `(height - 2500) * 12.5`: a flat 12.5 ZCL per
 block with no halvings, about twice ZCL's 21M cap. The listener's figure is what the chain holds and will be much lower. Consumers of this
