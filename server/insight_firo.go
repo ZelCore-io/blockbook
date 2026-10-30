@@ -134,9 +134,16 @@ func (f *insightFiro) handle(route insightRoute) (interface{}, int, error) {
 	case "masternode/listmasternodes":
 		value, err = f.listMasternodes(ctx)
 	case "masternode/listmasternodesarray":
-		filter, ok := insightFiroFilter(route)
+		filter, literal, ok := insightFiroFilter(route)
 		if !ok {
 			return nil, http.StatusBadRequest, errors.New("invalid filter")
+		}
+		if literal {
+			if len(filter) > insightFiroFilterMax {
+				return nil, http.StatusBadRequest, fmt.Errorf("filter longer than %d bytes", insightFiroFilterMax)
+			}
+			value, err = f.listMasternodesSubstring(ctx, filter)
+			break
 		}
 		items, ferr := insightFiroFilterItems(filter)
 		if ferr != nil {
@@ -502,27 +509,65 @@ func (f *insightFiro) listMasternodesArray(ctx context.Context, items []string) 
 	return insightFiroRPCResult{Result: result, ID: z.id}, nil
 }
 
+// listMasternodesSubstring is stock's filter for a JSON array filter: the
+// entries whose JSON contains filter, in list order ("" matches all).
+func (f *insightFiro) listMasternodesSubstring(ctx context.Context, filter string) (interface{}, error) {
+	z, err := f.loadZnodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := []json.RawMessage{}
+	for i, text := range z.text {
+		if i%1024 == 0 && ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		if strings.Contains(text, filter) {
+			result = append(result, z.nodes[i])
+		}
+	}
+	return insightFiroRPCResult{Result: result, ID: z.id}, nil
+}
+
 // insightFiroFilter returns stock's req.body.filter || req.params.filter ||
 // req.query.filter. A body that is not a JSON (or form) object is ignored, as
-// stock's body parser leaves req.body empty for it; a non-string filter is
-// refused.
-func insightFiroFilter(route insightRoute) (string, bool) {
-	var body map[string]interface{}
+// stock's body parser leaves req.body empty for it.
+//
+// A JSON array of strings in the body is what stock's code makes of it: the
+// array is truthy, has no "," or "-" element, so stock matches the array's
+// string form (its elements joined by ",") as one substring of each entry's
+// JSON. literal is true then: the filter is that one substring, not split and
+// never an exact txhash-outidx. ok is false (400) for any other non-string
+// filter, and for an array with a "," or "-" element or a non-string element,
+// on which stock's code throws and answers 200 {}.
+func insightFiroFilter(route insightRoute) (filter string, literal bool, ok bool) {
+	var body map[string]json.RawMessage
 	if len(route.body) > 0 && json.Unmarshal(route.body, &body) == nil {
-		if v, ok := body["filter"]; ok && v != nil {
-			str, isString := v.(string)
-			if !isString {
-				return "", false
-			}
-			if str != "" {
-				return str, true
+		if raw, found := body["filter"]; found && string(raw) != "null" {
+			var str string
+			if json.Unmarshal(raw, &str) == nil {
+				if str != "" {
+					return str, false, true
+				}
+			} else {
+				var arr []string
+				if json.Unmarshal(raw, &arr) != nil {
+					return "", false, false
+				}
+				for _, item := range arr {
+					if item == "," || item == "-" {
+						return "", false, false
+					}
+				}
+				return strings.Join(arr, ","), true, true
 			}
 		}
 	}
 	if route.arg != "" {
-		return route.arg, true
+		return route.arg, false, true
 	}
-	return route.query.Get("filter"), true
+	return route.query.Get("filter"), false, true
 }
 
 // insightSparkData is stock's sparkData for a Spark name registration.
@@ -584,8 +629,12 @@ func insightFiroOpcode(script string) string {
 
 // decorateTx applies stock's labels: private-spend inputs get an addr label
 // (a Remint input the tx's output value), private-mint outputs a type and
-// address label. A Spark spend that registers a Spark name gets sparkData and
-// a synthetic first "sparkname" output, and outputs are renumbered, as stock.
+// address label, exchange outputs scriptPubKey.type "expubkeyhash" and Spark
+// name fee outputs "pubkeyhash" (bitcore's types of their addresses). A Spark
+// spend that registers a Spark name gets stock's sparkData. The newer upstream
+// explorer also inserts a synthetic first "sparkname" output and renumbers the
+// outputs; that is not done here, so vout n stays the on-chain output index
+// (an outpoint) on every route, as on stock insight-api-zcoin 0.4.5.
 func (f *insightFiro) decorateTx(out *insightTx, tx *api.Tx) {
 	if out == nil {
 		return
@@ -614,6 +663,11 @@ func (f *insightFiro) decorateTx(out *insightTx, tx *api.Tx) {
 	}
 	for i := range out.Vout {
 		vout := &out.Vout[i]
+		if vout.ScriptPubKey.Type == "" && vout.IsAddress {
+			if t := insightFiroAddressType(vout.Hex); t != "" {
+				vout.ScriptPubKey.Type = t
+			}
+		}
 		label, ok := insightFiroVoutLabels[insightFiroOpcode(vout.Hex)]
 		if !ok {
 			continue
@@ -629,12 +683,20 @@ func (f *insightFiro) decorateTx(out *insightTx, tx *api.Tx) {
 		return
 	}
 	out.SparkData = data
-	name := insightVout{
-		Value: "0", Addresses: []string{"Sparkname"}, Type: "sparkname",
-		ScriptPubKey: insightVoutScript{Value: "0", Addresses: []string{"Sparkname"}, Type: "sparkname", emptyScript: true},
+}
+
+// insightFiroAddressType is bitcore's address type for the Firo output
+// scripts the generic classifier does not know, given that the parser found
+// their address: an exchange address (OP_EXCHANGEADDR + P2PKH) and a Spark
+// name fee output (P2PKH + OP_SPARKNAMEID payload, whose address is the P2PKH
+// one).
+func insightFiroAddressType(script string) string {
+	script = strings.ToLower(script)
+	switch {
+	case len(script) == 52 && strings.HasPrefix(script, "e076a914") && strings.HasSuffix(script, "88ac"):
+		return "expubkeyhash"
+	case len(script) > 52 && strings.HasPrefix(script, "76a914") && script[46:52] == "88ace1":
+		return "pubkeyhash"
 	}
-	out.Vout = append([]insightVout{name}, out.Vout...)
-	for i := range out.Vout {
-		out.Vout[i].N, out.Vout[i].ScriptPubKey.N = i, i
-	}
+	return ""
 }
