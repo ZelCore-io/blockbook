@@ -67,6 +67,11 @@ type InsightServer struct {
 	// fallback serves every request the Insight router does not match
 	// (SetFallback, the -insightui flag); nil keeps the Insight 404.
 	fallback http.Handler
+	// parser maps an address to its output script (SetChainParser); nil
+	// leaves scriptPubKey out of utxo rows.
+	parser bchain.BlockChainParser
+	// relayFee caches the daemon's relay fee for status (getnetworkinfo).
+	relayFee insightCached
 }
 
 func NewInsightServer(binding string, chainType bchain.ChainType, decimals int, worker insightWorker, broadcast func(string) (string, error)) (*InsightServer, error) {
@@ -168,7 +173,7 @@ func insightError(w http.ResponseWriter, code int, message string) {
 
 func (s *InsightServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	route, methods, ok := s.match(r)
-	if !ok && s.fallback != nil {
+	if !ok && s.fallback != nil && !insightOwnsPath(r) {
 		s.serveFallback(w, r)
 		return
 	}

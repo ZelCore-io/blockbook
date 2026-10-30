@@ -168,6 +168,25 @@ func insightPathParts(r *http.Request) ([]string, bool) {
 	return parts[2:], true
 }
 
+// insightOwnsPath reports whether an unmatched path still belongs to the
+// Insight API, so it gets the Insight 404 (with CORS headers) instead of the
+// -insightui fallback, as on stock: everything under /api/ and /insight-api/
+// (and those prefixes themselves) except Blockbook's versioned APIs /api/v1/
+// and /api/v2/, which the explorer UI and Blockbook clients use.
+func insightOwnsPath(r *http.Request) bool {
+	parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
+	if len(parts) < 2 || parts[0] != "" {
+		return false
+	}
+	switch parts[1] {
+	case "insight-api":
+		return true
+	case "api":
+		return len(parts) < 3 || (parts[2] != "v1" && parts[2] != "v2")
+	}
+	return false
+}
+
 // match is insightMatch plus the routes of the coin's extension, if any.
 func (s *InsightServer) match(r *http.Request) (insightRoute, []string, bool) {
 	route, methods, ok := insightMatch(r)

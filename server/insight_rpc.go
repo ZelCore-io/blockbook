@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 
@@ -46,6 +47,36 @@ func NewInsightRPC(call func(req interface{}, res interface{}) error) InsightRPC
 		}
 		return json.Unmarshal(res.Result, result)
 	}
+}
+
+// SetChainParser gives the listener the chain parser, which maps an address
+// to its output script for the scriptPubKey of utxo rows. Call it before
+// Start. Without it utxo rows have no scriptPubKey.
+func (s *InsightServer) SetChainParser(parser bchain.BlockChainParser) {
+	s.parser = parser
+}
+
+// insightAddressScript returns the hex output script of addr: the script of
+// its address descriptor, which is what the index keys the address's outputs
+// by. For a P2PKH, P2SH or witness address that is the output script itself.
+// Outputs Blockbook folds into another address's descriptor are shown with
+// that descriptor's script: a P2PK output with its P2PKH script (stock shows
+// the P2PK script), and any output a coin parser maps onto a standard
+// descriptor (Firo's Spark name fee outputs) with the standard script. ""
+// when there is no parser or the address does not parse.
+func (s *InsightServer) insightAddressScript(addr string) string {
+	if s.parser == nil {
+		return ""
+	}
+	desc, err := s.parser.GetAddrDescFromAddress(addr)
+	if err != nil || len(desc) == 0 {
+		return ""
+	}
+	script, err := s.parser.GetScriptFromAddrDesc(desc)
+	if err != nil {
+		return ""
+	}
+	return hex.EncodeToString(script)
 }
 
 // SetBackend gives the listener raw daemon access and the coin shortcut.

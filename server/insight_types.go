@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -9,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/martinboehm/btcd/txscript"
+	btxscript "github.com/martinboehm/btcutil/txscript"
 	"github.com/trezor/blockbook/api"
 )
 
@@ -70,10 +70,13 @@ func insightAddress(a *api.Address) (*insightSummary, error) {
 	return &insightSummary{a.AddrStr, balance, big.NewInt(sat).String(), received, rs, sent, ss, pending, ps, a.UnconfirmedTxs, a.Txs}, nil
 }
 
+// insightUtxo is a stock utxo row. scriptPubKey is the output script of the
+// address (see insightAddressScript), omitted when it cannot be derived.
 type insightUtxo struct {
 	Address       string      `json:"address"`
 	Txid          string      `json:"txid"`
 	Vout          int32       `json:"vout"`
+	ScriptPubKey  string      `json:"scriptPubKey,omitempty"`
 	Amount        json.Number `json:"amount"`
 	Satoshis      int64       `json:"satoshis"`
 	Height        int         `json:"height"`
@@ -118,8 +121,9 @@ type insightVin struct {
 
 // insightVoutScript is the converter's vout.scriptPubKey (a clone of the
 // Blockbook vout, so spending info is omitted when absent, as Blockbook
-// omits it) with asm disassembled from the script hex. Stock's scriptPubKey
-// keys (hex, asm, addresses, type) are all present.
+// omits it) with asm disassembled from the script hex and type classified
+// from it (insightScriptType). Stock's scriptPubKey keys (hex, asm,
+// addresses, type) are present when the script gives them.
 type insightVoutScript struct {
 	Value       json.Number `json:"value"`
 	N           int         `json:"n"`
@@ -133,45 +137,6 @@ type insightVoutScript struct {
 	IsOwn       bool        `json:"isOwn,omitempty"`
 	Type        string      `json:"type,omitempty"`
 	Asm         string      `json:"asm,omitempty"`
-	// emptyScript marks a synthetic output (Firo's sparkname) whose hex and
-	// asm are written as "" instead of omitted, as stock does.
-	emptyScript bool
-}
-
-// insightVoutScriptEmpty is insightVoutScript with hex and asm always written.
-type insightVoutScriptEmpty struct {
-	Value       json.Number `json:"value"`
-	N           int         `json:"n"`
-	Spent       bool        `json:"spent,omitempty"`
-	SpentTxID   string      `json:"spentTxId,omitempty"`
-	SpentIndex  int         `json:"spentIndex,omitempty"`
-	SpentHeight int         `json:"spentHeight,omitempty"`
-	Hex         string      `json:"hex"`
-	Addresses   []string    `json:"addresses"`
-	IsAddress   bool        `json:"isAddress"`
-	IsOwn       bool        `json:"isOwn,omitempty"`
-	Type        string      `json:"type,omitempty"`
-	Asm         string      `json:"asm"`
-	emptyScript bool
-}
-
-// insightVoutScriptPlain has insightVoutScript's fields without its methods.
-type insightVoutScriptPlain insightVoutScript
-
-// MarshalJSON writes the struct as declared, except that a synthetic output
-// keeps its empty hex and asm.
-func (s insightVoutScript) MarshalJSON() ([]byte, error) {
-	var v interface{} = insightVoutScriptPlain(s)
-	if s.emptyScript {
-		v = insightVoutScriptEmpty(s)
-	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false) // the outer encoder applies its own setting
-	if err := enc.Encode(v); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 // insightVout: spentTxId/spentIndex/spentHeight are null for an unspent (or
@@ -275,17 +240,20 @@ func insightTransaction(tx *api.Tx) (*insightTx, error) {
 		if err != nil {
 			return nil, err
 		}
-		asm := v.Asm
+		asm, scriptType := v.Asm, v.Type
 		if v.Hex != "" {
 			if raw, err := hex.DecodeString(v.Hex); err == nil {
 				if disasm, err := txscript.DisasmString(raw); err == nil {
 					asm = disasm
 				}
+				if scriptType == "" {
+					scriptType = insightScriptType(raw)
+				}
 			}
 		}
 		vout := insightVout{
 			Value: value, N: v.N, Spent: v.Spent, Hex: v.Hex, Addresses: v.Addresses, IsAddress: v.IsAddress, IsOwn: v.IsOwn, Type: v.Type,
-			ScriptPubKey: insightVoutScript{Value: value, N: v.N, Spent: v.Spent, SpentTxID: v.SpentTxID, SpentIndex: v.SpentIndex, SpentHeight: v.SpentHeight, Hex: v.Hex, Addresses: v.Addresses, IsAddress: v.IsAddress, IsOwn: v.IsOwn, Type: v.Type, Asm: asm},
+			ScriptPubKey: insightVoutScript{Value: value, N: v.N, Spent: v.Spent, SpentTxID: v.SpentTxID, SpentIndex: v.SpentIndex, SpentHeight: v.SpentHeight, Hex: v.Hex, Addresses: v.Addresses, IsAddress: v.IsAddress, IsOwn: v.IsOwn, Type: scriptType, Asm: asm},
 		}
 		if v.SpentTxID != "" {
 			spentTxID, spentIndex, spentHeight := v.SpentTxID, v.SpentIndex, v.SpentHeight
@@ -294,6 +262,32 @@ func insightTransaction(tx *api.Tx) (*insightTx, error) {
 		out.Vout = append(out.Vout, vout)
 	}
 	return out, nil
+}
+
+// insightScriptType names a standard output script the way stock Insight's
+// scriptPubKey.type does: the bitcore address type (pubkeyhash, scripthash,
+// witnesspubkeyhash, witnessscripthash, taproot; a P2PK output is indexed
+// under its P2PKH address, so it is pubkeyhash too), and bitcoind's names for
+// the address-less standard forms (nulldata, multisig), which stock leaves
+// out. Anything else is "" (omitted); a coin extension may label it.
+func insightScriptType(script []byte) string {
+	switch btxscript.GetScriptClass(script) {
+	case btxscript.PubKeyHashTy, btxscript.PubKeyTy:
+		return "pubkeyhash"
+	case btxscript.ScriptHashTy:
+		return "scripthash"
+	case btxscript.WitnessV0PubKeyHashTy:
+		return "witnesspubkeyhash"
+	case btxscript.WitnessV0ScriptHashTy:
+		return "witnessscripthash"
+	case btxscript.WitnessV1TaprootTy:
+		return "taproot"
+	case btxscript.NullDataTy:
+		return "nulldata"
+	case btxscript.MultiSigTy:
+		return "multisig"
+	}
+	return ""
 }
 
 // insightBlock is the stock block/:hash shape. chainwork, previousblockhash

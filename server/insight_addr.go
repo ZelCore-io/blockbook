@@ -309,6 +309,10 @@ func (s *InsightServer) appendUtxos(out []insightUtxo, addr string, onlyConfirme
 	if limit > 0 && len(out)+len(rows) > limit {
 		return nil, errInsightTooManyUtxos.code, errInsightTooManyUtxos
 	}
+	script := ""
+	if len(rows) > 0 {
+		script = s.insightAddressScript(addr)
+	}
 	for _, u := range rows {
 		amount, sat, err := insightMoney(u.AmountSat)
 		if err != nil {
@@ -318,7 +322,7 @@ func (s *InsightServer) appendUtxos(out []insightUtxo, addr string, onlyConfirme
 		if address == "" {
 			address = addr
 		}
-		out = append(out, insightUtxo{address, u.Txid, u.Vout, amount, sat, u.Height, u.Confirmations, u.Coinbase})
+		out = append(out, insightUtxo{address, u.Txid, u.Vout, script, amount, sat, u.Height, u.Confirmations, u.Coinbase})
 	}
 	return out, 0, nil
 }
