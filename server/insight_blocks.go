@@ -181,7 +181,12 @@ func (s *InsightServer) rawBlock(route insightRoute) (interface{}, int, error) {
 	}
 	// The index cannot serve the raw block (for example Zebra): ask the daemon.
 	var rawHex string
-	if rpcErr := s.rpc("getblock", []interface{}{hash, 0}, &rawHex); rpcErr != nil {
+	rpcErr := s.rpc("getblock", []interface{}{hash, 0}, &rawHex)
+	if insightRPCWantsBool(rpcErr) {
+		// Older zcashd-lineage daemons (anond) take only a boolean verbose.
+		rpcErr = s.rpc("getblock", []interface{}{hash, false}, &rawHex)
+	}
+	if rpcErr != nil {
 		var re *bchain.RPCError
 		if errors.As(rpcErr, &re) && (re.Code == insightRPCNotFound || re.Code == insightRPCInvalidParam) {
 			return nil, http.StatusNotFound, rpcErr
@@ -197,6 +202,15 @@ func (s *InsightServer) rawBlock(route insightRoute) (interface{}, int, error) {
 	return struct {
 		Rawblock string `json:"rawblock"`
 	}{rawHex}, 0, nil
+}
+
+// insightRPCWantsBool reports the error a daemon whose getblock verbose
+// argument is a boolean (anond, bitcoind before 0.15) returns for a number:
+// UniValue's get_bool runtime error, which the RPC server reports as
+// RPC_MISC_ERROR (-1) or RPC_TYPE_ERROR (-3).
+func insightRPCWantsBool(err error) bool {
+	var re *bchain.RPCError
+	return errors.As(err, &re) && (re.Code == -1 || re.Code == -3) && strings.Contains(re.Message, "not a boolean")
 }
 
 // insightBlockData is what a block response needs beyond its header. Both
