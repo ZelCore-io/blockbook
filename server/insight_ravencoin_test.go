@@ -68,6 +68,23 @@ type insightRvnRPC struct {
 	calls   []string
 	params  [][]interface{}
 	fail    bool
+	// txidsEntered, when set, is signalled by each getaddresstxids call,
+	// which then waits for txidsGate.
+	txidsEntered chan struct{}
+	txidsGate    chan struct{}
+}
+
+// count returns how many times method was called.
+func (r *insightRvnRPC) count(method string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, m := range r.calls {
+		if m == method {
+			n++
+		}
+	}
+	return n
 }
 
 func (r *insightRvnRPC) call(method string, params []interface{}, result interface{}) error {
@@ -75,6 +92,10 @@ func (r *insightRvnRPC) call(method string, params []interface{}, result interfa
 	r.calls = append(r.calls, method)
 	r.params = append(r.params, params)
 	r.mu.Unlock()
+	if method == "getaddresstxids" && r.txidsEntered != nil {
+		r.txidsEntered <- struct{}{}
+		<-r.txidsGate
+	}
 	if r.fail {
 		return &bchain.RPCError{Code: -1, Message: "secret daemon text"}
 	}

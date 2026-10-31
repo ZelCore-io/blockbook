@@ -51,8 +51,9 @@ type insightEscapedMatcher interface {
 // insightTxidLister is implemented by an extension whose daemon lists the
 // txids of addresses more completely than Blockbook's index (Ravencoin asset
 // transfers, which the index files under no address). The address history
-// routes page that list, newest first, instead of the worker's. The int is
-// the HTTP status for an error.
+// routes page that list, in the order the extension gives it (pending first),
+// instead of the worker's. The returned slice may be shared between requests
+// and must not be modified. The int is the HTTP status for an error.
 type insightTxidLister interface {
 	addressTxids(ctx context.Context, addresses []string) ([]string, int, error)
 }

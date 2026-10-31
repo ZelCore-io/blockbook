@@ -494,7 +494,16 @@ name reaches ravend whole. Any proxy in front must pass `%2F` through without de
 
 History lists come from ravend, so a tx that only moves assets (no RVN to or from the address) is
 listed, as on stock: the address's mempool txids (newest first, those already confirmed dropped),
-then `getaddresstxids` newest first, each txid once. Windows, defaults and limits are the generic
+then the `getaddresstxids` list reversed, each txid once. For one address that is ravend's index
+order reversed, as stock: grouped by asset, each group newest first (so not strictly newest first
+for an address holding assets); for several addresses it is by height, then txid, descending.
+ravend's `start`/`end` range cannot bound the read (with assets it ignores `start` and stops
+inside the first asset), so the confirmed list is read whole, cached per address set and
+Blockbook tip block hash (LRU, 256 lists and 1,000,000 txids at most; a new tip starts afresh),
+with concurrent identical requests sharing one call and at most 3 `getaddresstxids` calls at once
+(a request that cannot start one within 2 s gets 503). The mempool is read on every request.
+While Blockbook trails ravend by a block, a tx that just confirmed can be missing from both parts
+until Blockbook indexes the block. Windows, defaults and limits are the generic
 ones (`from`/`to` up to 1000 apart, `txs?address=` pages of 10, multi-address bounds);
 `totalItems` and `pagesTotal` count the whole list. Each tx is loaded from Blockbook as on other
 coins. `addr/:addr` (balance, `txApperances`, `transactions`) stays the generic Blockbook

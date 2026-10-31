@@ -312,8 +312,8 @@ func (s *InsightServer) multiTxs(route insightRoute) (interface{}, int, error) {
 }
 
 // listedMultiTxs is multiTxs for an extension that lists the addresses'
-// txids itself (insightTxidLister): one list for all the addresses, newest
-// first, sliced [from,to); totalItems is its length.
+// txids itself (insightTxidLister): one list for all the addresses, in the
+// lister's order, sliced [from,to); totalItems is its length.
 func (s *InsightServer) listedMultiTxs(route insightRoute, lister insightTxidLister, addresses []string, from, to int) (interface{}, int, error) {
 	ids, code, err := lister.addressTxids(route.ctx, addresses)
 	if err != nil {

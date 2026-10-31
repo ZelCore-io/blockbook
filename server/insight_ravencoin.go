@@ -24,6 +24,7 @@ import (
 //   - address history (addrs/:addr/txs, txs?address=, multi-address
 //     history): the txid list comes from ravend getaddresstxids with assets,
 //     so asset-only txs, which Blockbook files under no address, are listed.
+//     The list is cached per chain tip (insight_ravencoin_txids.go).
 //   - every tx: asset outputs get stock's assetType, asset and owner address;
 //     inputs spending an asset output get the owner as addr.
 //   - assets?asset=&verbose=: stock always failed it (its controller calls a
@@ -44,10 +45,17 @@ var insightRvnUnserved = map[string]bool{"balances": true, "tags": true, "frozen
 
 type insightRavencoin struct {
 	s *InsightServer
+	// txids caches and rations ravend's getaddresstxids lists
+	// (insight_ravencoin_txids.go); tipHash keys them, Blockbook's best
+	// block hash.
+	txids   *insightRvnTxidCache
+	tipHash func() (string, bool)
 }
 
 func newInsightRavencoin(s *InsightServer) insightExtension {
-	return &insightRavencoin{s: s}
+	x := &insightRavencoin{s: s, txids: newInsightRvnTxidCache(insightRvnTxidsMaxEntries, insightRvnTxidsMaxIds, insightRvnTxidsSlots, insightRvnTxidsWait)}
+	x.tipHash = x.insightRvnTipHash
+	return x
 }
 
 func (x *insightRavencoin) match(parts []string) (string, string, []string, bool) {
@@ -285,11 +293,15 @@ func (x *insightRavencoin) mempoolScript(txs map[string]*api.Tx, d insightRvnDel
 	return x.s.insightAddressScript(d.Address)
 }
 
-// addressTxids is stock's getAddressTxids for the history routes: ravend's
-// getaddresstxids with assets, newest first, preceded by the addresses'
-// mempool txids (newest first, those already confirmed dropped). Stock asked
-// the mempool without assets, so a pending asset-only tx was missing from
-// its history; here it is listed. A txid is listed once.
+// addressTxids is stock's getAddressTxids for the history routes: the
+// addresses' mempool txids (newest first, those already confirmed dropped),
+// then ravend's getaddresstxids list with assets reversed (confirmedTxids:
+// for one address that is ravend's index order, grouped by asset, reversed,
+// as stock; for several, height then txid, descending). Stock asked the
+// mempool without assets, so a pending asset-only tx was missing from its
+// history; here it is listed. A txid is listed once. The mempool is read on
+// every call; the confirmed list is cached per chain tip. The returned slice
+// may be shared and must not be modified.
 func (x *insightRavencoin) addressTxids(ctx context.Context, addresses []string) ([]string, int, error) {
 	if code, err := x.checkAddresses(addresses); err != nil {
 		return nil, code, err
@@ -301,18 +313,26 @@ func (x *insightRavencoin) addressTxids(ctx context.Context, addresses []string)
 	if err := x.s.rpc("getaddressmempool", []interface{}{map[string]interface{}{"addresses": addresses}, true}, &deltas); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	var txids []string
-	if err := x.s.rpc("getaddresstxids", []interface{}{map[string]interface{}{"addresses": addresses}, true}, &txids); err != nil {
-		return nil, http.StatusInternalServerError, err
+	listed, code, err := x.confirmedTxids(ctx, addresses)
+	if err != nil {
+		return nil, code, err
 	}
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return nil, insightClientGoneCode, err
 		}
 	}
-	seen := make(map[string]bool, len(txids)+len(deltas))
-	for _, id := range txids {
-		seen[id] = true
+	if len(deltas) == 0 {
+		return listed, 0, nil
+	}
+	seen := make(map[string]bool, len(deltas))
+	for _, d := range deltas {
+		seen[d.Txid] = false
+	}
+	for _, id := range listed {
+		if _, ok := seen[id]; ok {
+			seen[id] = true
+		}
 	}
 	var pending []string
 	for _, d := range deltas {
@@ -321,18 +341,14 @@ func (x *insightRavencoin) addressTxids(ctx context.Context, addresses []string)
 			pending = append(pending, d.Txid)
 		}
 	}
-	out := make([]string, 0, len(pending)+len(txids))
+	if len(pending) == 0 {
+		return listed, 0, nil
+	}
+	out := make([]string, 0, len(pending)+len(listed))
 	for i := len(pending) - 1; i >= 0; i-- {
 		out = append(out, pending[i])
 	}
-	listed := make(map[string]bool, len(txids))
-	for i := len(txids) - 1; i >= 0; i-- {
-		if !listed[txids[i]] {
-			listed[txids[i]] = true
-			out = append(out, txids[i])
-		}
-	}
-	return out, 0, nil
+	return append(out, listed...), 0, nil
 }
 
 // decorateTx adds stock's asset fields: an asset output gets assetType,
