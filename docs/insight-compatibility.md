@@ -68,17 +68,24 @@ Komodo's listeners take port 3001 from the stock Insight behind explorer.btcz an
 same way as Zclassic and Zero. Ravencoin's listener takes port 3001 from the stock Insight
 (ravencore-node with RavenDevKit insight-api, the pm2 `explorer` app) behind explorer.rvn: stop
 that app first. ravend is already Blockbook's backend on the RVN hosts (the stock Insight shares
-it), so it stays up.
+it), so it stays up. Turning on ravend's four indexes (`addressindex`, `assetindex`,
+`spentindex`, `timestampindex`) on an existing datadir needs a `-reindex`; ZelCore's RVN hosts
+already run with them, so no action is needed there.
 Anon's listener (explorer.anon) works the same way. On the ANON hosts the stock
 Insight holds 3001 until the switch, so an A/B run needs another host or port. On ZelCore hosts
 Blockbook reuses the anond that is already running (only `blockbook-anon` is installed, not
 `backend-anon`); anond needs `txindex=1`, `zmqpubhashtx` and `zmqpubhashblock` on the
 `backend_message_queue` port 38376 (today's anond.conf publishes `rawtx` and `hashblock` on
 27333 for bitcore), and the RPC credentials and port of the generated `blockbook-anon` config.
-`backend-anon`, when used, ships only `anond` and `anon-cli`: the zk params (the
-`~/.zcash-params` files of the current ANON hosts) must be staged into `$HOME/.zcash-params` of
-the backend by hand, because ANON's fetch-params source redirects and download.z.cash refuses
-`sprout-proving.key`. The listener serves plain HTTP; public TLS and perimeter request policy
+`backend-anon`, when used, ships only `anond` and `anon-cli` and downloads no zk params (ANON's
+fetch-params source redirects and download.z.cash refuses `sprout-proving.key`). Before the first
+start of a fresh `backend-anon` install, copy `sprout-proving.key`, `sprout-verifying.key` and
+`sprout-groth16.params` from an existing ANON host's `~/.zcash-params` into
+`.zcash-params` under the backend's `HOME` (the unit sets `HOME` to the backend data directory,
+`/opt/coins/data/anon/backend` with the default paths), owned by the `anon` user. ZelCore hosts
+reuse the running anond, so this applies only to fresh backend installs. The ANON network is
+small and the generated `anon.conf` sets `nolisten=1`, so `configs/coins/anon.json` lists the
+live peers as `addnode` entries. The listener serves plain HTTP; public TLS and perimeter request policy
 belong at the existing proxy, and the private interface should be reachable only by the trusted
 proxy.
 
@@ -474,7 +481,7 @@ sets them in the backend `additional_params`, so a regenerated `ravencoin.conf` 
 
 | Route | ravend calls | Response |
 | --- | --- | --- |
-| `GET addr/:addr/asset/:asset/utxo`, `GET addrs/:addrs/asset/:asset/utxo` | `getaddressmempool {addresses} true`, `getaddressutxos {addresses, chaininfo:true, assetName}` | stock rows `{address,txid,vout,scriptPubKey,assetName,amount,satoshis,height,confirmations}`; a mempool row has `ts` and no `height`, confirmations 0 |
+| `GET addr/:addr/asset/:asset/utxo`, `GET addrs/:addrs/asset/:asset/utxo` | `getaddressmempool {addresses} true`, `getaddressutxos {addresses, chaininfo:true, assetName}` (cached per tip) | stock rows `{address,txid,vout,scriptPubKey,assetName,amount,satoshis,height,confirmations}`; a mempool row has `ts` and no `height`, confirmations 0 |
 | `GET addrs/:addr/txs[/:from[/:to]]`, `addrs/txs?address=`, `txs?address=`, multi-address history | `getaddressmempool {addresses} true`, `getaddresstxids {addresses} true` | the generic shapes; the txid list is ravend's |
 | `GET assets?asset=&verbose=` | none | 500 `{"status":"error","error":"Backend request failed"}` |
 
@@ -486,6 +493,18 @@ height (from the same call) − height + 1. `scriptPubKey` is ravend's output sc
 script plus the `c0 … 75` asset part: the wallet signs over it, so it must be the full prevout
 script. The single-address route is uncapped; the multi-address one takes at most 100 addresses
 and 20000 rows (413 above that), one ravend call for all of them. An address the parser rejects is a 400.
+A mempool output whose tx Blockbook cannot load is left out (logged as a warning): without the tx
+there is no output script the wallet could sign over.
+
+`getaddressutxos` answers with every row at once (several MB for `*` on an airdrop address), so
+it gets the same protection as the history list below: the confirmed answer is cached per
+Blockbook tip block hash, sorted address set and asset name (LRU, 256 answers and 200,000 rows at
+most; a new tip starts afresh; an answer over the row bound is served but not kept), concurrent
+identical requests share one call, and these calls share the 3 ravend slots of `getaddresstxids`
+(a request that cannot start one within 2 s gets 503). The mempool is read on every request, so
+pending outputs and spends show up at once. While Blockbook trails ravend by a block, an output
+spent by a tx that just confirmed can still be listed (it left the mempool, and the cached set is
+from the previous tip) until Blockbook indexes the block.
 
 Asset names may contain `/` (sub-assets, `WXRAVEN/AIRDROP`) and `#` (qualifiers, `#KYC`), which
 the wallet sends encoded as `%2F` and `%23`. These two routes are matched on the escaped path
@@ -523,8 +542,8 @@ any script that does not decode are left alone.
 Intentional differences from stock:
 
 - A mempool asset utxo carries its real output script (from the tx); stock put the address's
-  plain P2PKH script there, which cannot be signed over. When the tx cannot be read, the plain
-  script is used, as stock.
+  plain P2PKH script there, which cannot be signed over. When the tx cannot be read, the row is
+  left out rather than given that plain script (it reappears once the tx can be read or confirms).
 - History includes pending asset-only txs (the mempool is queried with assets; stock queried it
   without, so they appeared only once confirmed).
 - `new_asset` outputs carry no `expire_time`. ravend 4.8.0 prints an uninitialised value there
@@ -541,9 +560,10 @@ Intentional differences from stock:
 - `addr/:addr` `unconfirmedBalance` is RVN only; stock added mempool asset amounts to it.
 - Asset outputs do not get `isOwn` in history (Blockbook files them under no address).
 
-A ravend error is a generic 500 and the routes are 501 without daemon RPC. No result is cached
-(stock cached utxo and txid lists); an airdrop-heavy address costs one `getaddresstxids` or
-`getaddressutxos` call per request, as on stock.
+A ravend error is a generic 500 and the routes are 501 without daemon RPC. The confirmed
+`getaddresstxids` lists and `getaddressutxos` answers are cached per Blockbook tip as described
+above, so an airdrop-heavy address costs one such call per new block, not per request; the
+`getaddressmempool` call runs on every request.
 
 ## Readiness and shutdown
 
