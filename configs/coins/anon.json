@@ -40,6 +40,15 @@
     "server_config_file": "bitcoin_like.conf",
     "client_config_file": "bitcoin_like_client.conf",
     "additional_params": {
+      "addnode": [
+        "142.4.192.218",
+        "169.197.131.10",
+        "47.241.65.100",
+        "47.242.230.93",
+        "47.242.254.18",
+        "95.214.53.136",
+        "95.214.55.8"
+      ],
       "mempoolexpiry": 24
     }
   },
