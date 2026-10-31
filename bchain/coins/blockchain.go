@@ -38,6 +38,7 @@ import (
 	"github.com/trezor/blockbook/bchain/coins/gamecredits"
 	"github.com/trezor/blockbook/bchain/coins/grs"
 	"github.com/trezor/blockbook/bchain/coins/hyperevm"
+	"github.com/trezor/blockbook/bchain/coins/kmd"
 	"github.com/trezor/blockbook/bchain/coins/koto"
 	"github.com/trezor/blockbook/bchain/coins/litecoin"
 	"github.com/trezor/blockbook/bchain/coins/monacoin"
@@ -138,6 +139,12 @@ func init() {
 	// over RPC and never uses the peer-to-peer magic, so the Zcash parameters
 	// and parser are used as they are.
 	BlockChainFactories["Zero"] = zec.NewZCashRPC
+	// BitcoinZ (BTCZ) is a zcashd fork with Zcash's network magic and t1/t3
+	// address versions, so the Zcash parameters and parser are used as they are.
+	BlockChainFactories["BitcoinZ"] = zec.NewZCashRPC
+	// Komodo (KMD) is a zcashd fork: Zcash parser and RPC with Komodo's own
+	// one-byte R/b address versions and network magic.
+	BlockChainFactories["Komodo"] = kmd.NewKomodoRPC
 	BlockChainFactories["Ravencoin"] = ravencoin.NewRavencoinRPC
 	BlockChainFactories["Ritocoin"] = ritocoin.NewRitocoinRPC
 	BlockChainFactories["Divi"] = divi.NewDiviRPC

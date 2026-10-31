@@ -1,0 +1,80 @@
+{
+  "coin": {
+    "name": "Komodo",
+    "shortcut": "KMD",
+    "label": "Komodo",
+    "alias": "komodo"
+  },
+  "ports": {
+    "backend_rpc": 8075,
+    "backend_message_queue": 38375,
+    "blockbook_internal": 9075,
+    "blockbook_public": 9175,
+    "blockbook_insight": 3001
+  },
+  "ipc": {
+    "rpc_url_template": "http://127.0.0.1:{{.Ports.BackendRPC}}",
+    "rpc_url_ws_template": "ws://127.0.0.1:{{.Ports.BackendRPC}}",
+    "rpc_user": "rpc",
+    "rpc_pass": "rpc",
+    "rpc_timeout": 25,
+    "message_queue_binding_template": "tcp://127.0.0.1:{{.Ports.BackendMessageQueue}}"
+  },
+  "backend": {
+    "package_name": "backend-komodo",
+    "package_revision": "satoshilabs-1",
+    "system_user": "komodo",
+    "version": "0.9.2-3",
+    "binary_url": "https://github.com/KomodoPlatform/komodo/releases/download/v0.9.2-3/komodo-0.9.2-3-linux.tar.gz",
+    "verification_type": "sha256",
+    "verification_source": "b9996620d206dc8f35c57175ebf6cf11547a1140db4696b0b3af2a0aa8086dde",
+    "extract_command": "tar -C backend -xf",
+    "exclude_files": [
+      "komodo-tx",
+      "komodo.conf",
+      "wallet-utility",
+      "fetch-params-alt.sh"
+    ],
+    "exec_command_template": "{{.Env.BackendInstallPath}}/{{.Coin.Alias}}/komodod -datadir={{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend -conf={{.Env.BackendInstallPath}}/{{.Coin.Alias}}/{{.Coin.Alias}}.conf -pid=/run/{{.Coin.Alias}}/{{.Coin.Alias}}.pid",
+    "logrotate_files_template": "{{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend/*.log",
+    "postinst_script_template": "HOME={{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend {{.Env.BackendInstallPath}}/{{.Coin.Alias}}/fetch-params.sh",
+    "service_type": "forking",
+    "service_additional_params_template": "Environment=\"HOME={{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend\"",
+    "protect_memory": false,
+    "mainnet": true,
+    "server_config_file": "bitcoin_like.conf",
+    "client_config_file": "bitcoin_like_client.conf",
+    "additional_params": {
+      "mempoolexpiry": 24
+    }
+  },
+  "blockbook": {
+    "package_name": "blockbook-komodo",
+    "system_user": "blockbook-komodo",
+    "internal_binding_template": ":{{.Ports.BlockbookInternal}}",
+    "public_binding_template": ":{{.Ports.BlockbookPublic}}",
+    "insight_binding_template": "${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookInsight}}",
+    "insight_ui": true,
+    "explorer_url": "",
+    "additional_params": "-resyncindexperiod=60017 -resyncmempoolperiod=10000",
+    "block_chain": {
+      "parse": true,
+      "mempool_workers": 4,
+      "mempool_sub_workers": 8,
+      "block_addresses_to_keep": 300,
+      "xpub_magic": 76067358,
+      "slip44": 141,
+      "additional_params": {
+        "averageBlockTimeMs": 60000,
+        "public_url": "https://explorer.kmd.zelcore.io",
+        "fiat_rates": "coingecko",
+        "fiat_rates_vs_currencies": "AED,ARS,AUD,BDT,BHD,BMD,BRL,CAD,CHF,CLP,CNY,CZK,DKK,EUR,GBP,HKD,HUF,IDR,ILS,INR,JPY,KRW,KWD,LKR,MMK,MXN,MYR,NGN,NOK,NZD,PHP,PKR,PLN,RUB,SAR,SEK,SGD,THB,TRY,TWD,UAH,USD,VND,ZAR,BTC,ETH",
+        "fiat_rates_params": "{\"url\": \"https://viprates.zelcore.io/v2/blockbook/api/v3\", \"tipUrl\": \"https://viprates.zelcore.io/v2/blockbook/api/v3\", \"attribution\": \"ZelCore\", \"coin\": \"komodo\", \"periodSeconds\": 900}"
+      }
+    }
+  },
+  "meta": {
+    "package_maintainer": "Vasilis",
+    "package_maintainer_email": "vasilis@runonflux.io"
+  }
+}

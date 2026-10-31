@@ -95,3 +95,11 @@ func (p *ZCashParser) PackTx(tx *bchain.Tx, height uint32, blockTime int64) ([]b
 func (p *ZCashParser) UnpackTx(buf []byte) (*bchain.Tx, uint32, error) {
 	return p.baseparser.UnpackTx(buf)
 }
+
+// InsightExtension names the native Insight listener's Zcash extension, which
+// adds the stock Zcash-family Insight transaction fields (vjoinsplit,
+// fOverwintered, valueBalance, shielded descriptions) and its fee. Every coin
+// on this parser gets it: Zcash, Zclassic, Zero, Flux.
+func (p *ZCashParser) InsightExtension() string {
+	return "zcash"
+}

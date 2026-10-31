@@ -140,15 +140,15 @@ func TestInsightTxSuperset(t *testing.T) {
 	if _, ok := spk0["spentIndex"]; ok || spk0["spent"] != true || spk0["spentTxId"] != "next" || spk0["spentHeight"] != float64(101) {
 		t.Errorf("spent scriptPubKey clone: %v", spk0)
 	}
-	// Satoshi strings carry any size; only JSON numbers keep the safe-int 500.
+	// Satoshi strings and JSON numbers both carry any size.
 	large := &api.Tx{Txid: "large", ValueInSat: (*api.Amount)(new(big.Int).Lsh(big.NewInt(1), 60)), ValueOutSat: insightAmount(1)}
 	raw, _ = insightTxJSON(t, large)
 	if !strings.Contains(raw, `"valueIn":"1152921504606846976"`) {
 		t.Errorf("large valueIn: %s", raw)
 	}
-	large.ValueOutSat = insightAmount(9007199254740992)
-	if _, err := insightTransaction(large); err == nil {
-		t.Error("valueOut is a JSON number and must keep the safe-int bound")
+	large.ValueOutSat = insightAmount(9007199254740993)
+	if raw, _ = insightTxJSON(t, large); !strings.Contains(raw, `"valueOut":90071992.54740993`) {
+		t.Errorf("large valueOut: %s", raw)
 	}
 	// A pending tx keeps blockheight -1 under both names and omits the hash.
 	pending := &api.Tx{Txid: "p", Blockheight: -1, ValueOutSat: insightAmount(1), ConfirmationETABlocks: 2, ConfirmationETASeconds: 1200, Rbf: true}

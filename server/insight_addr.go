@@ -161,7 +161,7 @@ const insightGoneEvery = 16
 // ownedItems loads and transforms txs, marking isOwn for the owned addresses.
 // It stops early, with the client-gone status, once the request is cancelled.
 func (s *InsightServer) ownedItems(route insightRoute, owned map[string]bool, ids []string) ([]*insightTx, int, error) {
-	items := make([]*insightTx, 0, len(ids))
+	txs := make([]*api.Tx, 0, len(ids))
 	for i, id := range ids {
 		if i%insightGoneEvery == 0 {
 			if err := route.gone(); err != nil {
@@ -175,11 +175,11 @@ func (s *InsightServer) ownedItems(route insightRoute, owned map[string]bool, id
 		if tx == nil {
 			return nil, http.StatusInternalServerError, errors.New("missing transaction")
 		}
-		item, err := s.transaction(insightOwnTx(tx, owned))
-		if err != nil {
-			return nil, http.StatusInternalServerError, err
-		}
-		items = append(items, item)
+		txs = append(txs, insightOwnTx(tx, owned))
+	}
+	items, err := s.transactions(route.ctx, txs)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
 	}
 	return items, 0, nil
 }
@@ -280,10 +280,7 @@ func (s *InsightServer) addrValue(route insightRoute, addr string) (interface{},
 	default:
 		return nil, http.StatusNotFound, errors.New("unknown address value")
 	}
-	_, sat, err := insightMoney(amount)
-	if err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
+	_, sat := insightMoney(amount)
 	return sat, 0, nil
 }
 
@@ -314,10 +311,7 @@ func (s *InsightServer) appendUtxos(out []insightUtxo, addr string, onlyConfirme
 		script = s.insightAddressScript(addr)
 	}
 	for _, u := range rows {
-		amount, sat, err := insightMoney(u.AmountSat)
-		if err != nil {
-			return nil, http.StatusInternalServerError, err
-		}
+		amount, sat := insightMoney(u.AmountSat)
 		address := u.Address
 		if address == "" {
 			address = addr

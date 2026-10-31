@@ -246,3 +246,9 @@ func TestUnpackTx(t *testing.T) {
 		})
 	}
 }
+
+func TestInsightExtension(t *testing.T) {
+	if got := NewZCashParser(GetChainParams("main"), &btc.Configuration{}).InsightExtension(); got != "zcash" {
+		t.Errorf("InsightExtension() = %q, want zcash", got)
+	}
+}

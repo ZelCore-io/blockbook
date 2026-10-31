@@ -63,7 +63,9 @@ blockbook.firo hostnames need proxy changes. bitcore must be stopped first, and 
 firod runs as bitcore's child, so firod moves to its own service before the switch. Zclassic's
 and Zero's listeners likewise take port 3001 from the stock Insight that serves explorer.zcl and
 explorer.zer, so the stock Insight must be stopped before Blockbook starts. Axe's listener also
-uses port 3001 (new install, explorer.axe.zelcore.io; no stock Insight to replace). The listener serves plain HTTP; public TLS and perimeter request
+uses port 3001 (new install, explorer.axe.zelcore.io; no stock Insight to replace). BitcoinZ's and
+Komodo's listeners take port 3001 from the stock Insight behind explorer.btcz and explorer.kmd the
+same way as Zclassic and Zero. The listener serves plain HTTP; public TLS and perimeter request
 policy belong at the existing proxy, and the private interface should be reachable only by the
 trusted proxy.
 
@@ -74,7 +76,8 @@ Firo, `explorer.firo.zelcore.io` behind HAProxy) answers both the Insight API an
 opt-in per coin with `"blockbook": { "insight_ui": true }`, which adds `-insightui` after
 `-insight=...` in the generated unit; the build rejects it without the Insight listener, and
 Blockbook refuses to start with `-insightui` but no `-insight` or `-public`. Only
-`configs/coins/firo.json`, `configs/coins/zclassic.json`, `configs/coins/zero.json` and `configs/coins/axe.json` set it; BTC and ZEC keep the
+`configs/coins/firo.json`, `configs/coins/zclassic.json`, `configs/coins/zero.json`, `configs/coins/axe.json`, `configs/coins/bitcoinz.json` and
+`configs/coins/komodo.json` set it; BTC and ZEC keep the
 listener exactly as before (unknown paths are the Insight JSON 404).
 
 With it on, the Insight router still answers first. Every route in the table below, under
@@ -183,7 +186,8 @@ label when there is one (Firo), else classified from the script with stock's (bi
 names: `pubkeyhash` (also for P2PK, which is indexed under its P2PKH address), `scripthash`,
 `witnesspubkeyhash`, `witnessscripthash`, `taproot`, plus bitcoind's `nulldata` and `multisig`,
 which stock leaves out; it is omitted for other scripts. The converter's top-level `type` is
-unchanged. History items also set `isOwn` on
+unchanged. Coins on the Zcash parser also get stock's shielded fields and shielded-aware
+`fees` (see [Zcash extension](#zcash-extension)). History items also set `isOwn` on
 inputs and outputs that belong to the requested address, or to any requested address for the
 merged routes.
 
@@ -245,9 +249,13 @@ for any other reason answers a generic 500 or 503.
 ### Amounts, errors and limits
 
 All monetary JSON tokens are formatted from integer satoshis with eight-decimal precision and
-no floating-point amount arithmetic. Numeric spending fields beyond JavaScript's safe integer
-range (`-9007199254740991..9007199254740991`) fail explicitly with a generic 500 response; satoshi
-strings such as `value`, `valueIn` and `balanceSat` are not capped. Nil amounts become zero.
+no floating-point amount arithmetic. Coin amounts (`balance`, `amount`, `value`) and numeric
+satoshi fields (`satoshis`, `valueSat`, `totalReceivedSat` and the like) are written as the exact
+decimal of the integer, whatever its size, so an amount beyond JavaScript's safe integer range
+(2^53 satoshis, about 90,071,992.5 coins) is still served: BitcoinZ addresses hold more than that.
+Stock Insight wrote plain JavaScript numbers and lost precision there; a JavaScript client parsing
+these numbers still rounds them, but no request fails. Satoshi strings such as `value`,
+`valueIn` and `balanceSat` are not capped either. Nil amounts become zero.
 
 Broadcast requires a nonempty, even-length hexadecimal string and a body at most 8 MiB,
 including chunked bodies. Malformed, trailing or non-string input receives 400; oversized
@@ -309,11 +317,44 @@ Not served (Insight 404 with CORS headers): the other stock `statistics/*` route
 `richest-addresses-list`), `/api/supply`, and `markets/info` (about 15k requests together in
 18 months of ZCL stock logs). They need stock's Mongo statistics or a market feed.
 
+## Zcash extension
+
+Every coin on the Zcash parser (`bchain/coins/zec`: Zcash, Zclassic, Zero, Flux, BitcoinZ, and
+Komodo through `bchain/coins/kmd`, which embeds the Zcash parser) gets the `"zcash"` extension. It adds no route; it
+adds the fields the Zcash-family stock Insight (bitcore-node `getDetailedTransaction` with
+insight-api `transformTransaction`, the same on the zelcash, zclassic and bitcoinz branches and
+on insight-api-komodo) puts on every tx object, on `tx`, `txs?block=`/`txs?address=`, address
+history and multi-address history, after `vout` and in stock's order:
+
+| Field | When | Value |
+| --- | --- | --- |
+| `vjoinsplit` | version >= 2 | `[{vpub_old,vpub_new,n}]`, vpub as eight-decimal strings (`"0.50000000"`, stock's `toFixed(8)`); `[]` when there are none. A v1 tx has no key, as on stock |
+| `fOverwintered` | the daemon prints `overwintered` | its boolean |
+| `nVersionGroupId`, `nExpiryHeight` | overwintered | numbers (`versiongroupid` hex parsed, as stock's `parseInt(.., 16)`: `892f2085` is 2301567109) |
+| `valueBalance`, `spendDescs`, `outputDescs` | overwintered and version >= 4 | coins as a number; the daemon's `vShieldedSpend`/`vShieldedOutput` as printed |
+| `bindingSig` | as above, when the daemon prints a nonempty one | hex string |
+
+`fees` becomes stock's: transparent in − transparent out + Σ(`vpub_newZat` − `vpub_oldZat`) +
+`valueBalanceZat`, so a t→z or z→t tx shows the fee it paid (the generic value, clamped
+transparent in − out, shows the whole shielded amount or 0 there). The zat fields are used when
+the daemon prints them, else the coin values, parsed exactly. On a Zcash v5 tx the Orchard
+`valueBalanceZat` is added too, which stock (written before Orchard) does not do. A coinbase, or
+a tx whose input value is unknown, keeps the generic `fees`; a negative result is shown as 0.
+`valueIn` stays the converter's transparent satoshi string.
+
+The fields come from the daemon's verbose tx JSON. A pending tx carries it from the worker; for a
+confirmed tx the tx cache keeps only the packed tx, so the listener calls `getrawtransaction
+<txid> 1`: for a page of history all missing txs at once, at most 8 calls in parallel, and it
+keeps the extracted fields (they depend only on the tx bytes) in a 32 MiB cache, so wallet
+polling of the same pages calls the daemon once per tx. A failed call fails the request with a
+generic 500. Without daemon RPC the fields are left out and `fees` stays generic.
+
 ## Firo extension
 
 A coin whose chain parser implements `InsightExtension() string` (the
 `server.InsightExtensionProvider` interface) gets that named extension on top of the generic
-table; today only `bchain/coins/firo` does (`"firo"`). Other coins gain no route and no label:
+table; today `bchain/coins/firo` does (`"firo"`) and `bchain/coins/zec` (`"zcash"`, see
+[Zcash extension](#zcash-extension)). Other coins gain no route and no label:
 the extension only adds paths the generic router does not know, replaces `currency`, and
 decorates converted transactions. It serves the Firo-specific routes of the stock Firo Insight
 (insight-api-zcoin 0.4.5, the API on FIRO-01 port 3001), each with the firod call the stock
