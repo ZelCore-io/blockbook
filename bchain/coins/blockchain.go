@@ -138,6 +138,9 @@ func init() {
 	// over RPC and never uses the peer-to-peer magic, so the Zcash parameters
 	// and parser are used as they are.
 	BlockChainFactories["Zero"] = zec.NewZCashRPC
+	// BitcoinZ (BTCZ) is a zcashd fork with Zcash's network magic and t1/t3
+	// address versions, so the Zcash parameters and parser are used as they are.
+	BlockChainFactories["BitcoinZ"] = zec.NewZCashRPC
 	BlockChainFactories["Ravencoin"] = ravencoin.NewRavencoinRPC
 	BlockChainFactories["Ritocoin"] = ritocoin.NewRitocoinRPC
 	BlockChainFactories["Divi"] = divi.NewDiviRPC

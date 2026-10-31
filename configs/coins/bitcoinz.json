@@ -1,0 +1,77 @@
+{
+  "coin": {
+    "name": "BitcoinZ",
+    "shortcut": "BTCZ",
+    "label": "BitcoinZ",
+    "alias": "bitcoinz"
+  },
+  "ports": {
+    "backend_rpc": 8074,
+    "backend_message_queue": 38374,
+    "blockbook_internal": 9074,
+    "blockbook_public": 9174,
+    "blockbook_insight": 3001
+  },
+  "ipc": {
+    "rpc_url_template": "http://127.0.0.1:{{.Ports.BackendRPC}}",
+    "rpc_url_ws_template": "ws://127.0.0.1:{{.Ports.BackendRPC}}",
+    "rpc_user": "rpc",
+    "rpc_pass": "rpc",
+    "rpc_timeout": 25,
+    "message_queue_binding_template": "tcp://127.0.0.1:{{.Ports.BackendMessageQueue}}"
+  },
+  "backend": {
+    "package_name": "backend-bitcoinz",
+    "package_revision": "satoshilabs-1",
+    "system_user": "bitcoinz",
+    "version": "2.3.1",
+    "binary_url": "https://github.com/btcz/bitcoinz/releases/download/2.3.1/bitcoinz-2.3.1-linux-x86_64.tar.gz",
+    "verification_type": "sha256",
+    "verification_source": "0a0ef825d77af6a81dd52d967343a362c828002577743c4457d127215f3d23bd",
+    "extract_command": "tar -C backend --strip 1 -xf",
+    "exclude_files": [
+      "release-notes-2.3.1.md"
+    ],
+    "exec_command_template": "{{.Env.BackendInstallPath}}/{{.Coin.Alias}}/bitcoinzd -datadir={{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend -conf={{.Env.BackendInstallPath}}/{{.Coin.Alias}}/{{.Coin.Alias}}.conf -pid=/run/{{.Coin.Alias}}/{{.Coin.Alias}}.pid",
+    "logrotate_files_template": "{{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend/*.log",
+    "postinst_script_template": "",
+    "service_type": "forking",
+    "service_additional_params_template": "Environment=\"HOME={{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend\"",
+    "protect_memory": false,
+    "mainnet": true,
+    "server_config_file": "bitcoin_like.conf",
+    "client_config_file": "bitcoin_like_client.conf",
+    "additional_params": {
+      "mempoolexpiry": 24
+    }
+  },
+  "blockbook": {
+    "package_name": "blockbook-bitcoinz",
+    "system_user": "blockbook-bitcoinz",
+    "internal_binding_template": ":{{.Ports.BlockbookInternal}}",
+    "public_binding_template": ":{{.Ports.BlockbookPublic}}",
+    "insight_binding_template": "${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookInsight}}",
+    "insight_ui": true,
+    "explorer_url": "",
+    "additional_params": "-resyncindexperiod=60017 -resyncmempoolperiod=10000",
+    "block_chain": {
+      "parse": true,
+      "mempool_workers": 4,
+      "mempool_sub_workers": 8,
+      "block_addresses_to_keep": 300,
+      "xpub_magic": 76067358,
+      "slip44": 177,
+      "additional_params": {
+        "averageBlockTimeMs": 150000,
+        "public_url": "https://explorer.btcz.zelcore.io",
+        "fiat_rates": "coingecko",
+        "fiat_rates_vs_currencies": "AED,ARS,AUD,BDT,BHD,BMD,BRL,CAD,CHF,CLP,CNY,CZK,DKK,EUR,GBP,HKD,HUF,IDR,ILS,INR,JPY,KRW,KWD,LKR,MMK,MXN,MYR,NGN,NOK,NZD,PHP,PKR,PLN,RUB,SAR,SEK,SGD,THB,TRY,TWD,UAH,USD,VND,ZAR,BTC,ETH",
+        "fiat_rates_params": "{\"url\": \"https://viprates.zelcore.io/v2/blockbook/api/v3\", \"tipUrl\": \"https://viprates.zelcore.io/v2/blockbook/api/v3\", \"attribution\": \"ZelCore\", \"coin\": \"bitcoinz\", \"periodSeconds\": 900}"
+      }
+    }
+  },
+  "meta": {
+    "package_maintainer": "Vasilis",
+    "package_maintainer_email": "vasilis@runonflux.io"
+  }
+}
