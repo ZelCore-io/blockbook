@@ -161,7 +161,7 @@ const insightGoneEvery = 16
 // ownedItems loads and transforms txs, marking isOwn for the owned addresses.
 // It stops early, with the client-gone status, once the request is cancelled.
 func (s *InsightServer) ownedItems(route insightRoute, owned map[string]bool, ids []string) ([]*insightTx, int, error) {
-	items := make([]*insightTx, 0, len(ids))
+	txs := make([]*api.Tx, 0, len(ids))
 	for i, id := range ids {
 		if i%insightGoneEvery == 0 {
 			if err := route.gone(); err != nil {
@@ -175,11 +175,11 @@ func (s *InsightServer) ownedItems(route insightRoute, owned map[string]bool, id
 		if tx == nil {
 			return nil, http.StatusInternalServerError, errors.New("missing transaction")
 		}
-		item, err := s.transaction(insightOwnTx(tx, owned))
-		if err != nil {
-			return nil, http.StatusInternalServerError, err
-		}
-		items = append(items, item)
+		txs = append(txs, insightOwnTx(tx, owned))
+	}
+	items, err := s.transactions(route.ctx, txs)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
 	}
 	return items, 0, nil
 }

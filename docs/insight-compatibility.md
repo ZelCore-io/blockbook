@@ -183,7 +183,8 @@ label when there is one (Firo), else classified from the script with stock's (bi
 names: `pubkeyhash` (also for P2PK, which is indexed under its P2PKH address), `scripthash`,
 `witnesspubkeyhash`, `witnessscripthash`, `taproot`, plus bitcoind's `nulldata` and `multisig`,
 which stock leaves out; it is omitted for other scripts. The converter's top-level `type` is
-unchanged. History items also set `isOwn` on
+unchanged. Coins on the Zcash parser also get stock's shielded fields and shielded-aware
+`fees` (see [Zcash extension](#zcash-extension)). History items also set `isOwn` on
 inputs and outputs that belong to the requested address, or to any requested address for the
 merged routes.
 
@@ -313,11 +314,44 @@ Not served (Insight 404 with CORS headers): the other stock `statistics/*` route
 `richest-addresses-list`), `/api/supply`, and `markets/info` (about 15k requests together in
 18 months of ZCL stock logs). They need stock's Mongo statistics or a market feed.
 
+## Zcash extension
+
+Every coin on the Zcash parser (`bchain/coins/zec`: Zcash, Zclassic, Zero, Flux, and BitcoinZ
+and Komodo once they are configured on it) gets the `"zcash"` extension. It adds no route; it
+adds the fields the Zcash-family stock Insight (bitcore-node `getDetailedTransaction` with
+insight-api `transformTransaction`, the same on the zelcash, zclassic and bitcoinz branches and
+on insight-api-komodo) puts on every tx object, on `tx`, `txs?block=`/`txs?address=`, address
+history and multi-address history, after `vout` and in stock's order:
+
+| Field | When | Value |
+| --- | --- | --- |
+| `vjoinsplit` | version >= 2 | `[{vpub_old,vpub_new,n}]`, vpub as eight-decimal strings (`"0.50000000"`, stock's `toFixed(8)`); `[]` when there are none. A v1 tx has no key, as on stock |
+| `fOverwintered` | the daemon prints `overwintered` | its boolean |
+| `nVersionGroupId`, `nExpiryHeight` | overwintered | numbers (`versiongroupid` hex parsed, as stock's `parseInt(.., 16)`: `892f2085` is 2301567109) |
+| `valueBalance`, `spendDescs`, `outputDescs` | overwintered and version >= 4 | coins as a number; the daemon's `vShieldedSpend`/`vShieldedOutput` as printed |
+| `bindingSig` | as above, when the daemon prints a nonempty one | hex string |
+
+`fees` becomes stock's: transparent in − transparent out + Σ(`vpub_newZat` − `vpub_oldZat`) +
+`valueBalanceZat`, so a t→z or z→t tx shows the fee it paid (the generic value, clamped
+transparent in − out, shows the whole shielded amount or 0 there). The zat fields are used when
+the daemon prints them, else the coin values, parsed exactly. On a Zcash v5 tx the Orchard
+`valueBalanceZat` is added too, which stock (written before Orchard) does not do. A coinbase, or
+a tx whose input value is unknown, keeps the generic `fees`; a negative result is shown as 0.
+`valueIn` stays the converter's transparent satoshi string.
+
+The fields come from the daemon's verbose tx JSON. A pending tx carries it from the worker; for a
+confirmed tx the tx cache keeps only the packed tx, so the listener calls `getrawtransaction
+<txid> 1`: for a page of history all missing txs at once, at most 8 calls in parallel, and it
+keeps the extracted fields (they depend only on the tx bytes) in a 32 MiB cache, so wallet
+polling of the same pages calls the daemon once per tx. A failed call fails the request with a
+generic 500. Without daemon RPC the fields are left out and `fees` stays generic.
+
 ## Firo extension
 
 A coin whose chain parser implements `InsightExtension() string` (the
 `server.InsightExtensionProvider` interface) gets that named extension on top of the generic
-table; today only `bchain/coins/firo` does (`"firo"`). Other coins gain no route and no label:
+table; today `bchain/coins/firo` does (`"firo"`) and `bchain/coins/zec` (`"zcash"`, see
+[Zcash extension](#zcash-extension)). Other coins gain no route and no label:
 the extension only adds paths the generic router does not know, replaces `currency`, and
 decorates converted transactions. It serves the Firo-specific routes of the stock Firo Insight
 (insight-api-zcoin 0.4.5, the API on FIRO-01 port 3001), each with the firod call the stock

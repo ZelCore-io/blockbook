@@ -170,6 +170,15 @@ type insightTx struct {
 	ChainExtraData         *api.TxChainExtraData `json:"chainExtraData,omitempty"`
 	Vin                    []insightVin          `json:"vin"`
 	Vout                   []insightVout         `json:"vout"`
+	// The Zcash extension sets stock's shielded fields (insight_zcash.go).
+	VJoinSplit      *[]insightJoinSplit `json:"vjoinsplit,omitempty"`
+	FOverwintered   *bool               `json:"fOverwintered,omitempty"`
+	NVersionGroupID *uint32             `json:"nVersionGroupId,omitempty"`
+	NExpiryHeight   json.Number         `json:"nExpiryHeight,omitempty"`
+	ValueBalance    json.Number         `json:"valueBalance,omitempty"`
+	SpendDescs      json.RawMessage     `json:"spendDescs,omitempty"`
+	OutputDescs     json.RawMessage     `json:"outputDescs,omitempty"`
+	BindingSig      string              `json:"bindingSig,omitempty"`
 	// SparkData is set by the Firo extension on a Spark name registration.
 	SparkData *insightSparkData `json:"sparkData,omitempty"`
 }
