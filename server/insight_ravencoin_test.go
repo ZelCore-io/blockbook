@@ -225,12 +225,16 @@ func TestInsightRavencoinAssetUtxoMatchesStock(t *testing.T) {
 
 // Mempool outputs of the asset come first with ts and no height, carrying the
 // real output script; outputs a mempool tx spends are dropped; RVN and other
-// assets' deltas are left out.
+// assets' deltas are left out; an output whose tx the worker cannot load is
+// left out (stock gave it a plain P2PKH script the wallet's signature would
+// not match).
 func TestInsightRavencoinAssetUtxoMempool(t *testing.T) {
 	const addr = "RPwpAwECnjm2FZVduEE8M5VjWc2sSHs6Lo"
 	f := insightFixture()
 	fren := "76a914a0dfb26225355e9f0600a5839a92f99f3a98b70988acc01172766e74044652454e00e1f5050000000075"
 	f.txs["p1"] = &api.Tx{Txid: "p1", Vout: []api.Vout{{N: 0, Hex: "76a914a0dfb26225355e9f0600a5839a92f99f3a98b70988ac"}, {N: 1, Hex: fren}}}
+	cate := "76a914a0dfb26225355e9f0600a5839a92f99f3a98b70988acc01172766e740443415445070000000000000075"
+	f.txs["p2"] = &api.Tx{Txid: "p2", Vout: []api.Vout{{N: 0, Hex: cate}}}
 	s, rpc := insightRvnSetup(t, f)
 	rpc.height = 100
 	rpc.utxos[addr+"|FREN"] = []insightRvnUtxo{
@@ -245,12 +249,11 @@ func TestInsightRavencoinAssetUtxoMempool(t *testing.T) {
 		{Address: addr, AssetName: "FREN", Txid: "p3", Index: 0, Satoshis: "-200000000", Timestamp: 1700000003, PrevTxid: "c2", PrevOut: 0},
 		// already confirmed: listed once, from the confirmed set
 		{Address: addr, AssetName: "FREN", Txid: "c1", Index: 1, Satoshis: "100000000", Timestamp: 1700000000},
-		// no worker tx: stock's address script
+		// no worker tx: left out
 		{Address: addr, AssetName: "FREN", Txid: "p4", Index: 3, Satoshis: "100", Timestamp: 1700000004},
 	}
 	w := insightRequest(s, "GET", "/api/addr/"+addr+"/asset/FREN/utxo", "")
-	want := `[{"address":"` + addr + `","txid":"p4","vout":3,"scriptPubKey":"76a914a0dfb26225355e9f0600a5839a92f99f3a98b70988ac","assetName":"FREN","amount":0.000001,"satoshis":100,"confirmations":0,"ts":1700000004},` +
-		`{"address":"` + addr + `","txid":"p1","vout":1,"scriptPubKey":"` + fren + `","assetName":"FREN","amount":5,"satoshis":500000000,"confirmations":0,"ts":1700000001},` +
+	want := `[{"address":"` + addr + `","txid":"p1","vout":1,"scriptPubKey":"` + fren + `","assetName":"FREN","amount":5,"satoshis":500000000,"confirmations":0,"ts":1700000001},` +
 		`{"address":"` + addr + `","txid":"c1","vout":1,"scriptPubKey":"` + fren + `","assetName":"FREN","amount":1,"satoshis":100000000,"height":90,"confirmations":11}]`
 	if got := strings.TrimSuffix(w.Body.String(), "\n"); w.Code != 200 || got != want {
 		t.Fatalf("got %d\n%s\nwant\n%s", w.Code, got, want)
@@ -258,7 +261,7 @@ func TestInsightRavencoinAssetUtxoMempool(t *testing.T) {
 	// "*": every non-RVN asset in the mempool
 	w = insightRequest(s, "GET", "/api/addr/"+addr+"/asset/*/utxo", "")
 	var rows []insightRvnAssetUtxo
-	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil || len(rows) != 4 || rows[0].Txid != "p4" || rows[1].AssetName != "CATE" || rows[2].Txid != "p1" || rows[3].Txid != "c1" {
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil || len(rows) != 3 || rows[0].AssetName != "CATE" || rows[0].ScriptPubKey != cate || rows[1].Txid != "p1" || rows[2].Txid != "c1" {
 		t.Fatalf("got %d %s", w.Code, w.Body.String())
 	}
 }

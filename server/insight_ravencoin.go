@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/golang/glog"
 	"github.com/trezor/blockbook/api"
 )
 
@@ -189,8 +190,9 @@ func insightRvnSatoshis(n json.Number) (json.Number, json.Number, error) {
 // mempool outputs (newest first, those already confirmed dropped), minus the
 // outputs a mempool tx spends. scriptPubKey is ravend's output script, which
 // includes the asset part the wallet signs over. A mempool row has the real
-// output script too, where stock put the address's plain P2PKH script. The
-// confirmed utxos are
+// output script too, where stock put the address's plain P2PKH script; a
+// mempool row whose tx the worker cannot load is left out rather than given
+// a script the wallet's signature would not match. The confirmed utxos are
 // cached per chain tip, the mempool is read on every call. A limit above 0
 // caps the rows (413).
 func (x *insightRavencoin) assetUtxos(route insightRoute, addresses []string, limit int) (interface{}, int, error) {
@@ -252,7 +254,12 @@ func (x *insightRavencoin) assetUtxos(route insightRoute, addresses []string, li
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
-		out = append(out, insightRvnAssetUtxo{Address: d.Address, Txid: d.Txid, Vout: d.Index, ScriptPubKey: x.mempoolScript(scripts, d), AssetName: d.AssetName, Amount: amount, Satoshis: sat, Ts: d.Timestamp})
+		script, ok := x.mempoolScript(scripts, d)
+		if !ok {
+			glog.Warningf("insight ravencoin: mempool asset output %s:%d left out, its tx cannot be read", d.Txid, d.Index)
+			continue
+		}
+		out = append(out, insightRvnAssetUtxo{Address: d.Address, Txid: d.Txid, Vout: d.Index, ScriptPubKey: script, AssetName: d.AssetName, Amount: amount, Satoshis: sat, Ts: d.Timestamp})
 	}
 	for i := len(confirmed.Utxos) - 1; i >= 0; i-- {
 		u := confirmed.Utxos[i]
@@ -278,8 +285,8 @@ func insightRvnNonPositive(n json.Number) bool {
 }
 
 // mempoolScript returns the output script of a mempool asset output from the
-// worker's tx, or stock's plain address script when the tx cannot be read.
-func (x *insightRavencoin) mempoolScript(txs map[string]*api.Tx, d insightRvnDelta) string {
+// worker's tx, false when the tx (or the output's script) cannot be read.
+func (x *insightRavencoin) mempoolScript(txs map[string]*api.Tx, d insightRvnDelta) (string, bool) {
 	tx, ok := txs[d.Txid]
 	if !ok {
 		tx, _ = x.s.worker.GetTransaction(d.Txid, false, false)
@@ -288,11 +295,11 @@ func (x *insightRavencoin) mempoolScript(txs map[string]*api.Tx, d insightRvnDel
 	if tx != nil {
 		for _, v := range tx.Vout {
 			if v.N == d.Index && v.Hex != "" {
-				return v.Hex
+				return v.Hex, true
 			}
 		}
 	}
-	return x.s.insightAddressScript(d.Address)
+	return "", false
 }
 
 // addressTxids is stock's getAddressTxids for the history routes: the
