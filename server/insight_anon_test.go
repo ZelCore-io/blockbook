@@ -23,13 +23,15 @@ const insightAnonV3 = `{"txid":"6caa4ad9f46a5576318205be2a24654cb5f29037b7d1130b
 
 const insightAnonV3ID = "6caa4ad9f46a5576318205be2a24654cb5f29037b7d1130b5d0e739f6ea8da1b"
 
-// TestInsightAnonV3 checks ANON's version -3 txs against the stock ANON
-// Insight (bitcore-node-zelcash#anon): joinSplits and the shielded value
+// TestInsightAnonV3KeepsFee checks ANON's version -3 txs against the stock
+// ANON Insight (bitcore-node-zelcash#anon): joinSplits and the shielded value
 // count only for version >= 2, so a v-3 tx has no vjoinsplit and its fee is
 // transparent in - out, the whole shielded amount (4.17574687 for this tx,
-// as explorer.anon serves it). The extension is the one the ANON parser
-// names, as blockbook.go enables it.
-func TestInsightAnonV3(t *testing.T) {
+// as explorer.anon serves it). The fake worker tx below already carries that
+// fee: the test does not show the worker computing it, only that the zcash
+// extension adds no joinsplit fields and leaves the fee of a v-3 tx alone.
+// The extension is the one the ANON parser names, as blockbook.go enables it.
+func TestInsightAnonV3KeepsFee(t *testing.T) {
 	f := insightFixture()
 	in := []api.Vin{
 		{Txid: "84bf40449e751dc4e8aa3f2badb0180f2808d7e9b8a42121497b6723a9ec0614", Vout: 2, N: 0, Addresses: []string{"AnMvf8HnX2DF4GTAWhiU1jjTyDsFsWRQRrq"}, IsAddress: true, ValueSat: insightAmount(158402812)},
