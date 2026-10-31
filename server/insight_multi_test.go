@@ -196,7 +196,7 @@ func TestInsightMultiBalance(t *testing.T) {
 		t.Fatal(w.Code, w.Body)
 	}
 	_, s = insightMultiServer(t, map[string]*insightMultiAddr{"A": {balance: 9007199254740991}, "B": {balance: 1}})
-	if w := insightRequest(s, "GET", "/api/addrs/A,B/balance", ""); w.Code != 500 {
+	if w := insightRequest(s, "GET", "/api/addrs/A,B/balance", ""); w.Code != 200 || w.Body.String() != "{\"balance\":9007199254740992,\"unconfirmedBalance\":0}\n" {
 		t.Fatal(w.Code, w.Body)
 	}
 }

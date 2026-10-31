@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"math/big"
 	"strings"
 
 	"github.com/martinboehm/btcd/txscript"
@@ -12,14 +11,14 @@ import (
 	"github.com/trezor/blockbook/api"
 )
 
-// Amounts remain integer-backed until their final JSON representation. Insight
-// clients spend numeric satoshi fields in JavaScript, so unsafe integers fail.
-func insightMoney(a *api.Amount) (json.Number, int64, error) {
+// Amounts remain integer-backed until their final JSON representation. Both
+// the coin value and the satoshi count are written as exact decimal JSON
+// numbers, so any amount serialises (BitcoinZ addresses hold more than 2^53
+// zat). Stock Insight wrote plain JavaScript numbers there and lost precision;
+// a JavaScript client reading these still does, but nothing fails.
+func insightMoney(a *api.Amount) (json.Number, json.Number) {
 	n := a.AsBigInt()
-	if n.Cmp(big.NewInt(9007199254740991)) > 0 || n.Cmp(big.NewInt(-9007199254740991)) < 0 {
-		return "", 0, errors.New("unsafe Insight amount")
-	}
-	sat := n.Int64()
+	sat := json.Number(n.String())
 	negative := n.Sign() < 0
 	n.Abs(&n)
 	digits := n.String()
@@ -30,7 +29,7 @@ func insightMoney(a *api.Amount) (json.Number, int64, error) {
 	if negative {
 		value = "-" + value
 	}
-	return json.Number(value), sat, nil
+	return json.Number(value), sat
 }
 
 type insightSummary struct {
@@ -38,11 +37,11 @@ type insightSummary struct {
 	Balance               json.Number `json:"balance"`
 	BalanceSat            string      `json:"balanceSat"`
 	TotalReceived         json.Number `json:"totalReceived"`
-	TotalReceivedSat      int64       `json:"totalReceivedSat"`
+	TotalReceivedSat      json.Number `json:"totalReceivedSat"`
 	TotalSent             json.Number `json:"totalSent"`
-	TotalSentSat          int64       `json:"totalSentSat"`
+	TotalSentSat          json.Number `json:"totalSentSat"`
 	UnconfirmedBalance    json.Number `json:"unconfirmedBalance"`
-	UnconfirmedBalanceSat int64       `json:"unconfirmedBalanceSat"`
+	UnconfirmedBalanceSat json.Number `json:"unconfirmedBalanceSat"`
 	UnconfirmedTxs        int         `json:"unconfirmedTxApperances"`
 	Txs                   int         `json:"txApperances"`
 }
@@ -51,23 +50,11 @@ func insightAddress(a *api.Address) (*insightSummary, error) {
 	if a == nil {
 		return nil, errors.New("missing address")
 	}
-	balance, sat, err := insightMoney(a.BalanceSat)
-	if err != nil {
-		return nil, err
-	}
-	received, rs, err := insightMoney(a.TotalReceivedSat)
-	if err != nil {
-		return nil, err
-	}
-	sent, ss, err := insightMoney(a.TotalSentSat)
-	if err != nil {
-		return nil, err
-	}
-	pending, ps, err := insightMoney(a.UnconfirmedBalanceSat)
-	if err != nil {
-		return nil, err
-	}
-	return &insightSummary{a.AddrStr, balance, big.NewInt(sat).String(), received, rs, sent, ss, pending, ps, a.UnconfirmedTxs, a.Txs}, nil
+	balance, sat := insightMoney(a.BalanceSat)
+	received, rs := insightMoney(a.TotalReceivedSat)
+	sent, ss := insightMoney(a.TotalSentSat)
+	pending, ps := insightMoney(a.UnconfirmedBalanceSat)
+	return &insightSummary{a.AddrStr, balance, string(sat), received, rs, sent, ss, pending, ps, a.UnconfirmedTxs, a.Txs}, nil
 }
 
 // insightUtxo is a stock utxo row. scriptPubKey is the output script of the
@@ -78,7 +65,7 @@ type insightUtxo struct {
 	Vout          int32       `json:"vout"`
 	ScriptPubKey  string      `json:"scriptPubKey,omitempty"`
 	Amount        json.Number `json:"amount"`
-	Satoshis      int64       `json:"satoshis"`
+	Satoshis      json.Number `json:"satoshis"`
 	Height        int         `json:"height"`
 	Confirmations int         `json:"confirmations"`
 	Coinbase      bool        `json:"coinbase,omitempty"`
@@ -107,7 +94,7 @@ type insightVinScript struct {
 	IsAddress bool        `json:"isAddress"`
 	IsOwn     bool        `json:"isOwn,omitempty"`
 	Value     json.Number `json:"value"`
-	ValueSat  int64       `json:"valueSat"`
+	ValueSat  json.Number `json:"valueSat"`
 	Hex       string      `json:"hex,omitempty"`
 	Coinbase  string      `json:"coinbase,omitempty"`
 }
@@ -187,9 +174,7 @@ type insightTx struct {
 	SparkData *insightSparkData `json:"sparkData,omitempty"`
 }
 
-// insightSatString renders an amount as a decimal satoshi string. Strings
-// carry any size, so there is no safe-integer bound (only JSON numbers have
-// one, in insightMoney).
+// insightSatString renders an amount as a decimal satoshi string.
 func insightSatString(a *api.Amount) string {
 	n := a.AsBigInt()
 	return n.String()
@@ -201,14 +186,8 @@ func insightTransaction(tx *api.Tx) (*insightTx, error) {
 	if tx == nil {
 		return nil, errors.New("missing transaction")
 	}
-	fees, _, err := insightMoney(tx.FeesSat)
-	if err != nil {
-		return nil, err
-	}
-	valueOut, _, err := insightMoney(tx.ValueOutSat)
-	if err != nil {
-		return nil, err
-	}
+	fees, _ := insightMoney(tx.FeesSat)
+	valueOut, _ := insightMoney(tx.ValueOutSat)
 	out := &insightTx{
 		Txid: tx.Txid, Version: tx.Version, Locktime: tx.Locktime, LockTime: tx.Locktime,
 		Blockhash: tx.Blockhash, BlockHash: tx.Blockhash, Blockheight: tx.Blockheight, BlockHeight: tx.Blockheight,
@@ -223,10 +202,7 @@ func insightTransaction(tx *api.Tx) (*insightTx, error) {
 	}
 	out.IsCoinBase = len(tx.Vin) > 0 && tx.Vin[0].Coinbase != ""
 	for _, v := range tx.Vin {
-		value, sat, err := insightMoney(v.ValueSat)
-		if err != nil {
-			return nil, err
-		}
+		value, sat := insightMoney(v.ValueSat)
 		var addr *string
 		if v.IsAddress && len(v.Addresses) > 0 {
 			a := v.Addresses[0]
@@ -236,10 +212,7 @@ func insightTransaction(tx *api.Tx) (*insightTx, error) {
 		out.Vin = append(out.Vin, insightVin{insightVinScript: clone, Addr: addr, ScriptSig: insightScript{Hex: v.Hex, Asm: v.Asm}, ScriptPubKey: clone})
 	}
 	for _, v := range tx.Vout {
-		value, _, err := insightMoney(v.ValueSat)
-		if err != nil {
-			return nil, err
-		}
+		value, _ := insightMoney(v.ValueSat)
 		asm, scriptType := v.Asm, v.Type
 		if v.Hex != "" {
 			if raw, err := hex.DecodeString(v.Hex); err == nil {

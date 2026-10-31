@@ -150,17 +150,11 @@ func (s *InsightServer) multiBalance(route insightRoute) (interface{}, int, erro
 		balance.Add(&balance, &confirmedSat)
 		pending.Add(&pending, &pendingSat)
 	}
-	_, balanceSat, err := insightMoney((*api.Amount)(&balance))
-	if err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
-	_, pendingSat, err := insightMoney((*api.Amount)(&pending))
-	if err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
+	_, balanceSat := insightMoney((*api.Amount)(&balance))
+	_, pendingSat := insightMoney((*api.Amount)(&pending))
 	return struct {
-		Balance            int64 `json:"balance"`
-		UnconfirmedBalance int64 `json:"unconfirmedBalance"`
+		Balance            json.Number `json:"balance"`
+		UnconfirmedBalance json.Number `json:"unconfirmedBalance"`
 	}{balanceSat, pendingSat}, 0, nil
 }
 

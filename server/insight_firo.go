@@ -654,11 +654,9 @@ func (f *insightFiro) decorateTx(out *insightTx, tx *api.Tx) {
 			sparkSpend = true
 		}
 		if label == "Remint" {
-			value, sat, err := insightMoney(tx.ValueOutSat)
-			if err == nil {
-				vin.Value, vin.ValueSat = value, sat
-				vin.ScriptPubKey.Value, vin.ScriptPubKey.ValueSat = value, sat
-			}
+			value, sat := insightMoney(tx.ValueOutSat)
+			vin.Value, vin.ValueSat = value, sat
+			vin.ScriptPubKey.Value, vin.ScriptPubKey.ValueSat = value, sat
 		}
 	}
 	for i := range out.Vout {

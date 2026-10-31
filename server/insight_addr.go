@@ -280,10 +280,7 @@ func (s *InsightServer) addrValue(route insightRoute, addr string) (interface{},
 	default:
 		return nil, http.StatusNotFound, errors.New("unknown address value")
 	}
-	_, sat, err := insightMoney(amount)
-	if err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
+	_, sat := insightMoney(amount)
 	return sat, 0, nil
 }
 
@@ -314,10 +311,7 @@ func (s *InsightServer) appendUtxos(out []insightUtxo, addr string, onlyConfirme
 		script = s.insightAddressScript(addr)
 	}
 	for _, u := range rows {
-		amount, sat, err := insightMoney(u.AmountSat)
-		if err != nil {
-			return nil, http.StatusInternalServerError, err
-		}
+		amount, sat := insightMoney(u.AmountSat)
 		address := u.Address
 		if address == "" {
 			address = addr

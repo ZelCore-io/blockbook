@@ -347,8 +347,8 @@ func TestInsightFiroLabelTable(t *testing.T) {
 			t.Errorf("vin %d: %q, want %q", i, got, want)
 		}
 	}
-	if r := out.Vin[4]; r.Value != "2.5" || r.ValueSat != 250000000 {
-		t.Errorf("remint value %s %d", r.Value, r.ValueSat)
+	if r := out.Vin[4]; r.Value != "2.5" || r.ValueSat != "250000000" {
+		t.Errorf("remint value %s %s", r.Value, r.ValueSat)
 	}
 	wantVout := [][2]string{{"zerocoinmint", "Zeromint"}, {"sigmamint", "Sigmamint"}, {"lelantusmint", "Lelantusmint"}, {"lelantusjmint", "Lelantusjmint"}, {"sparkmint", "Sparkmint"}, {"sparksmint", "Sparksmint"}}
 	for i, want := range wantVout {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http/httptest"
 	"reflect"
 	"strings"
@@ -269,6 +270,21 @@ func TestInsightAddrTransactions(t *testing.T) {
 			t.Fatalf("%s: summary query detail %d size %d", path, f.detail, f.prefix)
 		}
 	}
+
+	// A BitcoinZ-sized balance (32,600,000 coins, above 2^53 zat) and an
+	// int64-max total are written exactly, not refused.
+	f = insightFixture()
+	f.address.BalanceSat = insightAmount(3260000000000000)
+	f.address.TotalReceivedSat = insightAmount(math.MaxInt64)
+	w = insightRequest(insightTestServer(t, f), "GET", "/api/addr/A?noTxList=1", "")
+	for _, want := range []string{`"balance":32600000,"balanceSat":"3260000000000000"`, `"totalReceived":92233720368.54775807,"totalReceivedSat":9223372036854775807`} {
+		if w.Code != 200 || !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("large balance: %d %s, want %s", w.Code, w.Body, want)
+		}
+	}
+	if w := insightRequest(insightTestServer(t, f), "GET", "/api/addr/A/balance", ""); w.Code != 200 || w.Body.String() != "3260000000000000\n" {
+		t.Fatalf("large balance value: %d %q", w.Code, w.Body)
+	}
 }
 
 func TestInsightAddrValues(t *testing.T) {
@@ -284,10 +300,11 @@ func TestInsightAddrValues(t *testing.T) {
 			t.Fatalf("%s: query detail %d size %d pages %v", tc.value, f.detail, f.prefix, f.pages)
 		}
 	}
+	// Past 2^53 the satoshi count is written exactly.
 	f := insightFixture()
-	f.address.TotalReceivedSat = insightAmount(9007199254740992)
-	if w := insightRequest(insightTestServer(t, f), "GET", "/api/addr/A/totalReceived", ""); w.Code != 500 {
-		t.Fatalf("unsafe amount: %d %s", w.Code, w.Body)
+	f.address.TotalReceivedSat = insightAmount(9007199254740993)
+	if w := insightRequest(insightTestServer(t, f), "GET", "/api/addr/A/totalReceived", ""); w.Code != 200 || w.Body.String() != "9007199254740993\n" {
+		t.Fatalf("large amount: %d %q", w.Code, w.Body)
 	}
 	f = insightFixture()
 	f.err = api.NewAPIError("Invalid address", true)

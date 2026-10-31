@@ -245,9 +245,13 @@ for any other reason answers a generic 500 or 503.
 ### Amounts, errors and limits
 
 All monetary JSON tokens are formatted from integer satoshis with eight-decimal precision and
-no floating-point amount arithmetic. Numeric spending fields beyond JavaScript's safe integer
-range (`-9007199254740991..9007199254740991`) fail explicitly with a generic 500 response; satoshi
-strings such as `value`, `valueIn` and `balanceSat` are not capped. Nil amounts become zero.
+no floating-point amount arithmetic. Coin amounts (`balance`, `amount`, `value`) and numeric
+satoshi fields (`satoshis`, `valueSat`, `totalReceivedSat` and the like) are written as the exact
+decimal of the integer, whatever its size, so an amount beyond JavaScript's safe integer range
+(2^53 satoshis, about 90,071,992.5 coins) is still served: BitcoinZ addresses hold more than that.
+Stock Insight wrote plain JavaScript numbers and lost precision there; a JavaScript client parsing
+these numbers still rounds them, but no request fails. Satoshi strings such as `value`,
+`valueIn` and `balanceSat` are not capped either. Nil amounts become zero.
 
 Broadcast requires a nonempty, even-length hexadecimal string and a body at most 8 MiB,
 including chunked bodies. Malformed, trailing or non-string input receives 400; oversized

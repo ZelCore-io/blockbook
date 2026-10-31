@@ -161,10 +161,7 @@ func insightSupplyString(sat *big.Int) (interface{}, error) {
 	if sat.Sign() < 0 {
 		return nil, errors.New("negative supply")
 	}
-	value, _, err := insightMoney((*api.Amount)(sat))
-	if err != nil {
-		return nil, err
-	}
+	value, _ := insightMoney((*api.Amount)(sat))
 	return string(value), nil
 }
 

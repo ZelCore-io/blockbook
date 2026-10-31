@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -339,16 +340,24 @@ func TestInsightErrorsAndAmounts(t *testing.T) {
 	if w.Code != 503 || strings.Contains(w.Body.String(), "secret") {
 		t.Fatal(w)
 	}
-	for _, n := range []int64{0, 1, -1, 9007199254740991, 9007199254740992} {
+	// Amounts past 2^53 are written exactly instead of failing.
+	for _, tc := range []struct {
+		sat  int64
+		want string
+	}{
+		{0, `"amount":0,"satoshis":0,`},
+		{1, `"amount":0.00000001,"satoshis":1,`},
+		{-1, `"amount":-0.00000001,"satoshis":-1,`},
+		{9007199254740991, `"amount":90071992.54740991,"satoshis":9007199254740991,`},
+		{9007199254740993, `"amount":90071992.54740993,"satoshis":9007199254740993,`},
+		{3260000000000000, `"amount":32600000,"satoshis":3260000000000000,`},
+		{math.MaxInt64, `"amount":92233720368.54775807,"satoshis":9223372036854775807,`},
+	} {
 		f := insightFixture()
-		f.utxos[0].AmountSat = insightAmount(n)
+		f.utxos[0].AmountSat = insightAmount(tc.sat)
 		w := insightRequest(insightTestServer(t, f), "GET", "/api/addr/A/utxo", "")
-		want := 200
-		if n > 9007199254740991 {
-			want = 500
-		}
-		if w.Code != want {
-			t.Fatalf("%d: %d %s", n, w.Code, w.Body)
+		if w.Code != 200 || !strings.Contains(w.Body.String(), tc.want) {
+			t.Fatalf("%d: %d %s, want %s", tc.sat, w.Code, w.Body, tc.want)
 		}
 	}
 	f = insightFixture()
@@ -444,9 +453,9 @@ func TestInsightTransactionWalletFields(t *testing.T) {
 	if strings.Contains(string(data), `"isCoinBase"`) || strings.Contains(string(data), `"valueIn"`) {
 		t.Fatalf("isCoinBase/valueIn: %s", data)
 	}
-	tx.Vin[0].ValueSat = insightAmount(9007199254740992)
-	if _, err = insightTransaction(tx); err == nil {
-		t.Fatal("unsafe input amount")
+	tx.Vin[0].ValueSat = insightAmount(9007199254740993)
+	if out, err = insightTransaction(tx); err != nil || out.Vin[0].Value != "90071992.54740993" || out.Vin[0].ValueSat != "9007199254740993" {
+		t.Fatal("large input amount", err)
 	}
 }
 func TestInsightLifecycle(t *testing.T) {
