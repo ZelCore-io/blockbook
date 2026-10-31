@@ -63,7 +63,9 @@ blockbook.firo hostnames need proxy changes. bitcore must be stopped first, and 
 firod runs as bitcore's child, so firod moves to its own service before the switch. Zclassic's
 and Zero's listeners likewise take port 3001 from the stock Insight that serves explorer.zcl and
 explorer.zer, so the stock Insight must be stopped before Blockbook starts. Axe's listener also
-uses port 3001 (new install, explorer.axe.zelcore.io; no stock Insight to replace). The listener serves plain HTTP; public TLS and perimeter request
+uses port 3001 (new install, explorer.axe.zelcore.io; no stock Insight to replace). BitcoinZ's and
+Komodo's listeners take port 3001 from the stock Insight behind explorer.btcz and explorer.kmd the
+same way as Zclassic and Zero. The listener serves plain HTTP; public TLS and perimeter request
 policy belong at the existing proxy, and the private interface should be reachable only by the
 trusted proxy.
 
@@ -74,7 +76,8 @@ Firo, `explorer.firo.zelcore.io` behind HAProxy) answers both the Insight API an
 opt-in per coin with `"blockbook": { "insight_ui": true }`, which adds `-insightui` after
 `-insight=...` in the generated unit; the build rejects it without the Insight listener, and
 Blockbook refuses to start with `-insightui` but no `-insight` or `-public`. Only
-`configs/coins/firo.json`, `configs/coins/zclassic.json`, `configs/coins/zero.json` and `configs/coins/axe.json` set it; BTC and ZEC keep the
+`configs/coins/firo.json`, `configs/coins/zclassic.json`, `configs/coins/zero.json`, `configs/coins/axe.json`, `configs/coins/bitcoinz.json` and
+`configs/coins/komodo.json` set it; BTC and ZEC keep the
 listener exactly as before (unknown paths are the Insight JSON 404).
 
 With it on, the Insight router still answers first. Every route in the table below, under
@@ -316,8 +319,8 @@ Not served (Insight 404 with CORS headers): the other stock `statistics/*` route
 
 ## Zcash extension
 
-Every coin on the Zcash parser (`bchain/coins/zec`: Zcash, Zclassic, Zero, Flux, and BitcoinZ
-and Komodo once they are configured on it) gets the `"zcash"` extension. It adds no route; it
+Every coin on the Zcash parser (`bchain/coins/zec`: Zcash, Zclassic, Zero, Flux, BitcoinZ, and
+Komodo through `bchain/coins/kmd`, which embeds the Zcash parser) gets the `"zcash"` extension. It adds no route; it
 adds the fields the Zcash-family stock Insight (bitcore-node `getDetailedTransaction` with
 insight-api `transformTransaction`, the same on the zelcash, zclassic and bitcoinz branches and
 on insight-api-komodo) puts on every tx object, on `tx`, `txs?block=`/`txs?address=`, address
