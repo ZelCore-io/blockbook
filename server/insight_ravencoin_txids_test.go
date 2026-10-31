@@ -130,8 +130,10 @@ func TestInsightRavencoinTxidsSharedCall(t *testing.T) {
 	x.tipHash = func() (string, bool) { return "h1", true }
 	rpc.txids[a] = []string{"t1", "t2"}
 	rpc.txidsEntered, rpc.txidsGate = make(chan struct{}, 16), make(chan struct{})
-
 	const n = 8
+	joined := make(chan struct{}, n)
+	x.txids.joined = func() { joined <- struct{}{} }
+
 	results := make([][]string, n)
 	var wg sync.WaitGroup
 	run := func(i int) {
@@ -145,11 +147,14 @@ func TestInsightRavencoinTxidsSharedCall(t *testing.T) {
 	wg.Add(1)
 	go run(0)
 	<-rpc.txidsEntered
+	<-joined
 	for i := 1; i < n; i++ {
 		wg.Add(1)
 		go run(i)
 	}
-	time.Sleep(100 * time.Millisecond) // let the others join the call
+	for i := 1; i < n; i++ { // every caller is attached to the held call
+		<-joined
+	}
 	close(rpc.txidsGate)
 	wg.Wait()
 	if c := rpc.count("getaddresstxids"); c != 1 {
@@ -222,18 +227,19 @@ func TestInsightRavencoinTxidsCacheBound(t *testing.T) {
 	keys := func() []string {
 		var out []string
 		for el := c.lru.Front(); el != nil; el = el.Next() {
-			out = append(out, el.Value.(*insightRvnTxidEntry).key)
+			out = append(out, el.Value.(*insightRvnTipEntry[[]string]).key)
 		}
 		return out
 	}
+	c.get("h", "") // the cache's tip
 	c.put("h", "k1", ids(2))
 	c.put("h", "k2", ids(2))
 	if _, ok := c.get("h", "k1"); !ok {
 		t.Fatal("k1 missing")
 	}
 	c.put("h", "k3", ids(2)) // 6 txids > 5: the least recently used (k2) goes
-	if got := keys(); !reflect.DeepEqual(got, []string{"k3", "k1"}) || c.ids != 4 {
-		t.Fatalf("txid bound: %v %d", got, c.ids)
+	if got := keys(); !reflect.DeepEqual(got, []string{"k3", "k1"}) || c.size != 4 {
+		t.Fatalf("txid bound: %v %d", got, c.size)
 	}
 	c.put("h", "big", ids(6)) // over the bound on its own: not kept
 	if got := keys(); !reflect.DeepEqual(got, []string{"k3", "k1"}) {
@@ -245,11 +251,33 @@ func TestInsightRavencoinTxidsCacheBound(t *testing.T) {
 		t.Fatalf("entry bound: %v", got)
 	}
 	c.put("h", "k3", ids(1)) // replacing an entry recounts it
-	if c.ids != 1 || c.lru.Len() != 3 {
-		t.Fatalf("replace: %d %d", c.ids, c.lru.Len())
+	if c.size != 1 || c.lru.Len() != 3 {
+		t.Fatalf("replace: %d %d", c.size, c.lru.Len())
 	}
-	if _, ok := c.get("h2", "k3"); ok || c.lru.Len() != 0 || c.ids != 0 {
+	if _, ok := c.get("h2", "k3"); ok || c.lru.Len() != 0 || c.size != 0 {
 		t.Fatalf("new tip kept %d entries", c.lru.Len())
+	}
+}
+
+// A call that read the previous tip and ends after the tip moved does not
+// wipe the new tip's entries: put drops its list, only get moves the tip.
+func TestInsightRavencoinTxidsLatePut(t *testing.T) {
+	c := newInsightRvnTxidCache(8, 100, 1, 0)
+	c.get("h1", "k")
+	c.put("h1", "k", []string{"a"})
+	if _, ok := c.get("h2", "k"); ok { // a request on the new tip
+		t.Fatal("old tip served")
+	}
+	c.put("h2", "k2", []string{"b"})
+	c.put("h1", "k3", []string{"c"}) // late put from the old tip
+	if c.tip != "h2" || c.lru.Len() != 1 || c.size != 1 {
+		t.Fatalf("late put: tip %s, %d entries, %d ids", c.tip, c.lru.Len(), c.size)
+	}
+	if ids, ok := c.get("h2", "k2"); !ok || !reflect.DeepEqual(ids, []string{"b"}) {
+		t.Fatalf("new tip entry lost: %v %v", ids, ok)
+	}
+	if _, ok := c.get("h2", "k3"); ok {
+		t.Fatal("old tip list kept")
 	}
 }
 

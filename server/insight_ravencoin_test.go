@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/trezor/blockbook/api"
 	"github.com/trezor/blockbook/bchain"
@@ -72,6 +75,9 @@ type insightRvnRPC struct {
 	// which then waits for txidsGate.
 	txidsEntered chan struct{}
 	txidsGate    chan struct{}
+	// utxosEntered and utxosGate do the same for getaddressutxos.
+	utxosEntered chan struct{}
+	utxosGate    chan struct{}
 }
 
 // count returns how many times method was called.
@@ -95,6 +101,10 @@ func (r *insightRvnRPC) call(method string, params []interface{}, result interfa
 	if method == "getaddresstxids" && r.txidsEntered != nil {
 		r.txidsEntered <- struct{}{}
 		<-r.txidsGate
+	}
+	if method == "getaddressutxos" && r.utxosEntered != nil {
+		r.utxosEntered <- struct{}{}
+		<-r.utxosGate
 	}
 	if r.fail {
 		return &bchain.RPCError{Code: -1, Message: "secret daemon text"}
@@ -251,6 +261,123 @@ func TestInsightRavencoinAssetUtxoMempool(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil || len(rows) != 4 || rows[0].Txid != "p4" || rows[1].AssetName != "CATE" || rows[2].Txid != "p1" || rows[3].Txid != "c1" {
 		t.Fatalf("got %d %s", w.Code, w.Body.String())
 	}
+}
+
+// The confirmed asset utxos are read once per tip, address set (in any
+// order) and asset; the mempool is read on every request; a new tip reads
+// them again; the answer is the same from the cache.
+func TestInsightRavencoinAssetUtxoCachedPerTip(t *testing.T) {
+	const a, b = "RPwpAwECnjm2FZVduEE8M5VjWc2sSHs6Lo", "RU67hqkZMRNqWp5Sa4HcKnKUQyC77PKBB4"
+	f := insightFixture()
+	f.txs["p1"] = &api.Tx{Txid: "p1", Vout: []api.Vout{{N: 0, Hex: "01"}}}
+	s, rpc := insightRvnSetup(t, f)
+	x := s.ext.(*insightRavencoin)
+	tip := "h1"
+	var tipMu sync.Mutex
+	x.tipHash = func() (string, bool) {
+		tipMu.Lock()
+		defer tipMu.Unlock()
+		return tip, true
+	}
+	rpc.height = 10
+	rpc.utxos[a+"|FREN"] = []insightRvnUtxo{{Address: a, AssetName: "FREN", Txid: "x", OutputIndex: 0, Script: "00", Satoshis: "1", Height: 5}}
+	rpc.utxos[b+"|FREN"] = []insightRvnUtxo{{Address: b, AssetName: "FREN", Txid: "y", OutputIndex: 1, Script: "00", Satoshis: "2", Height: 6}}
+	path := "/api/addr/" + a + "/asset/FREN/utxo"
+	first := insightRequest(s, "GET", path, "").Body.String()
+	if again := insightRequest(s, "GET", path, "").Body.String(); again != first || !strings.Contains(first, `"confirmations":6`) {
+		t.Fatalf("cached answer differs:\n%s\n%s", first, again)
+	}
+	insightRequest(s, "GET", "/api/addrs/"+a+"/asset/FREN/utxo", "")
+	if rpc.count("getaddressutxos") != 1 || rpc.count("getaddressmempool") != 3 {
+		t.Fatalf("calls %v", rpc.calls)
+	}
+	// another asset is another key
+	insightRequest(s, "GET", "/api/addr/"+a+"/asset/*/utxo", "")
+	insightRequest(s, "GET", "/api/addrs/"+a+","+b+"/asset/FREN/utxo", "")
+	insightRequest(s, "GET", "/api/addrs/"+b+","+a+"/asset/FREN/utxo", "")
+	if n := rpc.count("getaddressutxos"); n != 3 {
+		t.Fatalf("%d getaddressutxos calls", n)
+	}
+	// the mempool is seen on the same tip
+	rpc.mempool = []insightRvnDelta{
+		{Address: a, AssetName: "FREN", Txid: "p1", Index: 0, Satoshis: "3", Timestamp: 7},
+		{Address: a, AssetName: "FREN", Txid: "p1", Index: 1, Satoshis: "-1", PrevTxid: "x", PrevOut: 0},
+	}
+	w := insightRequest(s, "GET", path, "")
+	if got := strings.TrimSuffix(w.Body.String(), "\n"); got != `[{"address":"`+a+`","txid":"p1","vout":0,"scriptPubKey":"01","assetName":"FREN","amount":0.00000003,"satoshis":3,"confirmations":0,"ts":7}]` || rpc.count("getaddressutxos") != 3 {
+		t.Fatalf("mempool: %s %v", got, rpc.calls)
+	}
+	// a new tip reads them again
+	rpc.mempool = nil
+	rpc.height = 11
+	tipMu.Lock()
+	tip = "h2"
+	tipMu.Unlock()
+	if w := insightRequest(s, "GET", path, ""); !strings.Contains(w.Body.String(), `"confirmations":7`) || rpc.count("getaddressutxos") != 4 {
+		t.Fatalf("new tip: %s %v", w.Body.String(), rpc.calls)
+	}
+}
+
+// The asset utxo reads share the history's ravend slots: over the cap a
+// request waits briefly, then gets the listener's 503. Concurrent requests
+// for one key share one getaddressutxos call.
+func TestInsightRavencoinAssetUtxoSlots(t *testing.T) {
+	const a, b = "RPwpAwECnjm2FZVduEE8M5VjWc2sSHs6Lo", "RU67hqkZMRNqWp5Sa4HcKnKUQyC77PKBB4"
+	s, rpc := insightRvnSetup(t, insightFixture())
+	x := s.ext.(*insightRavencoin)
+	x.tipHash = func() (string, bool) { return "h1", true }
+	x.txids = newInsightRvnTxidCache(insightRvnTxidsMaxEntries, insightRvnTxidsMaxIds, 1, 50*time.Millisecond)
+	x.utxos = newInsightRvnUtxoCache(insightRvnUtxosMaxEntries, insightRvnUtxosMaxRows, x.txids.slots, 50*time.Millisecond)
+	rpc.height = 10
+	rpc.utxos[a+"|FREN"] = []insightRvnUtxo{{Address: a, AssetName: "FREN", Txid: "x", OutputIndex: 0, Script: "00", Satoshis: "1", Height: 5}}
+	rpc.txids[b] = []string{}
+	rpc.utxosEntered, rpc.utxosGate = make(chan struct{}, 16), make(chan struct{})
+	const n = 4
+	joined := make(chan struct{}, n)
+	x.utxos.joined = func() { joined <- struct{}{} }
+
+	bodies := make(chan string, n)
+	route := insightRoute{kind: insightRvnPrefix + "assetutxo", addresses: []string{a}, arg: "FREN"}
+	run := func() {
+		v, _, err := x.handle(route)
+		if err != nil {
+			t.Error(err)
+		}
+		b, _ := json.Marshal(v)
+		bodies <- string(b)
+	}
+	go run()
+	<-rpc.utxosEntered // the utxo read holds the only slot
+	<-joined
+	for i := 1; i < n; i++ {
+		go run()
+	}
+	for i := 1; i < n; i++ {
+		<-joined
+	}
+	// history needs the same slot
+	w := insightRequest(s, "GET", "/api/addrs/"+b+"/txs", "")
+	if w.Code != http.StatusServiceUnavailable || strings.TrimSpace(w.Body.String()) != `{"status":"error","error":"Service unavailable"}` {
+		t.Fatalf("over the cap: %d %s", w.Code, w.Body.String())
+	}
+	close(rpc.utxosGate)
+	for i := 0; i < n; i++ {
+		if got := <-bodies; !strings.Contains(got, `"txid":"x"`) {
+			t.Fatalf("result %d: %s", i, got)
+		}
+	}
+	if c := rpc.count("getaddressutxos"); c != 1 {
+		t.Fatalf("%d getaddressutxos calls", c)
+	}
+	// and an asset utxo read waits for a history call's slot the same way
+	rpc.utxos[b+"|FREN"] = nil
+	rpc.txidsEntered, rpc.txidsGate = make(chan struct{}, 16), make(chan struct{})
+	go func() { _, _, _ = x.addressTxids(context.Background(), []string{b}) }()
+	<-rpc.txidsEntered
+	if w := insightRequest(s, "GET", "/api/addr/"+b+"/asset/FREN/utxo", ""); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("utxo over the cap: %d %s", w.Code, w.Body.String())
+	}
+	close(rpc.txidsGate)
 }
 
 func TestInsightRavencoinAssetRoutes(t *testing.T) {

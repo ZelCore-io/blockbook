@@ -20,7 +20,8 @@ import (
 //
 //   - addr/:addr/asset/:asset/utxo and addrs/:addrs/asset/:asset/utxo: the
 //     asset utxos (getaddressutxos with assetName, "*" = every asset), merged
-//     with the mempool as stock does.
+//     with the mempool as stock does. The confirmed utxos are cached per
+//     chain tip (insight_ravencoin_txids.go).
 //   - address history (addrs/:addr/txs, txs?address=, multi-address
 //     history): the txid list comes from ravend getaddresstxids with assets,
 //     so asset-only txs, which Blockbook files under no address, are listed.
@@ -45,15 +46,17 @@ var insightRvnUnserved = map[string]bool{"balances": true, "tags": true, "frozen
 
 type insightRavencoin struct {
 	s *InsightServer
-	// txids caches and rations ravend's getaddresstxids lists
-	// (insight_ravencoin_txids.go); tipHash keys them, Blockbook's best
-	// block hash.
+	// txids and utxos cache and ration ravend's getaddresstxids lists and
+	// getaddressutxos answers (insight_ravencoin_txids.go), sharing one set
+	// of ravend slots; tipHash keys them, Blockbook's best block hash.
 	txids   *insightRvnTxidCache
+	utxos   *insightRvnTipCache[*insightRvnUtxoSet]
 	tipHash func() (string, bool)
 }
 
 func newInsightRavencoin(s *InsightServer) insightExtension {
-	x := &insightRavencoin{s: s, txids: newInsightRvnTxidCache(insightRvnTxidsMaxEntries, insightRvnTxidsMaxIds, insightRvnTxidsSlots, insightRvnTxidsWait)}
+	txids := newInsightRvnTxidCache(insightRvnTxidsMaxEntries, insightRvnTxidsMaxIds, insightRvnTxidsSlots, insightRvnTxidsWait)
+	x := &insightRavencoin{s: s, txids: txids, utxos: newInsightRvnUtxoCache(insightRvnUtxosMaxEntries, insightRvnUtxosMaxRows, txids.slots, insightRvnTxidsWait)}
 	x.tipHash = x.insightRvnTipHash
 	return x
 }
@@ -186,8 +189,10 @@ func insightRvnSatoshis(n json.Number) (json.Number, json.Number, error) {
 // mempool outputs (newest first, those already confirmed dropped), minus the
 // outputs a mempool tx spends. scriptPubKey is ravend's output script, which
 // includes the asset part the wallet signs over. A mempool row has the real
-// output script too, where stock put the address's plain P2PKH script. A
-// limit above 0 caps the rows (413).
+// output script too, where stock put the address's plain P2PKH script. The
+// confirmed utxos are
+// cached per chain tip, the mempool is read on every call. A limit above 0
+// caps the rows (413).
 func (x *insightRavencoin) assetUtxos(route insightRoute, addresses []string, limit int) (interface{}, int, error) {
 	asset := route.arg
 	if asset == "" || len(asset) > insightRvnAssetNameMax {
@@ -203,12 +208,9 @@ func (x *insightRavencoin) assetUtxos(route insightRoute, addresses []string, li
 	if err := x.s.rpc("getaddressmempool", []interface{}{map[string]interface{}{"addresses": addresses}, true}, &deltas); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	var confirmed struct {
-		Utxos  []insightRvnUtxo `json:"utxos"`
-		Height int              `json:"height"`
-	}
-	if err := x.s.rpc("getaddressutxos", []interface{}{map[string]interface{}{"addresses": addresses, "chaininfo": true, "assetName": asset}}, &confirmed); err != nil {
-		return nil, http.StatusInternalServerError, err
+	confirmed, code, err := x.confirmedUtxos(route.ctx, addresses, asset)
+	if err != nil {
+		return nil, code, err
 	}
 	if err := route.gone(); err != nil {
 		return nil, insightClientGoneCode, err
