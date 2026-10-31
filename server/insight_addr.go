@@ -121,6 +121,30 @@ func (s *InsightServer) addressPages(address string, from, to int) (*api.Address
 	return head, out, head.Txs + head.UnconfirmedTxs, 0, nil
 }
 
+// historyPages returns the address string, the txids in [from,to) of the
+// address history and its total, for the history routes: addressPages, or
+// for an extension that lists txids itself (insightTxidLister) the window of
+// that list. The int is the HTTP status for an error.
+func (s *InsightServer) historyPages(route insightRoute, addr string, from, to int) (string, []string, int, int, error) {
+	if lister, ok := s.ext.(insightTxidLister); ok {
+		ids, code, err := lister.addressTxids(route.ctx, []string{addr})
+		if err != nil {
+			return "", nil, 0, code, err
+		}
+		return addr, insightSlice(ids, from, to), len(ids), 0, nil
+	}
+	head, ids, total, code, err := s.addressPages(addr, from, to)
+	if err != nil {
+		return "", nil, 0, code, err
+	}
+	return head.AddrStr, ids, total, 0, nil
+}
+
+// insightSlice returns ids[from:to], clamped to the list.
+func insightSlice(ids []string, from, to int) []string {
+	return ids[min(from, len(ids)):min(max(to, from), len(ids))]
+}
+
 // insightOwnTx returns a copy of tx with isOwn set on the inputs and outputs
 // that pay or spend one of the owned addresses alone, as Blockbook's address
 // history does (setIsOwnAddress). The worker's tx is not modified.
@@ -190,11 +214,11 @@ func (s *InsightServer) history(route insightRoute, addr string) (interface{}, i
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
-	head, ids, total, code, err := s.addressPages(addr, from, to)
+	addrStr, ids, total, code, err := s.historyPages(route, addr, from, to)
 	if err != nil {
 		return nil, code, err
 	}
-	items, code, err := s.historyItems(route, head.AddrStr, ids)
+	items, code, err := s.historyItems(route, addrStr, ids)
 	if err != nil {
 		return nil, code, err
 	}
@@ -355,11 +379,11 @@ func (s *InsightServer) txsByAddress(route insightRoute) (interface{}, int, erro
 		return nil, http.StatusBadRequest, err
 	}
 	from := pageNum * insightTxsPageSize
-	head, ids, total, code, err := s.addressPages(addr, from, from+insightTxsPageSize)
+	addrStr, ids, total, code, err := s.historyPages(route, addr, from, from+insightTxsPageSize)
 	if err != nil {
 		return nil, code, err
 	}
-	items, code, err := s.historyItems(route, head.AddrStr, ids)
+	items, code, err := s.historyItems(route, addrStr, ids)
 	if err != nil {
 		return nil, code, err
 	}

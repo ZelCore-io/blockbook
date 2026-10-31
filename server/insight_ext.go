@@ -40,9 +40,27 @@ type insightTxLoader interface {
 	loadTxs(ctx context.Context, txs []*api.Tx) ([]func(*insightTx), error)
 }
 
+// insightEscapedMatcher is implemented by an extension whose path arguments
+// may hold an encoded "/" (%2F). matchEscaped is offered the escaped path
+// segments (after the api prefix) before any other matching, so such an
+// argument stays one segment; it unescapes the arguments it returns.
+type insightEscapedMatcher interface {
+	matchEscaped(parts []string) (insightRoute, []string, bool)
+}
+
+// insightTxidLister is implemented by an extension whose daemon lists the
+// txids of addresses more completely than Blockbook's index (Ravencoin asset
+// transfers, which the index files under no address). The address history
+// routes page that list, newest first, instead of the worker's. The int is
+// the HTTP status for an error.
+type insightTxidLister interface {
+	addressTxids(ctx context.Context, addresses []string) ([]string, int, error)
+}
+
 var insightExtensions = map[string]func(*InsightServer) insightExtension{
-	"firo":  newInsightFiro,
-	"zcash": newInsightZcash,
+	"firo":      newInsightFiro,
+	"ravencoin": newInsightRavencoin,
+	"zcash":     newInsightZcash,
 }
 
 // EnableExtension turns on a coin's extension by name. Call it after
