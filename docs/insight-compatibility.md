@@ -65,7 +65,10 @@ and Zero's listeners likewise take port 3001 from the stock Insight that serves 
 explorer.zer, so the stock Insight must be stopped before Blockbook starts. Axe's listener also
 uses port 3001 (new install, explorer.axe.zelcore.io; no stock Insight to replace). BitcoinZ's and
 Komodo's listeners take port 3001 from the stock Insight behind explorer.btcz and explorer.kmd the
-same way as Zclassic and Zero. The listener serves plain HTTP; public TLS and perimeter request
+same way as Zclassic and Zero. Ravencoin's listener takes port 3001 from the stock Insight
+(ravencore-node with RavenDevKit insight-api, the pm2 `explorer` app) behind explorer.rvn: stop
+that app first. ravend is already Blockbook's backend on the RVN hosts (the stock Insight shares
+it), so it stays up. The listener serves plain HTTP; public TLS and perimeter request
 policy belong at the existing proxy, and the private interface should be reachable only by the
 trusted proxy.
 
@@ -353,8 +356,9 @@ generic 500. Without daemon RPC the fields are left out and `fees` stays generic
 
 A coin whose chain parser implements `InsightExtension() string` (the
 `server.InsightExtensionProvider` interface) gets that named extension on top of the generic
-table; today `bchain/coins/firo` does (`"firo"`) and `bchain/coins/zec` (`"zcash"`, see
-[Zcash extension](#zcash-extension)). Other coins gain no route and no label:
+table; today `bchain/coins/firo` does (`"firo"`), `bchain/coins/zec` (`"zcash"`, see
+[Zcash extension](#zcash-extension)) and `bchain/coins/ravencoin` (`"ravencoin"`, see
+[Ravencoin extension](#ravencoin-extension)). Other coins gain no route and no label:
 the extension only adds paths the generic router does not know, replaces `currency`, and
 decorates converted transactions. It serves the Firo-specific routes of the stock Firo Insight
 (insight-api-zcoin 0.4.5, the API on FIRO-01 port 3001), each with the firod call the stock
@@ -432,6 +436,82 @@ these outputs under the full script (no address): it needs a full resync for the
 balance, history and utxos to be right. `-rollback` cannot reach back to the first Spark name
 fee output (between blocks 1,300,000 and 1,350,000), because Firo keeps the per-block data needed
 to disconnect only for the last `block_addresses_to_keep` (300) blocks.
+
+## Ravencoin extension
+
+`bchain/coins/ravencoin` names the `"ravencoin"` extension. It serves what the RVN stock Insight
+(RavenDevKit insight-api on ravencore-node, explorer.rvn port 3001) adds for assets, from ravend's
+own indexes. Blockbook's index has no asset support (an asset output's script is indexed as its
+own non-standard key, so the owner address sees neither the output nor the tx), and none is
+added: no parser or database change and no resync. ravend must run with `txindex`,
+`addressindex`, `assetindex`, `spentindex` and `timestampindex`; `configs/coins/ravencoin.json`
+sets them in the backend `additional_params`, so a regenerated `ravencoin.conf` keeps them
+(turning one on for an existing datadir needs a ravend `-reindex`). The backend is ravend 4.8.0
+(the release the RVN hosts already run).
+
+| Route | ravend calls | Response |
+| --- | --- | --- |
+| `GET addr/:addr/asset/:asset/utxo`, `GET addrs/:addrs/asset/:asset/utxo` | `getaddressmempool {addresses} true`, `getaddressutxos {addresses, chaininfo:true, assetName}` | stock rows `{address,txid,vout,scriptPubKey,assetName,amount,satoshis,height,confirmations}`; a mempool row has `ts` and no `height`, confirmations 0 |
+| `GET addrs/:addr/txs[/:from[/:to]]`, `addrs/txs?address=`, `txs?address=`, multi-address history | `getaddressmempool {addresses} true`, `getaddresstxids {addresses} true` | the generic shapes; the txid list is ravend's |
+| `GET assets?asset=&verbose=` | none | 500 `{"status":"error","error":"Backend request failed"}` |
+
+Asset utxos follow stock's `getAddressUnspentOutputs`: ravend's confirmed list newest first
+(stock reverses ravend's height order), preceded by the mempool outputs of the asset (newest
+first, outputs already confirmed dropped), minus every output a mempool tx spends.
+`asset` `*` is every asset except RVN (passed to ravend as is). `confirmations` is ravend's tip
+height (from the same call) − height + 1. `scriptPubKey` is ravend's output script, the standard
+script plus the `c0 … 75` asset part: the wallet signs over it, so it must be the full prevout
+script. The single-address route is uncapped; the multi-address one takes at most 100 addresses
+and 20000 rows (413 above that), one ravend call for all of them. An address the parser rejects is a 400.
+
+Asset names may contain `/` (sub-assets, `WXRAVEN/AIRDROP`) and `#` (qualifiers, `#KYC`), which
+the wallet sends encoded as `%2F` and `%23`. These two routes are matched on the escaped path
+(`URL.EscapedPath()`) before any other route, and each segment is unescaped on its own, so the
+name reaches ravend whole. Any proxy in front must pass `%2F` through without decoding it.
+
+History lists come from ravend, so a tx that only moves assets (no RVN to or from the address) is
+listed, as on stock: the address's mempool txids (newest first, those already confirmed dropped),
+then `getaddresstxids` newest first, each txid once. Windows, defaults and limits are the generic
+ones (`from`/`to` up to 1000 apart, `txs?address=` pages of 10, multi-address bounds);
+`totalItems` and `pagesTotal` count the whole list. Each tx is loaded from Blockbook as on other
+coins. `addr/:addr` (balance, `txApperances`, `transactions`) stays the generic Blockbook
+summary, RVN only.
+
+Every tx the listener returns gets stock's asset fields. The Go decoder reads ravend's script
+format (`rvn` + `t` transfer, `q` new, `o` owner, `r` reissue, after a P2PKH or P2SH script):
+
+| Output | Fields |
+| --- | --- |
+| asset output | `assetType` (`transfer_asset`, `new_asset` for a new asset or an owner token, `reissue_asset`); `asset` with ravend's keys in its order: `name`, `amount` (coins), on a transfer `message` (base58 IPFS hash or hex txid) and `expire_time` when the script has them, on a new or reissued asset `units`, `reissuable` (0/1, a number as ravend prints it) and `ipfs_hash` when present; `scriptPubKey.addresses` (and `addresses`, `isAddress`) = the owner; `scriptPubKey.type` `pubkeyhash`/`scripthash`; value 0 |
+| input spending an asset output | `addr` = the owner (decoded from the spent output's script); value 0 |
+
+Null asset data outputs (scripts starting with `c0`: address tags, freezes, verifier strings) and
+any script that does not decode are left alone.
+
+Intentional differences from stock:
+
+- A mempool asset utxo carries its real output script (from the tx); stock put the address's
+  plain P2PKH script there, which cannot be signed over. When the tx cannot be read, the plain
+  script is used, as stock.
+- History includes pending asset-only txs (the mempool is queried with assets; stock queried it
+  without, so they appeared only once confirmed).
+- `new_asset` outputs carry no `expire_time`. ravend 4.8.0 prints an uninitialised value there
+  (for example `138689745223440` on the `#KYC` issue), which stock passed through.
+- `assets?asset=&verbose=` keeps stock's failure but as a JSON 500 with no stack trace; the
+  wallet then falls back to 8 decimals, as today.
+- `addr/:addr/balances`, `tags` and `frozen` are 404 (stock: empty 200 and HTML 500s). Without the
+  extension those paths would be the generic `addr/:addr/<x>` summary form, so the extension
+  claims them only to answer 404. `addr/:addr/checkTag|checkFrozen/asset/:a`,
+  `assets/restricted|tags|qualifiers|frozen|checkVerifier`, `asset/:a/verifier|checkFrozen|tagged`,
+  `statistics/*` other than circulating-supply, `markets/info` and `utils/estimatesmartfee` are
+  unknown routes (404); all failed on stock. `utils/estimatefee`, which the RVN stock removed, is
+  the generic route.
+- `addr/:addr` `unconfirmedBalance` is RVN only; stock added mempool asset amounts to it.
+- Asset outputs do not get `isOwn` in history (Blockbook files them under no address).
+
+A ravend error is a generic 500 and the routes are 501 without daemon RPC. No result is cached
+(stock cached utxo and txid lists); an airdrop-heavy address costs one `getaddresstxids` or
+`getaddressutxos` call per request, as on stock.
 
 ## Readiness and shutdown
 
