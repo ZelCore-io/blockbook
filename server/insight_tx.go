@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/trezor/blockbook/api"
 	"github.com/trezor/blockbook/bchain"
 )
 
@@ -32,7 +33,7 @@ func (s *InsightServer) tx(route insightRoute) (interface{}, int, error) {
 	if err != nil {
 		return nil, insightNotFoundCode(err, insightTxNotFound(txid)), err
 	}
-	out, err := s.transaction(tx)
+	out, err := s.transaction(route.ctx, tx)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -115,6 +116,7 @@ func (s *InsightServer) txs(route insightRoute) (interface{}, int, error) {
 	if block.Page != pageNum+1 {
 		return out, 0, nil
 	}
+	txs := make([]*api.Tx, 0, len(block.Transactions))
 	for _, light := range block.Transactions {
 		if light == nil {
 			return nil, http.StatusInternalServerError, errors.New("missing block transaction")
@@ -123,11 +125,10 @@ func (s *InsightServer) txs(route insightRoute) (interface{}, int, error) {
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
-		item, err := s.transaction(tx)
-		if err != nil {
-			return nil, http.StatusInternalServerError, err
-		}
-		out.Txs = append(out.Txs, item)
+		txs = append(txs, tx)
+	}
+	if out.Txs, err = s.transactions(route.ctx, txs); err != nil {
+		return nil, http.StatusInternalServerError, err
 	}
 	return out, 0, nil
 }

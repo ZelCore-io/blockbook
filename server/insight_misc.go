@@ -138,11 +138,7 @@ func (s *InsightServer) estimateFee(route insightRoute) (interface{}, int, error
 			value = json.Number("-1")
 			fee, err := s.worker.EstimateFee(n, true)
 			if err == nil && fee.Sign() > 0 {
-				money, _, err := insightMoney((*api.Amount)(&fee))
-				if err != nil {
-					return nil, http.StatusInternalServerError, err
-				}
-				value = money
+				value, _ = insightMoney((*api.Amount)(&fee))
 				if n >= insightFeeCacheFrom {
 					s.feeCache.put(n, value)
 				}

@@ -33,8 +33,16 @@ type InsightExtensionProvider interface {
 	InsightExtension() string
 }
 
+// insightTxLoader is implemented by an extension whose tx fields need daemon
+// data the worker's tx lacks. loadTxs fetches it for a batch of txs and
+// returns one decorator per tx (nil for none); an error fails the request.
+type insightTxLoader interface {
+	loadTxs(ctx context.Context, txs []*api.Tx) ([]func(*insightTx), error)
+}
+
 var insightExtensions = map[string]func(*InsightServer) insightExtension{
-	"firo": newInsightFiro,
+	"firo":  newInsightFiro,
+	"zcash": newInsightZcash,
 }
 
 // EnableExtension turns on a coin's extension by name. Call it after
@@ -48,13 +56,40 @@ func (s *InsightServer) EnableExtension(name string) error {
 	return nil
 }
 
-// transaction converts tx and applies the extension's labels.
-func (s *InsightServer) transaction(tx *api.Tx) (*insightTx, error) {
-	out, err := insightTransaction(tx)
-	if err == nil && s.ext != nil {
-		s.ext.decorateTx(out, tx)
+// transaction converts one tx (see transactions).
+func (s *InsightServer) transaction(ctx context.Context, tx *api.Tx) (*insightTx, error) {
+	out, err := s.transactions(ctx, []*api.Tx{tx})
+	if err != nil {
+		return nil, err
 	}
-	return out, err
+	return out[0], nil
+}
+
+// transactions converts txs and applies the extension's labels and loaded
+// fields.
+func (s *InsightServer) transactions(ctx context.Context, txs []*api.Tx) ([]*insightTx, error) {
+	var loaded []func(*insightTx)
+	if loader, ok := s.ext.(insightTxLoader); ok {
+		var err error
+		if loaded, err = loader.loadTxs(ctx, txs); err != nil {
+			return nil, err
+		}
+	}
+	out := make([]*insightTx, 0, len(txs))
+	for i, tx := range txs {
+		item, err := insightTransaction(tx)
+		if err != nil {
+			return nil, err
+		}
+		if s.ext != nil {
+			s.ext.decorateTx(item, tx)
+		}
+		if loaded != nil && loaded[i] != nil {
+			loaded[i](item)
+		}
+		out = append(out, item)
+	}
+	return out, nil
 }
 
 // insightCacheErrTTL is how long a failed load is remembered, so a hung or

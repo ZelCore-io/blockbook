@@ -345,10 +345,7 @@ func (s *InsightServer) block(route insightRoute) (interface{}, int, error) {
 	if err != nil {
 		return nil, insightNotFoundCode(err, insightBlockNotFound), err
 	}
-	reward, _, err := insightMoney(data.Reward)
-	if err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
+	reward, _ := insightMoney(data.Reward)
 	out := &insightBlock{
 		Hash: b.Hash, Size: b.Size, Height: b.Height, Version: insightNumberOrString(string(b.Version)),
 		MerkleRoot: b.MerkleRoot, Tx: data.Txids, Time: b.Time, Nonce: insightNumberOrString(b.Nonce),

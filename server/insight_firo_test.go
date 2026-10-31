@@ -248,7 +248,7 @@ func TestInsightFiroRoutesOnlyForFiro(t *testing.T) {
 	if w := insightRequest(s, "GET", "/api/currency", ""); !strings.Contains(w.Body.String(), `"short":"BTC"`) {
 		t.Errorf("generic currency changed: %s", w.Body.String())
 	}
-	out, err := s.transaction(insightFiroTx())
+	out, err := s.transaction(nil, insightFiroTx())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestInsightFiroLabelTable(t *testing.T) {
 		Vin:  []api.Vin{{Hex: "c2aa"}, {Hex: "c4aa"}, {Hex: "c7aa"}, {Hex: "c9"}, {Hex: "c8aa", ValueSat: insightAmount(0)}, {Hex: "d3"}, {Hex: "4830"}, {Coinbase: "c2"}},
 		Vout: []api.Vout{{Hex: "c1aa"}, {Hex: "c3aa"}, {Hex: "c5aa"}, {Hex: "C6aa"}, {Hex: "d1aa"}, {Hex: "d2aa"}, {Hex: "6a00"}},
 	}
-	out, err := s.transaction(tx)
+	out, err := s.transaction(nil, tx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,8 +347,8 @@ func TestInsightFiroLabelTable(t *testing.T) {
 			t.Errorf("vin %d: %q, want %q", i, got, want)
 		}
 	}
-	if r := out.Vin[4]; r.Value != "2.5" || r.ValueSat != 250000000 {
-		t.Errorf("remint value %s %d", r.Value, r.ValueSat)
+	if r := out.Vin[4]; r.Value != "2.5" || r.ValueSat != "250000000" {
+		t.Errorf("remint value %s %s", r.Value, r.ValueSat)
 	}
 	wantVout := [][2]string{{"zerocoinmint", "Zeromint"}, {"sigmamint", "Sigmamint"}, {"lelantusmint", "Lelantusmint"}, {"lelantusjmint", "Lelantusjmint"}, {"sparkmint", "Sparkmint"}, {"sparksmint", "Sparksmint"}}
 	for i, want := range wantVout {
@@ -684,7 +684,7 @@ func TestInsightFiroAddressTypes(t *testing.T) {
 			{N: 2, ValueSat: insightAmount(1), Hex: "76a9149e6778ee1011af76f6f800873032ea8e15ada4ca88ace1", Addresses: []string{}},
 		},
 	}
-	out, err := s.transaction(tx)
+	out, err := s.transaction(nil, tx)
 	if err != nil {
 		t.Fatal(err)
 	}
