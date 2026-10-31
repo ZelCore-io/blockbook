@@ -218,6 +218,9 @@ func (s *InsightServer) multiTxs(route insightRoute) (interface{}, int, error) {
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
+	if lister, ok := s.ext.(insightTxidLister); ok {
+		return s.listedMultiTxs(route, lister, in.addresses, from, to)
+	}
 	size := max(to, 1)
 	var pending, confirmed []*api.Tx
 	owned := make(map[string]bool, len(in.addresses))
@@ -306,4 +309,28 @@ func (s *InsightServer) multiTxs(route insightRoute) (interface{}, int, error) {
 		To         int          `json:"to"`
 		Items      []*insightTx `json:"items"`
 	}{total, from, from + len(items), items}, 0, nil
+}
+
+// listedMultiTxs is multiTxs for an extension that lists the addresses'
+// txids itself (insightTxidLister): one list for all the addresses, in the
+// lister's order, sliced [from,to); totalItems is its length.
+func (s *InsightServer) listedMultiTxs(route insightRoute, lister insightTxidLister, addresses []string, from, to int) (interface{}, int, error) {
+	ids, code, err := lister.addressTxids(route.ctx, addresses)
+	if err != nil {
+		return nil, code, err
+	}
+	owned := make(map[string]bool, len(addresses))
+	for _, a := range addresses {
+		owned[a] = true
+	}
+	items, code, err := s.ownedItems(route, owned, insightSlice(ids, from, to))
+	if err != nil {
+		return nil, code, err
+	}
+	return struct {
+		TotalItems int          `json:"totalItems"`
+		From       int          `json:"from"`
+		To         int          `json:"to"`
+		Items      []*insightTx `json:"items"`
+	}{len(ids), from, from + len(items), items}, 0, nil
 }

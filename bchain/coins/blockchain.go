@@ -11,6 +11,7 @@ import (
 
 	"github.com/juju/errors"
 	"github.com/trezor/blockbook/bchain"
+	"github.com/trezor/blockbook/bchain/coins/anon"
 	"github.com/trezor/blockbook/bchain/coins/arbitrum"
 	"github.com/trezor/blockbook/bchain/coins/avalanche"
 	"github.com/trezor/blockbook/bchain/coins/axe"
@@ -145,6 +146,10 @@ func init() {
 	// Komodo (KMD) is a zcashd fork: Zcash parser and RPC with Komodo's own
 	// one-byte R/b address versions and network magic.
 	BlockChainFactories["Komodo"] = kmd.NewKomodoRPC
+	// Anon (ANON) is a zcashd fork: Zcash parser with ANON's An/3Z address
+	// versions and network magic; its RPC reads blocks with getblock <hash>
+	// true because anond rejects a numeric verbosity.
+	BlockChainFactories["Anon"] = anon.NewAnonRPC
 	BlockChainFactories["Ravencoin"] = ravencoin.NewRavencoinRPC
 	BlockChainFactories["Ritocoin"] = ritocoin.NewRitocoinRPC
 	BlockChainFactories["Divi"] = divi.NewDiviRPC
