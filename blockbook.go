@@ -76,6 +76,8 @@ var (
 
 	insightBinding = flag.String("insight", "", "optional Insight HTTP binding host:port behind a trusted reverse proxy (default disabled)")
 
+	electrumHTTPBinding = flag.String("electrumhttp", "", "optional electrum-http compatible HTTP binding host:port behind a trusted reverse proxy (default disabled)")
+
 	insightUI = flag.Bool("insightui", false, "serve the public explorer (UI, /api/v2, websocket) on the Insight listener for paths Insight does not match; requires -insight and -public")
 
 	certFiles = flag.String("certfile", "", "to enable SSL specify path to certificate files without extension, expecting <certfile>.crt and <certfile>.key (default no SSL)")
@@ -429,6 +431,44 @@ func mainWithExitCode() int {
 		}()
 	}
 
+	var electrumHTTPServer *server.ElectrumHTTPServer
+	if *electrumHTTPBinding != "" {
+		worker, workerErr := api.NewWorker(index, chain, mempool, txCache, metrics, internalState, fiatRates)
+		if workerErr != nil {
+			glog.Error("electrum-http worker initialization failed")
+			return exitCodeFatal
+		}
+		var rpc server.InsightRPC
+		if raw, ok := chain.(interface {
+			RawRPC() (func(req interface{}, res interface{}) error, bool)
+		}); ok {
+			if call, ok := raw.RawRPC(); ok {
+				rpc = server.NewInsightRPC(call)
+			}
+		}
+		electrumHTTPServer, err = server.NewElectrumHTTPServer(*electrumHTTPBinding, chain.GetChainParser(), worker, index, mempool, rpc, func(rawtx string) (string, error) {
+			return chain.SendRawTransaction(rawtx, false)
+		})
+		if err == nil {
+			err = electrumHTTPServer.EnableRateLimit(internalState.GetNetwork())
+		}
+		if err == nil {
+			err = electrumHTTPServer.Start()
+		}
+		if err != nil {
+			glog.Error("electrum-http listener: ", err)
+			return exitCodeFatal
+		}
+		// Registered before any subsequent return and before the deferred DB close.
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := electrumHTTPServer.Shutdown(ctx); err != nil {
+				glog.Error("electrum-http listener shutdown deadline: ", err)
+			}
+		}()
+	}
+
 	if *synchronize {
 		internalState.SyncMode = true
 		internalState.SetInitialSync(true)
@@ -496,6 +536,10 @@ func mainWithExitCode() int {
 		// Without -sync this mirrors public API readiness, not index freshness.
 		insightServer.SetReady()
 	}
+	if electrumHTTPServer != nil {
+		// Like Insight: the mempool is initialized and the index is synced.
+		electrumHTTPServer.SetReady()
+	}
 
 	if *blockFrom >= 0 {
 		if *blockUntil < 0 {
@@ -518,7 +562,7 @@ func mainWithExitCode() int {
 	if internalServer != nil || publicServer != nil || chain != nil {
 		// start fiat rates downloader only if not shutting down immediately
 		initDownloaders(index, chain, config)
-		waitForSignalAndShutdown(internalServer, publicServer, insightServer, chain, shutdownSigCh, 10*time.Second)
+		waitForSignalAndShutdown(internalServer, publicServer, insightServer, electrumHTTPServer, chain, shutdownSigCh, 10*time.Second)
 	}
 
 	// Always stop periodic state storage to prevent writes during shutdown.
@@ -956,7 +1000,7 @@ func pushSynchronizationHandler(nt bchain.NotificationType) {
 	}
 }
 
-func waitForSignalAndShutdown(internal *server.InternalServer, public *server.PublicServer, insight *server.InsightServer, chain bchain.BlockChain, shutdownSig <-chan os.Signal, timeout time.Duration) {
+func waitForSignalAndShutdown(internal *server.InternalServer, public *server.PublicServer, insight *server.InsightServer, electrumHTTP *server.ElectrumHTTPServer, chain bchain.BlockChain, shutdownSig <-chan os.Signal, timeout time.Duration) {
 	// Read the first OS signal from the dedicated channel to avoid races with worker shutdown paths.
 	sig := <-shutdownSig
 	common.SetInShutdown()
@@ -970,6 +1014,13 @@ func waitForSignalAndShutdown(internal *server.InternalServer, public *server.Pu
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		if err := insight.Shutdown(ctx); err != nil {
 			glog.Error("Insight listener: shutdown error: ", err)
+		}
+		cancel()
+	}
+	if electrumHTTP != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		if err := electrumHTTP.Shutdown(ctx); err != nil {
+			glog.Error("electrum-http listener: shutdown error: ", err)
 		}
 		cancel()
 	}
