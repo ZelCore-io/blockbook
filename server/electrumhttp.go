@@ -63,6 +63,11 @@ type ElectrumHTTPServer struct {
 	active    sync.WaitGroup
 	// now returns the current time (tests).
 	now func() time.Time
+	// Per-request budget (ehRequestTimeout, ehMaxBackendCalls, ehNiceMaxTxs
+	// by default; tests lower them).
+	requestTimeout  time.Duration
+	maxBackendCalls int
+	niceMaxTxs      int
 }
 
 // NewElectrumHTTPServer creates the listener. rpc may be nil: the calls that
@@ -87,14 +92,31 @@ func NewElectrumHTTPServer(binding string, parser bchain.BlockChainParser, worke
 		broadcast: broadcast,
 		slots:     make(chan struct{}, 32),
 		now:       time.Now,
+
+		requestTimeout:  ehRequestTimeout,
+		maxBackendCalls: ehMaxBackendCalls,
+		niceMaxTxs:      ehNiceMaxTxs,
 	}
 	s.handler = s
 	s.http = &http.Server{Addr: binding, Handler: http.HandlerFunc(s.serve), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	return s, nil
 }
 
+// serve is the listener's entry point. Every proxy request is on the root
+// path ("/?..." including the backward-compatible query forms), so any other
+// path is refused here, before the rate limiter and its path exemptions:
+// ServeHTTP parses the query of the raw request target whatever the path is.
 func (s *ElectrumHTTPServer) serve(w http.ResponseWriter, r *http.Request) {
+	if !electrumHTTPRootPath(r) {
+		electrumHTTPHeaders(w)
+		electrumHTTPText(w, http.StatusNotFound, "Not found")
+		return
+	}
 	s.handler.ServeHTTP(w, r)
+}
+
+func electrumHTTPRootPath(r *http.Request) bool {
+	return r.URL != nil && r.URL.Path == "/" && strings.HasPrefix(r.RequestURI, "/")
 }
 
 // EnableRateLimit puts a per-client request-rate limit in front of the
@@ -241,6 +263,10 @@ func (s *ElectrumHTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		electrumHTTPText(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	if !electrumHTTPRootPath(r) {
+		electrumHTTPText(w, http.StatusNotFound, "Not found")
+		return
+	}
 	q, err := parseElectrumHTTPQuery(r.RequestURI)
 	if err != nil {
 		electrumHTTPText(w, http.StatusBadRequest, "URI malformed")
@@ -273,7 +299,9 @@ func (s *ElectrumHTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	defer func() { <-s.slots; s.active.Done() }()
 
-	body, err := s.handle(r.Context(), q)
+	ctx, cancel := context.WithTimeout(r.Context(), s.requestTimeout)
+	defer cancel()
+	body, err := s.handle(ctx, q)
 	if err != nil {
 		var ee *electrumHTTPError
 		if !errors.As(err, &ee) {
@@ -293,15 +321,16 @@ func (s *ElectrumHTTPServer) handle(ctx context.Context, q electrumHTTPQuery) ([
 	if q.call.multi {
 		return nil, ehError("Unknown call")
 	}
+	b := &ehBudget{ctx: ctx, calls: s.maxBackendCalls}
 	var v interface{}
 	var err error
 	switch q.call.s {
 	case "balance":
 		v, err = s.callBalance(q.param)
 	case "history":
-		v, err = s.callHistory(q.param, true)
+		v, err = s.callHistory(b, q.param, true)
 	case "entirehistory":
-		v, err = s.callHistory(q.param, false)
+		v, err = s.callHistory(b, q.param, false)
 	case "transaction", "transactionnonverbose":
 		v, err = s.callRawTx(q.param)
 	case "transactionverbose":
@@ -315,9 +344,9 @@ func (s *ElectrumHTTPServer) handle(ctx context.Context, q electrumHTTPQuery) ([
 	case "header":
 		v, err = s.callHeader(q.param)
 	case "nicehistory":
-		v, err = s.callNiceHistory(ctx, q.param, 31)
+		v, err = s.callNiceHistory(b, q.param, 31)
 	case "niceentirehistory":
-		v, err = s.callNiceHistory(ctx, q.param, 30001)
+		v, err = s.callNiceHistory(b, q.param, 30001)
 	case "niceutxo":
 		v, err = s.callNiceUtxo(q.param)
 	default:

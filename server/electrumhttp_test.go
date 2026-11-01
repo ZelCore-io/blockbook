@@ -266,6 +266,43 @@ func (e *ehEnv) loadTx(t *testing.T, txid string) {
 	}
 }
 
+// addWorkerTx gives the worker stub the transaction as the worker resolves
+// it from the index: inputs carry the spent output's value and descriptor.
+func (e *ehEnv) addWorkerTx(t *testing.T, txid string) {
+	t.Helper()
+	tx, err := e.parser.ParseTx(mustHex(t, e.rpc.raw[txid]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wtx := &api.Tx{Txid: txid, Confirmations: 1}
+	for i, in := range tx.Vin {
+		v := api.Vin{N: i, Txid: in.Txid, Vout: in.Vout, Sequence: int64(in.Sequence), Hex: in.ScriptSig.Hex, Coinbase: in.Coinbase}
+		if in.Coinbase == "" {
+			prev, err := e.parser.ParseTx(mustHex(t, e.rpc.raw[in.Txid]))
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := prev.Vout[in.Vout]
+			v.ValueSat = (*api.Amount)(new(big.Int).Set(&out.ValueSat))
+			if v.AddrDesc, err = e.parser.GetAddrDescFromVout(&out); err != nil {
+				t.Fatal(err)
+			}
+		}
+		wtx.Vin = append(wtx.Vin, v)
+	}
+	e.worker.txs[txid] = wtx
+}
+
+func (e *ehEnv) rawTxCalls() int {
+	n := 0
+	for _, c := range e.rpc.calls {
+		if strings.HasPrefix(c, "getrawtransaction") && strings.HasSuffix(c, " 0]") {
+			n++
+		}
+	}
+	return n
+}
+
 const ehProxyPrefix = "/?server=127.0.0.1&port=50002&contype=tls&coin=bitcore&call="
 
 func (e *ehEnv) get(target string) *httptest.ResponseRecorder {
@@ -306,6 +343,8 @@ func TestElectrumHTTPLiveFixtures(t *testing.T) {
 	for _, txid := range []string{ehTx0, ehTx1, ehTx2} {
 		e.loadTx(t, txid)
 	}
+	e.addWorkerTx(t, ehTx1)
+	e.addWorkerTx(t, ehTx2)
 	for _, tc := range []struct{ name, call, param, fixture string }{
 		{"balance", "balance", ehAddrUtxo, "balance_2PBEc.json"},
 		{"utxo", "utxo", ehAddrUtxo, "utxo_2PBEc.json"},
@@ -323,6 +362,13 @@ func TestElectrumHTTPLiveFixtures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ehExpect(t, e.get(ehProxyPrefix+tc.call+"&param="+tc.param), string(ehFixture(t, tc.fixture)))
 		})
+	}
+	// nicehistory took its input values from the index: no raw previous
+	// transaction was loaded from the daemon.
+	before := e.rawTxCalls()
+	e.get(ehProxyPrefix + "niceentirehistory&param=" + ehAddrNice)
+	if n := e.rawTxCalls() - before; n != 0 {
+		t.Fatalf("nicehistory loaded %d raw transactions", n)
 	}
 }
 
@@ -518,6 +564,7 @@ func TestElectrumHTTPLimits(t *testing.T) {
 	}
 	e.loadTx(t, ehTx0)
 	e.loadTx(t, ehTx1)
+	e.addWorkerTx(t, ehTx1)
 	var nice []map[string]interface{}
 	if err := json.Unmarshal(e.get(ehProxyPrefix+"nicehistory&param="+addr).Body.Bytes(), &nice); err != nil {
 		t.Fatal(err)
@@ -553,7 +600,13 @@ func TestElectrumHTTPNiceHistoryShapes(t *testing.T) {
 		`],"vout":[{"value":0.29,"n":0,"scriptPubKey":{"hex":"` + p2sh + `","addresses":["x"]}},{"value":1.49990000,"n":1,"scriptPubKey":{"asm":"OP_RETURN 6869","hex":"6a026869"}}],"hex":"00"}`
 	e.rpc.verbose["aaaa"] = json.RawMessage(verbose)
 	e.mempool.outpoints[desc] = []bchain.Outpoint{{Txid: "aaaa", Vout: 0}}
-	e.worker.txs["aaaa"] = &api.Tx{Txid: "aaaa", Vin: []api.Vin{{Txid: prevTx.Txid}}, FeesSat: (*api.Amount)(big.NewInt(10000))}
+	// The P2SH input comes resolved from the index; the witness input does
+	// not, so its previous transaction is read from the daemon.
+	e.worker.txs["aaaa"] = &api.Tx{Txid: "aaaa", FeesSat: (*api.Amount)(big.NewInt(10000)), Vin: []api.Vin{
+		{N: 0, Coinbase: "03abcdef", Sequence: 4294967295},
+		{N: 1, Txid: prevTx.Txid, Vout: 0, Hex: sig, Sequence: 4294967294, ValueSat: (*api.Amount)(big.NewInt(29000000)), AddrDesc: mustHex(t, p2sh)},
+		{N: 2, Txid: prevTx.Txid, Vout: 1, Hex: "", Sequence: 4294967295},
+	}}
 	p2shAddr := ehScriptAddr(t, p, p2sh)
 	asm := "30440220" + strings.Repeat("aa", 32) + "0220" + strings.Repeat("bb", 32) + "01"
 	want := `[{"txid":"aaaa","version":1,"locktime":0,"vin":[` +
@@ -563,6 +616,9 @@ func TestElectrumHTTPNiceHistoryShapes(t *testing.T) {
 		`{"value":1.4999,"n":1,"scriptPubKey":{"asm":"OP_RETURN 6869","hex":"6a026869"},"satoshi":149990000,"valueSat":149990000}],` +
 		`"time":1793530000,"confirmations":0,"valueInSat":179000000,"valueOutSat":178990000,"fees":10000,"height":0,"hex":"00"}]`
 	ehExpect(t, e.get(ehProxyPrefix+"nicehistory&param="+addr), want)
+	if n := e.rawTxCalls(); n != 1 {
+		t.Fatalf("%d raw transaction loads, want 1 (the unresolved input)", n)
+	}
 }
 
 func ehScriptAddr(t *testing.T, p bchain.BlockChainParser, scriptHex string) string {
@@ -801,4 +857,142 @@ func TestElectrumHTTPPyHelpers(t *testing.T) {
 		t.Fatal(got)
 	}
 	_ = http.StatusOK
+}
+
+// Only the root path is served: the proxy's API is "/?..." in every form, and
+// other paths must not reach the query parser (nor skip the rate limiter's
+// path exemptions).
+func TestElectrumHTTPRootPathOnly(t *testing.T) {
+	t.Setenv("BTXPATH_ELECTRUM_HTTP_RATE_LIMIT", "60")
+	t.Setenv("BTXPATH_ELECTRUM_HTTP_BURST", "1")
+	e := newEHEnv(t)
+	if err := e.s.EnableRateLimit("btxpath"); err != nil {
+		t.Fatal(err)
+	}
+	calls := e.index.calls
+	for _, target := range []string{
+		"/static/x?server=s&call=entirehistory&param=" + ehAddrNice,
+		"/favicon.ico?server=s&call=entirehistory&param=" + ehAddrNice,
+		"/api/?server=s&call=entirehistory&param=" + ehAddrNice,
+		"//?server=s&call=entirehistory&param=" + ehAddrNice,
+	} {
+		for i := 0; i < 3; i++ {
+			r := httptest.NewRequest("GET", "http://proxy.example"+target, nil)
+			r.RequestURI = target
+			r.RemoteAddr = "203.0.113.9:4000"
+			rec := httptest.NewRecorder()
+			e.s.serve(rec, r)
+			if rec.Code != 404 || rec.Body.String() != "Error: Not found" || rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+				t.Fatalf("%s: %d %q", target, rec.Code, rec.Body.String())
+			}
+		}
+		// ServeHTTP refuses it too when called directly.
+		r := httptest.NewRequest("GET", "http://proxy.example"+target, nil)
+		r.RequestURI = target
+		rec := httptest.NewRecorder()
+		e.s.ServeHTTP(rec, r)
+		if rec.Code != 404 {
+			t.Fatalf("%s via ServeHTTP: %d", target, rec.Code)
+		}
+	}
+	if e.index.calls != calls {
+		t.Fatal("a non-root request reached the index")
+	}
+	// The root path, in the backward-compatible form too, is served and limited.
+	codes := []int{}
+	for _, target := range []string{"/?server=127.0.0.1?call=height", "/?server=127.0.0.1?call=height"} {
+		r := httptest.NewRequest("GET", "http://proxy.example"+target, nil)
+		r.RequestURI = target
+		r.RemoteAddr = "203.0.113.9:4000"
+		rec := httptest.NewRecorder()
+		e.s.serve(rec, r)
+		codes = append(codes, rec.Code)
+	}
+	if fmt.Sprint(codes) != "[200 429]" {
+		t.Fatalf("root codes %v", codes)
+	}
+}
+
+func TestElectrumHTTPBudget(t *testing.T) {
+	setup := func(t *testing.T) *ehEnv {
+		e := newEHEnv(t)
+		e.loadHistory(t, ehAddrNice, "entirehistory_2Y3e.json")
+		for _, txid := range []string{ehTx0, ehTx1, ehTx2} {
+			e.loadTx(t, txid)
+		}
+		e.addWorkerTx(t, ehTx1)
+		e.addWorkerTx(t, ehTx2)
+		return e
+	}
+	target := ehProxyPrefix + "niceentirehistory&param=" + ehAddrNice
+	// The default budget answers in full.
+	e := setup(t)
+	ehExpect(t, e.get(target), string(ehFixture(t, "nicehistory_2Y3e.json")))
+
+	// More transactions than the per-request cap are refused before any load.
+	e = setup(t)
+	e.s.niceMaxTxs = 1
+	ehExpect(t, e.get(target), "Error: history too large: 2 transactions, at most 1 per request")
+	if len(e.rpc.calls) != 0 {
+		t.Fatalf("backend called: %v", e.rpc.calls)
+	}
+
+	// Two transactions need four backend lookups.
+	e = setup(t)
+	e.s.maxBackendCalls = 3
+	ehExpect(t, e.get(target), "Error: request too large")
+	e.s.maxBackendCalls = 4
+	ehExpect(t, e.get(target), string(ehFixture(t, "nicehistory_2Y3e.json")))
+
+	// Mempool lookups in the history count too.
+	e = setup(t)
+	desc := ehDescHex(t, e.parser, ehAddrNice)
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("m%d", i)
+		e.mempool.outpoints[desc] = append(e.mempool.outpoints[desc], bchain.Outpoint{Txid: id})
+		e.worker.txs[id] = &api.Tx{Txid: id}
+	}
+	e.s.maxBackendCalls = 4
+	ehExpect(t, e.get(ehProxyPrefix+"entirehistory&param="+ehAddrNice), "Error: request too large")
+
+	// The request deadline is checked inside the loops.
+	e = setup(t)
+	e.s.requestTimeout = time.Nanosecond
+	ehExpect(t, e.get(target), "Error: request timed out")
+}
+
+func TestElectrumHTTPPrevTxFallback(t *testing.T) {
+	e := newEHEnv(t)
+	e.loadTx(t, ehTx0)
+	e.loadTx(t, ehTx1)
+	b := &ehBudget{ctx: t.Context(), calls: 10}
+	cache := map[string]*bchain.Tx{}
+	p2pkh := mustHex(t, "76a914d0c320db3fbd0abe2b6fe31a3bca4fed8ce8669588ac")
+	twoPush := mustHex(t, "0201ab0201cd")
+	vin := &api.Vin{Txid: ehTx1, Vout: 0, ValueSat: (*api.Amount)(big.NewInt(5)), AddrDesc: p2pkh}
+	// A resolved P2PKH input with a two-push scriptSig needs no daemon call.
+	if v, script, err := e.s.ehNiceInput(b, vin, twoPush, cache); err != nil || v != 5 || !bytes.Equal(script, p2pkh) || e.rawTxCalls() != 0 {
+		t.Fatalf("resolved: %v %x %v calls=%d", v, script, err, e.rawTxCalls())
+	}
+	// A single-push scriptSig may be a P2PK spend the index folded into P2PKH:
+	// the real previous output is read.
+	if v, _, err := e.s.ehNiceInput(b, vin, mustHex(t, "0201ab"), cache); err != nil || v != 7300346792 || e.rawTxCalls() != 1 {
+		t.Fatalf("single push: %v %v calls=%d", v, err, e.rawTxCalls())
+	}
+	// Cached for the request.
+	if _, _, err := e.s.ehNiceInput(b, vin, mustHex(t, "0201ab"), cache); err != nil || e.rawTxCalls() != 1 {
+		t.Fatalf("cache: %v calls=%d", err, e.rawTxCalls())
+	}
+	// The cache stops growing at its cap.
+	full := map[string]*bchain.Tx{}
+	for i := 0; i < ehPrevCacheMax; i++ {
+		full[fmt.Sprint(i)] = &bchain.Tx{}
+	}
+	if _, err := e.s.ehPrevTx(b, ehTx0, full); err != nil || len(full) != ehPrevCacheMax {
+		t.Fatalf("cache cap: %v %d", err, len(full))
+	}
+	// An exhausted budget refuses the load.
+	if _, err := e.s.ehPrevTx(&ehBudget{ctx: t.Context()}, ehTx0, map[string]*bchain.Tx{}); err == nil || err.Error() != "request too large" {
+		t.Fatalf("exhausted budget: %v", err)
+	}
 }

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/martinboehm/btcutil"
 	"github.com/trezor/blockbook/api"
@@ -24,6 +25,17 @@ const (
 	ehHistoryLimit = 1000000 / 99
 	// ehUtxoLimit is the proxy's slice of listunspent.
 	ehUtxoLimit = 600
+	// ehRequestTimeout bounds one request; the loops check it.
+	ehRequestTimeout = 60 * time.Second
+	// ehMaxBackendCalls bounds the daemon RPCs and worker transaction loads
+	// of one request. nicehistory needs two per transaction, plus one for an
+	// input the index cannot resolve.
+	ehMaxBackendCalls = 2500
+	// ehNiceMaxTxs is the effective cap of niceentirehistory (the proxy's
+	// 30001): an address with more history is refused, not truncated.
+	ehNiceMaxTxs = 1000
+	// ehPrevCacheMax bounds the per-request cache of previous transactions.
+	ehPrevCacheMax = 256
 )
 
 var errEHHistoryTooLarge = errors.New("history too large")
@@ -120,7 +132,7 @@ func (e ehHistoryEntry) object() ehObject {
 // the mempool transactions with height 0, or -1 when one of their inputs is
 // unconfirmed, and their fee. Mempool entries are ordered height 0 first, then
 // by txid (ElectrumX leaves that order unspecified).
-func (s *ElectrumHTTPServer) ehHistory(desc bchain.AddressDescriptor) ([]ehHistoryEntry, error) {
+func (s *ElectrumHTTPServer) ehHistory(b *ehBudget, desc bchain.AddressDescriptor) ([]ehHistoryEntry, error) {
 	// The index yields blocks newest first and each block's txs in block order.
 	type group struct {
 		height uint32
@@ -167,6 +179,9 @@ func (s *ElectrumHTTPServer) ehHistory(desc bchain.AddressDescriptor) ([]ehHisto
 		if _, ok := confirmed[o.Txid]; ok {
 			continue
 		}
+		if err := b.spend(); err != nil {
+			return nil, err
+		}
 		tx, err := s.worker.GetTransaction(o.Txid, false, false)
 		if err != nil || tx == nil || tx.Confirmations > 0 {
 			// Left the mempool (mined or evicted) since the lookup.
@@ -192,12 +207,12 @@ func (s *ElectrumHTTPServer) ehHistory(desc bchain.AddressDescriptor) ([]ehHisto
 
 // history / entirehistory. history keeps the proxy's truncation: more than
 // 200 entries answer the last 100.
-func (s *ElectrumHTTPServer) callHistory(param ehValue, limited bool) (interface{}, error) {
+func (s *ElectrumHTTPServer) callHistory(b *ehBudget, param ehValue, limited bool) (interface{}, error) {
 	desc, _, err := s.ehAddrDesc(param)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := s.ehHistory(desc)
+	entries, err := s.ehHistory(b, desc)
 	if err != nil {
 		return nil, err
 	}
@@ -480,48 +495,60 @@ func (s *ElectrumHTTPServer) ehScriptAddress(script []byte) string {
 	return addrs[0]
 }
 
-// ehPrevTx loads and parses a raw transaction, cached for the request.
-func (s *ElectrumHTTPServer) ehPrevTx(txid string, cache map[string]*bchain.Tx) (*bchain.Tx, error) {
+// ehPrevTx loads and parses a raw transaction, cached for the request. It is
+// the fallback for an input the worker could not resolve from the index.
+func (s *ElectrumHTTPServer) ehPrevTx(b *ehBudget, txid string, cache map[string]*bchain.Tx) (*bchain.Tx, error) {
 	if tx, ok := cache[txid]; ok {
 		return tx, nil
+	}
+	if err := b.spend(); err != nil {
+		return nil, err
 	}
 	var raw string
 	if err := s.rpcCall("getrawtransaction", []interface{}{txid, 0}, &raw); err != nil {
 		return nil, err
 	}
-	b, err := hex.DecodeString(raw)
+	rawBytes, err := hex.DecodeString(raw)
 	if err != nil {
 		return nil, err
 	}
-	tx, err := s.parser.ParseTx(b)
+	tx, err := s.parser.ParseTx(rawBytes)
 	if err != nil {
 		return nil, err
 	}
-	cache[txid] = tx
+	if len(cache) < ehPrevCacheMax {
+		cache[txid] = tx
+	}
 	return tx, nil
 }
 
 // nicehistory / niceentirehistory: the newest amountOfTxs history entries,
 // newest first, each the verbose transaction reshaped as index.js does,
-// including its floating-point satoshi arithmetic.
-func (s *ElectrumHTTPServer) callNiceHistory(ctx context.Context, param ehValue, amountOfTxs int) (interface{}, error) {
+// including its floating-point satoshi arithmetic. Inputs are resolved by the
+// worker from the index (one lookup per transaction), so the backend work is
+// two calls per transaction, within the request budget; more transactions
+// than niceMaxTxs are refused up front.
+func (s *ElectrumHTTPServer) callNiceHistory(b *ehBudget, param ehValue, amountOfTxs int) (interface{}, error) {
 	desc, _, err := s.ehAddrDesc(param)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := s.ehHistory(desc)
+	entries, err := s.ehHistory(b, desc)
 	if err != nil {
 		return nil, err
 	}
 	limit := min(len(entries), amountOfTxs)
+	if limit > s.niceMaxTxs {
+		return nil, ehError(fmt.Sprintf("history too large: %d transactions, at most %d per request", limit, s.niceMaxTxs))
+	}
 	now := float64(s.now().Unix())
 	cache := make(map[string]*bchain.Tx)
 	out := make([]ehObject, 0, limit)
 	for j := 0; j < limit; j++ {
-		if err := ctx.Err(); err != nil {
+		entry := entries[len(entries)-1-j]
+		if err := b.spend(); err != nil {
 			return nil, err
 		}
-		entry := entries[len(entries)-1-j]
 		v, err := s.ehVerboseTx(entry.txid)
 		if err != nil {
 			return nil, err
@@ -530,7 +557,17 @@ func (s *ElectrumHTTPServer) callNiceHistory(ctx context.Context, param ehValue,
 		if !ok {
 			return nil, errors.New("verbose transaction is not an object")
 		}
-		result, err := s.ehNiceTx(tx, entry.height, now, cache)
+		if err := b.spend(); err != nil {
+			return nil, err
+		}
+		wtx, err := s.worker.GetTransaction(entry.txid, false, false)
+		if err != nil {
+			return nil, err
+		}
+		if wtx == nil {
+			return nil, errors.New("missing transaction")
+		}
+		result, err := s.ehNiceTx(b, tx, wtx, entry.height, now, cache)
 		if err != nil {
 			return nil, err
 		}
@@ -539,7 +576,45 @@ func (s *ElectrumHTTPServer) callNiceHistory(ctx context.Context, param ehValue,
 	return out, nil
 }
 
-func (s *ElectrumHTTPServer) ehNiceTx(tx ehObject, height int, now float64, cache map[string]*bchain.Tx) (ehObject, error) {
+// ehNiceInput is the previous output an input spends: its value and output
+// script. The worker's index lookup gives both; the raw previous transaction
+// is read only when the worker has no value or script for the input, or when
+// the script may be a P2PK output the index folded into its P2PKH script (a
+// single-push scriptSig), since the proxy names P2PKH and P2PK inputs
+// differently.
+func (s *ElectrumHTTPServer) ehNiceInput(b *ehBudget, vin *api.Vin, script []byte, cache map[string]*bchain.Tx) (int64, []byte, error) {
+	desc := []byte(vin.AddrDesc)
+	if vin.ValueSat != nil && len(desc) > 0 && !(ehIsP2PKH(desc) && ehSinglePush(script)) {
+		return vin.ValueSat.AsInt64(), desc, nil
+	}
+	prev, err := s.ehPrevTx(b, vin.Txid, cache)
+	if err != nil {
+		return 0, nil, err
+	}
+	if int(vin.Vout) >= len(prev.Vout) {
+		return 0, nil, fmt.Errorf("input %s:%d not found", vin.Txid, vin.Vout)
+	}
+	prevOut := &prev.Vout[vin.Vout]
+	prevScript, err := hex.DecodeString(prevOut.ScriptPubKey.Hex)
+	if err != nil {
+		return 0, nil, err
+	}
+	return prevOut.ValueSat.Int64(), prevScript, nil
+}
+
+func ehIsP2PKH(script []byte) bool {
+	return len(script) == 25 && script[0] == 0x76 && script[1] == 0xa9 && script[2] == 0x14 && script[23] == 0x88 && script[24] == 0xac
+}
+
+// ehSinglePush reports whether a scriptSig is exactly one data push.
+func ehSinglePush(script []byte) bool {
+	if len(script) == 0 || script[0] == 0 || script[0] > 75 {
+		return false
+	}
+	return 1+int(script[0]) == len(script)
+}
+
+func (s *ElectrumHTTPServer) ehNiceTx(b *ehBudget, tx ehObject, wtx *api.Tx, height int, now float64, cache map[string]*bchain.Tx) (ehObject, error) {
 	result := ehObject{}
 	// JSON.stringify drops keys whose value is undefined.
 	copyKey := func(key string) {
@@ -552,52 +627,30 @@ func (s *ElectrumHTTPServer) ehNiceTx(tx ehObject, height int, now float64, cach
 	copyKey("locktime")
 	var valueIn, valueOut, fees float64
 	vins := []interface{}{}
-	rawVins, _ := tx.get("vin")
-	vinList, _ := rawVins.([]interface{})
-	for _, rv := range vinList {
-		in, ok := rv.(ehObject)
-		if !ok {
-			continue
-		}
-		t, _ := in.get("txid")
-		txid, _ := t.(string)
-		if txid == "" || strings.Contains(txid, ehZeroTxid) {
+	for i := range wtx.Vin {
+		vin := &wtx.Vin[i]
+		if vin.Txid == "" || vin.Coinbase != "" || strings.Contains(vin.Txid, ehZeroTxid) {
 			// Coinbase input: the proxy adds no vin for it.
 			continue
 		}
-		nv, _ := in.get("vout")
-		n := ehNumber(nv)
-		seq, _ := in.get("sequence")
-		var scriptHex string
-		if ss, ok := in.get("scriptSig"); ok {
-			if so, ok := ss.(ehObject); ok {
-				h, _ := so.get("hex")
-				scriptHex, _ = h.(string)
-			}
+		if err := b.check(); err != nil {
+			return nil, err
 		}
-		script, err := hex.DecodeString(scriptHex)
+		script, err := hex.DecodeString(vin.Hex)
 		if err != nil {
 			return nil, err
 		}
-		prev, err := s.ehPrevTx(txid, cache)
+		value, prevScript, err := s.ehNiceInput(b, vin, script, cache)
 		if err != nil {
 			return nil, err
 		}
-		if math.IsNaN(n) || n < 0 || int(n) >= len(prev.Vout) {
-			return nil, fmt.Errorf("input %s:%v not found", txid, n)
-		}
-		prevOut := &prev.Vout[int(n)]
-		prevScript, err := hex.DecodeString(prevOut.ScriptPubKey.Hex)
-		if err != nil {
-			return nil, err
-		}
-		sats := float64(prevOut.ValueSat.Int64())
+		sats := float64(value)
 		asm := bitgoASM(script)
 		vins = append(vins, ehObject{
-			{"txid", txid},
-			{"n", n},
+			{"txid", vin.Txid},
+			{"n", int64(vin.Vout)},
 			{"script", asm},
-			{"sequence", seq},
+			{"sequence", vin.Sequence},
 			{"scriptSig", ehObject{{"hex", hex.EncodeToString(script)}, {"asm", asm}}},
 			{"addr", s.ehVinAddr(prevScript, asm)},
 			{"value", 1e-8 * sats},
@@ -645,4 +698,35 @@ func (s *ElectrumHTTPServer) ehNiceTx(tx ehObject, height int, now float64, cach
 		result = append(result, ehField{"hex", h})
 	}
 	return result, nil
+}
+
+// ehBudget bounds one request's work: the request deadline (checked inside
+// the loops) and a number of backend lookups (daemon RPCs and worker
+// transaction loads).
+type ehBudget struct {
+	ctx   context.Context
+	calls int
+}
+
+// check fails once the request's deadline has passed or the client is gone.
+func (b *ehBudget) check() error {
+	if err := b.ctx.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return ehError("request timed out")
+		}
+		return err
+	}
+	return nil
+}
+
+// spend takes one backend lookup from the budget.
+func (b *ehBudget) spend() error {
+	if err := b.check(); err != nil {
+		return err
+	}
+	if b.calls <= 0 {
+		return ehError("request too large")
+	}
+	b.calls--
+	return nil
 }

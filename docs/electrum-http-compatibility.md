@@ -48,6 +48,29 @@ initial sync and mempool load are done, like Insight. On shutdown it stops admit
 drains the active ones before the database and daemon connection close. At most 32 calls run at
 once; more answer 503 `Error: Service busy`.
 
+Only the root path is served: every proxy URL, the backward-compatible forms included, is
+`/?...`. A request on any other path is HTTP 404 `Error: Not found` before the rate limiter or
+the query parser sees it.
+
+## Request budget
+
+Each request has a budget, so one call cannot fan out into unbounded backend work:
+
+- a 60 s deadline, checked inside the per-transaction and per-input loops
+  (`Error: request timed out`);
+- at most 2500 backend lookups (daemon RPCs and worker transaction loads); past that the answer
+  is `Error: request too large`;
+- `nicehistory` reads each transaction once from the daemon (verbose) and once from the worker,
+  which resolves every input's value and script from Blockbook's index. The raw previous
+  transaction is read only for an input the index cannot resolve, or when the index's P2PKH
+  script may stand for a P2PK output (single-push scriptSig); those reads are cached per request
+  (at most 256 transactions) and count against the budget;
+- `niceentirehistory` keeps the proxy's 30001 in name, but its effective cap is 1000
+  transactions: an address with more history answers
+  `Error: history too large: <n> transactions, at most 1000 per request` before any transaction
+  is loaded. `nicehistory` (31) is unaffected. History calls also stop at ElectrumX's limit
+  below, and their mempool lookups count against the budget.
+
 ## Rate limit
 
 A per-client token bucket in front of the listener stands in for the proxy's `ddos` module
@@ -109,7 +132,7 @@ so values that pass through floating-point arithmetic in the proxy come out the 
 history entry's (0 or -1 in the mempool). Each `vin` is
 `{txid, n, script, sequence, scriptSig:{hex, asm}, addr, value, valueSat, satoshis}`: `script`
 and `asm` are bitgo-utxo-lib's `toASM` of the scriptSig (pushes as hex, not bitcoind's ASM),
-the value is read from the previous output, `value` is `1e-8 * satoshis`, and `addr` is the
+the value is the spent output's (from Blockbook's index), `value` is `1e-8 * satoshis`, and `addr` is the
 previous output's address for P2PKH and P2SH outputs only ("" for witness and other outputs).
 Coinbase inputs are left out, so a coinbase transaction has `"vin":[]`. Each `vout` is the
 verbose output with `satoshi` and `valueSat` (`value * 1e8`) appended; `valueOutSat` sums those,
@@ -130,6 +153,9 @@ The wallet uses `balance`, `utxo`, `niceutxo`, `nicehistory` and `broadcast`.
 | broadcast refused by the daemon | `Error: the transaction was rejected by network rules.\n\n<daemon message>\n[<raw tx>]` |
 | more than ElectrumX's history limit (10100 confirmed txs) | `Error: history too large` |
 | unknown call | `Error: Unknown call` |
+| request budget exhausted | `Error: request too large` / `Error: request timed out` |
+| niceentirehistory over 1000 transactions | `Error: history too large: <n> transactions, at most 1000 per request` |
+| path other than `/` | HTTP 404 `Error: Not found` |
 | any other failure (backend unreachable, ...) | `Error: internal error`; the cause is logged, not sent |
 
 The address, txid and height messages are the ones the live proxy returns; the daemon and
@@ -142,6 +168,9 @@ broadcast messages are ElectrumX's formats.
   `Error: unknown method "blockchain.block.get_header"` (its ElectrumX dropped the old method and
   rejects the extra argument the client sends). The listener answers the shapes those methods
   had. No wallet calls either.
+- **niceentirehistory** is capped at 1000 transactions (see Request budget); the proxy tries up
+  to 30001. No wallet calls it.
+- **Other paths.** The proxy answers on any path; the listener only on `/`.
 - **Unknown call.** The proxy never answers (no default case); the listener answers
   `Error: Unknown call`.
 - **`coin` is ignored.** The proxy encodes addresses with the network named by `coin`, so its
