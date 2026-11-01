@@ -82,7 +82,10 @@ type insightRvnTipCache[T any] struct {
 // insightRvnTxidCache holds getaddresstxids lists.
 type insightRvnTxidCache = insightRvnTipCache[[]string]
 
-// insightRvnUtxoSet is ravend's getaddressutxos answer with chaininfo.
+// insightRvnUtxoSet is ravend's getaddressutxos answer and the chain height
+// read right after it. With an assetName ravend ignores chaininfo and answers
+// a bare array, so the height comes from getblockcount; read after the utxos,
+// it is never below a utxo's height.
 type insightRvnUtxoSet struct {
 	Utxos  []insightRvnUtxo `json:"utxos"`
 	Height int              `json:"height"`
@@ -285,7 +288,10 @@ func (x *insightRavencoin) confirmedUtxos(ctx context.Context, addresses []strin
 	tip, cacheable := x.tipHash()
 	return x.utxos.load(ctx, tip, cacheable, insightRvnUtxoKey(tip, addresses, asset), func() (*insightRvnUtxoSet, error) {
 		set := &insightRvnUtxoSet{}
-		if err := x.s.rpc("getaddressutxos", []interface{}{map[string]interface{}{"addresses": addresses, "chaininfo": true, "assetName": asset}}, set); err != nil {
+		if err := x.s.rpc("getaddressutxos", []interface{}{map[string]interface{}{"addresses": addresses, "assetName": asset}}, &set.Utxos); err != nil {
+			return nil, err
+		}
+		if err := x.s.rpc("getblockcount", []interface{}{}, &set.Height); err != nil {
 			return nil, err
 		}
 		return set, nil

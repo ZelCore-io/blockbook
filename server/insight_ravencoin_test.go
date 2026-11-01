@@ -109,6 +109,10 @@ func (r *insightRvnRPC) call(method string, params []interface{}, result interfa
 	if r.fail {
 		return &bchain.RPCError{Code: -1, Message: "secret daemon text"}
 	}
+	if method == "getblockcount" {
+		b, _ := json.Marshal(r.height)
+		return json.Unmarshal(b, result)
+	}
 	opts := params[0].(map[string]interface{})
 	addresses := opts["addresses"].([]string)
 	var value interface{}
@@ -118,7 +122,11 @@ func (r *insightRvnRPC) call(method string, params []interface{}, result interfa
 		for _, a := range addresses {
 			rows = append(rows, r.utxos[a+"|"+opts["assetName"].(string)]...)
 		}
-		value = map[string]interface{}{"utxos": rows, "hash": "tiphash", "height": r.height}
+		// with an assetName ravend ignores chaininfo: a bare array
+		if rows == nil {
+			rows = []insightRvnUtxo{}
+		}
+		value = rows
 	case "getaddressmempool":
 		value = r.mempool
 		if r.mempool == nil {
@@ -212,8 +220,8 @@ func TestInsightRavencoinAssetUtxoMatchesStock(t *testing.T) {
 				t.Fatalf("differs from stock\n got %.600s\nwant %.600s", got, want)
 			}
 			// the asset name reaches ravend decoded (%2F, %23)
-			want := map[string]interface{}{"addresses": []string{c.Address}, "chaininfo": true, "assetName": c.Asset}
-			if !reflect.DeepEqual(rpc.calls, []string{"getaddressmempool", "getaddressutxos"}) || !reflect.DeepEqual(rpc.params[1][0], want) {
+			want := map[string]interface{}{"addresses": []string{c.Address}, "assetName": c.Asset}
+			if !reflect.DeepEqual(rpc.calls, []string{"getaddressmempool", "getaddressutxos", "getblockcount"}) || !reflect.DeepEqual(rpc.params[1][0], want) {
 				t.Fatalf("calls %v %v", rpc.calls, rpc.params)
 			}
 			if !reflect.DeepEqual(rpc.params[0], []interface{}{map[string]interface{}{"addresses": []string{c.Address}}, true}) {
@@ -393,7 +401,7 @@ func TestInsightRavencoinAssetRoutes(t *testing.T) {
 
 	// multi-address: one ravend call for all the addresses
 	w := insightRequest(s, "GET", "/api/addrs/"+a+","+b+","+a+"/asset/%2A/utxo", "")
-	if w.Code != 200 || strings.Count(w.Body.String(), `"txid"`) != 2 || len(rpc.calls) != 2 {
+	if w.Code != 200 || strings.Count(w.Body.String(), `"txid"`) != 2 || len(rpc.calls) != 3 {
 		t.Fatalf("multi: %d %s %v", w.Code, w.Body.String(), rpc.calls)
 	}
 	if got := rpc.params[1][0].(map[string]interface{})["addresses"]; !reflect.DeepEqual(got, []string{a, b}) {
