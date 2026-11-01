@@ -93,8 +93,14 @@ func (z *AnonRPC) GetBlock(hash string, height uint32) (*bchain.Block, error) {
 	for _, txid := range res.Result.Txids {
 		tx, err := z.GetTransaction(txid)
 		if err != nil {
-			// A block with a tx left out would corrupt the index: fail and
-			// let the sync retry.
+			// The genesis coinbase is never in the tx index (getrawtransaction
+			// answers -5 for it) and its output is unspendable: skip it.
+			if err == bchain.ErrTxNotFound && res.Result.Height == 0 {
+				glog.Warningf("rpc: getblock: skipping genesis coinbase %v", txid)
+				continue
+			}
+			// A block with any other tx left out would corrupt the index: fail
+			// and let the sync retry.
 			return nil, errors.Annotatef(err, "tx %v in block %v", txid, hash)
 		}
 		txs = append(txs, *tx)
