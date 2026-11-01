@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/golang/glog"
 	"github.com/trezor/blockbook/api"
 )
 
@@ -261,6 +262,7 @@ func (s *InsightServer) summary(route insightRoute, addr string) (interface{}, i
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
+		s.listedSummary(route, addr, out)
 		return out, 0, nil
 	}
 	from, to, err := insightWindow(route.from, route.to, insightAddrDefaultTo)
@@ -275,10 +277,34 @@ func (s *InsightServer) summary(route insightRoute, addr string) (interface{}, i
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	if listed, ok := s.listedSummary(route, addr, out); ok {
+		ids = insightSlice(listed, from, to)
+	}
 	return struct {
 		*insightSummary
 		Transactions []string `json:"transactions"`
 	}{out, ids}, 0, nil
+}
+
+// listedSummary applies the txid list of an extension that lists txids
+// itself (insightTxidLister) to a summary: stock counts the daemon's
+// confirmed txids, which for Ravencoin include asset-only transfers that
+// Blockbook files under no address. The list holds the pending txids too,
+// counted by unconfirmedTxApperances. When the list cannot be read (ravend
+// busy) the summary keeps Blockbook's counts rather than failing; ok is false
+// then, and without a lister.
+func (s *InsightServer) listedSummary(route insightRoute, addr string, out *insightSummary) ([]string, bool) {
+	lister, ok := s.ext.(insightTxidLister)
+	if !ok {
+		return nil, false
+	}
+	ids, _, err := lister.addressTxids(route.ctx, []string{addr})
+	if err != nil {
+		glog.Warningf("insight: txid list for the %s summary: %v", addr, err)
+		return nil, false
+	}
+	out.Txs = max(len(ids)-out.UnconfirmedTxs, out.Txs)
+	return ids, true
 }
 
 // addrValue serves addr/:a/balance|totalReceived|totalSent|unconfirmedBalance

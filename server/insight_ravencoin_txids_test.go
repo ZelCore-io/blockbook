@@ -295,3 +295,37 @@ func TestInsightRavencoinTxidsKey(t *testing.T) {
 		t.Fatal("input sorted in place")
 	}
 }
+
+// The summary counts ravend's txids, asset-only transfers included, as stock
+// does, and its transactions list is the history list; when ravend cannot
+// list them the summary keeps Blockbook's counts instead of failing.
+func TestInsightRavencoinSummaryCountsAssetTxs(t *testing.T) {
+	s, rpc, _, _ := insightRvnTxidSetup(t)
+	rpc.txids["A"] = []string{"x1", "a", "b", "c", "x2"}
+	rpc.mempool = []insightRvnDelta{{Txid: "pending"}}
+	var got struct {
+		Txs          int      `json:"txApperances"`
+		Pending      int      `json:"unconfirmedTxApperances"`
+		Transactions []string `json:"transactions"`
+	}
+	for _, path := range []string{"/api/addr/A?noTxList=1", "/api/addr/A"} {
+		w := insightRequest(s, "GET", path, "")
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 || got.Txs != 5 || got.Pending != 1 {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
+		}
+	}
+	if want := []string{"pending", "x2", "c", "b", "a", "x1"}; !reflect.DeepEqual(got.Transactions, want) {
+		t.Fatalf("transactions %v, want %v", got.Transactions, want)
+	}
+	rpc.fail = true
+	for _, path := range []string{"/api/addr/A?noTxList=1", "/api/addr/A"} {
+		got.Transactions = nil
+		w := insightRequest(s, "GET", path, "")
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 || got.Txs != 3 {
+			t.Fatalf("ravend failing, %s: %d %s", path, w.Code, w.Body.String())
+		}
+	}
+	if want := []string{"pending", "a", "b", "c"}; !reflect.DeepEqual(got.Transactions, want) {
+		t.Fatalf("fallback transactions %v, want %v", got.Transactions, want)
+	}
+}
