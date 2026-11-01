@@ -141,6 +141,10 @@ type insightVout struct {
 	IsOwn        bool              `json:"isOwn,omitempty"`
 	Type         string            `json:"type,omitempty"`
 	ScriptPubKey insightVoutScript `json:"scriptPubKey"`
+	// The Ravencoin extension sets stock's asset fields on an asset output
+	// (insight_ravencoin.go).
+	AssetType string           `json:"assetType,omitempty"`
+	Asset     *insightRvnAsset `json:"asset,omitempty"`
 }
 type insightTx struct {
 	Txid                   string                `json:"txid"`

@@ -65,9 +65,29 @@ and Zero's listeners likewise take port 3001 from the stock Insight that serves 
 explorer.zer, so the stock Insight must be stopped before Blockbook starts. Axe's listener also
 uses port 3001 (new install, explorer.axe.zelcore.io; no stock Insight to replace). BitcoinZ's and
 Komodo's listeners take port 3001 from the stock Insight behind explorer.btcz and explorer.kmd the
-same way as Zclassic and Zero. The listener serves plain HTTP; public TLS and perimeter request
-policy belong at the existing proxy, and the private interface should be reachable only by the
-trusted proxy.
+same way as Zclassic and Zero. Ravencoin's listener takes port 3001 from the stock Insight
+(ravencore-node with RavenDevKit insight-api, the pm2 `explorer` app) behind explorer.rvn: stop
+that app first. ravend is already Blockbook's backend on the RVN hosts (the stock Insight shares
+it), so it stays up. Turning on ravend's four indexes (`addressindex`, `assetindex`,
+`spentindex`, `timestampindex`) on an existing datadir needs a `-reindex`; ZelCore's RVN hosts
+already run with them, so no action is needed there.
+Anon's listener (explorer.anon) works the same way. On the ANON hosts the stock
+Insight holds 3001 until the switch, so an A/B run needs another host or port. On ZelCore hosts
+Blockbook reuses the anond that is already running (only `blockbook-anon` is installed, not
+`backend-anon`); anond needs `txindex=1`, `zmqpubhashtx` and `zmqpubhashblock` on the
+`backend_message_queue` port 38376 (today's anond.conf publishes `rawtx` and `hashblock` on
+27333 for bitcore), and the RPC credentials and port of the generated `blockbook-anon` config.
+`backend-anon`, when used, ships only `anond` and `anon-cli` and downloads no zk params (ANON's
+fetch-params source redirects and download.z.cash refuses `sprout-proving.key`). Before the first
+start of a fresh `backend-anon` install, copy `sprout-proving.key`, `sprout-verifying.key` and
+`sprout-groth16.params` from an existing ANON host's `~/.zcash-params` into
+`.zcash-params` under the backend's `HOME` (the unit sets `HOME` to the backend data directory,
+`/opt/coins/data/anon/backend` with the default paths), owned by the `anon` user. ZelCore hosts
+reuse the running anond, so this applies only to fresh backend installs. The ANON network is
+small and the generated `anon.conf` sets `nolisten=1`, so `configs/coins/anon.json` lists the
+live peers as `addnode` entries. The listener serves plain HTTP; public TLS and perimeter request policy
+belong at the existing proxy, and the private interface should be reachable only by the trusted
+proxy.
 
 ## Explorer UI on the listener
 
@@ -76,8 +96,8 @@ Firo, `explorer.firo.zelcore.io` behind HAProxy) answers both the Insight API an
 opt-in per coin with `"blockbook": { "insight_ui": true }`, which adds `-insightui` after
 `-insight=...` in the generated unit; the build rejects it without the Insight listener, and
 Blockbook refuses to start with `-insightui` but no `-insight` or `-public`. Only
-`configs/coins/firo.json`, `configs/coins/zclassic.json`, `configs/coins/zero.json`, `configs/coins/axe.json`, `configs/coins/bitcoinz.json` and
-`configs/coins/komodo.json` set it; BTC and ZEC keep the
+`configs/coins/firo.json`, `configs/coins/zclassic.json`, `configs/coins/zero.json`, `configs/coins/axe.json`, `configs/coins/bitcoinz.json`,
+`configs/coins/komodo.json` and `configs/coins/anon.json` set it; BTC and ZEC keep the
 listener exactly as before (unknown paths are the Insight JSON 404).
 
 With it on, the Insight router still answers first. Every route in the table below, under
@@ -232,7 +252,9 @@ a malformed date gives 400. Block times are not strictly monotonic, so a block w
 hours of a day boundary can be placed on the neighbouring day. `block` loads every transaction of
 the block once (cached in a small LRU) to compute `reward`. `rawblock` uses the worker's raw block
 and, when the backend does not provide it, falls back to the daemon's `getblock <hash> 0`; the
-daemon "not found" code gives 404. The `rawtx` route likewise falls back to `getrawtransaction`.
+daemon "not found" code gives 404. A daemon whose `getblock` verbose argument is a boolean only
+(anond, which answers a number with "JSON value is not a boolean as expected") is asked again
+with `false`. The `rawtx` route likewise falls back to `getrawtransaction`.
 
 ### Fee, currency and message verification
 
@@ -319,8 +341,9 @@ Not served (Insight 404 with CORS headers): the other stock `statistics/*` route
 
 ## Zcash extension
 
-Every coin on the Zcash parser (`bchain/coins/zec`: Zcash, Zclassic, Zero, Flux, BitcoinZ, and
-Komodo through `bchain/coins/kmd`, which embeds the Zcash parser) gets the `"zcash"` extension. It adds no route; it
+Every coin on the Zcash parser (`bchain/coins/zec`: Zcash, Zclassic, Zero, Flux, BitcoinZ;
+Komodo through `bchain/coins/kmd` and Anon through `bchain/coins/anon`, which embed the Zcash
+parser) gets the `"zcash"` extension. It adds no route; it
 adds the fields the Zcash-family stock Insight (bitcore-node `getDetailedTransaction` with
 insight-api `transformTransaction`, the same on the zelcash, zclassic and bitcoinz branches and
 on insight-api-komodo) puts on every tx object, on `tx`, `txs?block=`/`txs?address=`, address
@@ -342,6 +365,16 @@ the daemon prints them, else the coin values, parsed exactly. On a Zcash v5 tx t
 a tx whose input value is unknown, keeps the generic `fees`; a negative result is shown as 0.
 `valueIn` stays the converter's transparent satoshi string.
 
+Anon (ANON) never activated Overwinter or Sapling. Besides version 1 and version 2 (PHGR Sprout)
+txs it has version -3 (`0xfffffffd`, Groth16 Sprout JoinSplits with no Overwinter header). Its
+stock Insight (bitcore-node-zelcash `anon`) applies the same `version >= 2` gate, so a v-3 tx
+gets no `vjoinsplit` and its `fees` is transparent in − out: a shielding tx shows the whole
+shielded amount as its fee (`6caa4ad9…`, block 1368074: `fees` 4.17574687, `valueOut` 0), as
+stock does, and a z→t tx shows 0 where stock shows a negative fee. anond's `getblock` takes only
+`true`/`false`, so `bchain/coins/anon` reads blocks with `getblock <hash> true` and one
+`getrawtransaction <txid> 1` per tx, never sends a numeric verbosity, and never decodes raw tx
+hex (btcd cannot read v2 or v-3 txs); `rawblock` is `getblock <hash> false`, passed through.
+
 The fields come from the daemon's verbose tx JSON. A pending tx carries it from the worker; for a
 confirmed tx the tx cache keeps only the packed tx, so the listener calls `getrawtransaction
 <txid> 1`: for a page of history all missing txs at once, at most 8 calls in parallel, and it
@@ -353,8 +386,9 @@ generic 500. Without daemon RPC the fields are left out and `fees` stays generic
 
 A coin whose chain parser implements `InsightExtension() string` (the
 `server.InsightExtensionProvider` interface) gets that named extension on top of the generic
-table; today `bchain/coins/firo` does (`"firo"`) and `bchain/coins/zec` (`"zcash"`, see
-[Zcash extension](#zcash-extension)). Other coins gain no route and no label:
+table; today `bchain/coins/firo` does (`"firo"`), `bchain/coins/zec` (`"zcash"`, see
+[Zcash extension](#zcash-extension)) and `bchain/coins/ravencoin` (`"ravencoin"`, see
+[Ravencoin extension](#ravencoin-extension)). Other coins gain no route and no label:
 the extension only adds paths the generic router does not know, replaces `currency`, and
 decorates converted transactions. It serves the Firo-specific routes of the stock Firo Insight
 (insight-api-zcoin 0.4.5, the API on FIRO-01 port 3001), each with the firod call the stock
@@ -432,6 +466,104 @@ these outputs under the full script (no address): it needs a full resync for the
 balance, history and utxos to be right. `-rollback` cannot reach back to the first Spark name
 fee output (between blocks 1,300,000 and 1,350,000), because Firo keeps the per-block data needed
 to disconnect only for the last `block_addresses_to_keep` (300) blocks.
+
+## Ravencoin extension
+
+`bchain/coins/ravencoin` names the `"ravencoin"` extension. It serves what the RVN stock Insight
+(RavenDevKit insight-api on ravencore-node, explorer.rvn port 3001) adds for assets, from ravend's
+own indexes. Blockbook's index has no asset support (an asset output's script is indexed as its
+own non-standard key, so the owner address sees neither the output nor the tx), and none is
+added: no parser or database change and no resync. ravend must run with `txindex`,
+`addressindex`, `assetindex`, `spentindex` and `timestampindex`; `configs/coins/ravencoin.json`
+sets them in the backend `additional_params`, so a regenerated `ravencoin.conf` keeps them
+(turning one on for an existing datadir needs a ravend `-reindex`). The backend is ravend 4.8.0
+(the release the RVN hosts already run).
+
+| Route | ravend calls | Response |
+| --- | --- | --- |
+| `GET addr/:addr/asset/:asset/utxo`, `GET addrs/:addrs/asset/:asset/utxo` | `getaddressmempool {addresses} true`, `getaddressutxos {addresses, chaininfo:true, assetName}` (cached per tip) | stock rows `{address,txid,vout,scriptPubKey,assetName,amount,satoshis,height,confirmations}`; a mempool row has `ts` and no `height`, confirmations 0 |
+| `GET addrs/:addr/txs[/:from[/:to]]`, `addrs/txs?address=`, `txs?address=`, multi-address history | `getaddressmempool {addresses} true`, `getaddresstxids {addresses} true` | the generic shapes; the txid list is ravend's |
+| `GET assets?asset=&verbose=` | none | 500 `{"status":"error","error":"Backend request failed"}` |
+
+Asset utxos follow stock's `getAddressUnspentOutputs`: ravend's confirmed list newest first
+(stock reverses ravend's height order), preceded by the mempool outputs of the asset (newest
+first, outputs already confirmed dropped), minus every output a mempool tx spends.
+`asset` `*` is every asset except RVN (passed to ravend as is). `confirmations` is ravend's tip
+height (from the same call) − height + 1. `scriptPubKey` is ravend's output script, the standard
+script plus the `c0 … 75` asset part: the wallet signs over it, so it must be the full prevout
+script. The single-address route is uncapped; the multi-address one takes at most 100 addresses
+and 20000 rows (413 above that), one ravend call for all of them. An address the parser rejects is a 400.
+A mempool output whose tx Blockbook cannot load is left out (logged as a warning): without the tx
+there is no output script the wallet could sign over.
+
+`getaddressutxos` answers with every row at once (several MB for `*` on an airdrop address), so
+it gets the same protection as the history list below: the confirmed answer is cached per
+Blockbook tip block hash, sorted address set and asset name (LRU, 256 answers and 200,000 rows at
+most; a new tip starts afresh; an answer over the row bound is served but not kept), concurrent
+identical requests share one call, and these calls share the 3 ravend slots of `getaddresstxids`
+(a request that cannot start one within 2 s gets 503). The mempool is read on every request, so
+pending outputs and spends show up at once. While Blockbook trails ravend by a block, an output
+spent by a tx that just confirmed can still be listed (it left the mempool, and the cached set is
+from the previous tip) until Blockbook indexes the block.
+
+Asset names may contain `/` (sub-assets, `WXRAVEN/AIRDROP`) and `#` (qualifiers, `#KYC`), which
+the wallet sends encoded as `%2F` and `%23`. These two routes are matched on the escaped path
+(`URL.EscapedPath()`) before any other route, and each segment is unescaped on its own, so the
+name reaches ravend whole. Any proxy in front must pass `%2F` through without decoding it.
+
+History lists come from ravend, so a tx that only moves assets (no RVN to or from the address) is
+listed, as on stock: the address's mempool txids (newest first, those already confirmed dropped),
+then the `getaddresstxids` list reversed, each txid once. For one address that is ravend's index
+order reversed, as stock: grouped by asset, each group newest first (so not strictly newest first
+for an address holding assets); for several addresses it is by height, then txid, descending.
+ravend's `start`/`end` range cannot bound the read (with assets it ignores `start` and stops
+inside the first asset), so the confirmed list is read whole, cached per address set and
+Blockbook tip block hash (LRU, 256 lists and 1,000,000 txids at most; a new tip starts afresh),
+with concurrent identical requests sharing one call and at most 3 `getaddresstxids` calls at once
+(a request that cannot start one within 2 s gets 503). The mempool is read on every request.
+While Blockbook trails ravend by a block, a tx that just confirmed can be missing from both parts
+until Blockbook indexes the block. Windows, defaults and limits are the generic
+ones (`from`/`to` up to 1000 apart, `txs?address=` pages of 10, multi-address bounds);
+`totalItems` and `pagesTotal` count the whole list. Each tx is loaded from Blockbook as on other
+coins. `addr/:addr` (balance, `txApperances`, `transactions`) stays the generic Blockbook
+summary, RVN only.
+
+Every tx the listener returns gets stock's asset fields. The Go decoder reads ravend's script
+format (`rvn` + `t` transfer, `q` new, `o` owner, `r` reissue, after a P2PKH or P2SH script):
+
+| Output | Fields |
+| --- | --- |
+| asset output | `assetType` (`transfer_asset`, `new_asset` for a new asset or an owner token, `reissue_asset`); `asset` with ravend's keys in its order: `name`, `amount` (coins), on a transfer `message` (base58 IPFS hash or hex txid) and `expire_time` when the script has them, on a new or reissued asset `units`, `reissuable` (0/1, a number as ravend prints it) and `ipfs_hash` when present; `scriptPubKey.addresses` (and `addresses`, `isAddress`) = the owner; `scriptPubKey.type` `pubkeyhash`/`scripthash`; value 0 |
+| input spending an asset output | `addr` = the owner (decoded from the spent output's script); value 0 |
+
+Null asset data outputs (scripts starting with `c0`: address tags, freezes, verifier strings) and
+any script that does not decode are left alone.
+
+Intentional differences from stock:
+
+- A mempool asset utxo carries its real output script (from the tx); stock put the address's
+  plain P2PKH script there, which cannot be signed over. When the tx cannot be read, the row is
+  left out rather than given that plain script (it reappears once the tx can be read or confirms).
+- History includes pending asset-only txs (the mempool is queried with assets; stock queried it
+  without, so they appeared only once confirmed).
+- `new_asset` outputs carry no `expire_time`. ravend 4.8.0 prints an uninitialised value there
+  (for example `138689745223440` on the `#KYC` issue), which stock passed through.
+- `assets?asset=&verbose=` keeps stock's failure but as a JSON 500 with no stack trace; the
+  wallet then falls back to 8 decimals, as today.
+- `addr/:addr/balances`, `tags` and `frozen` are 404 (stock: empty 200 and HTML 500s). Without the
+  extension those paths would be the generic `addr/:addr/<x>` summary form, so the extension
+  claims them only to answer 404. `addr/:addr/checkTag|checkFrozen/asset/:a`,
+  `assets/restricted|tags|qualifiers|frozen|checkVerifier`, `asset/:a/verifier|checkFrozen|tagged`,
+  `statistics/*` other than circulating-supply, `markets/info` and `utils/estimatesmartfee` are
+  unknown routes (404); all failed on stock. `utils/estimatefee`, which the RVN stock removed, is
+  the generic route.
+- `addr/:addr` `unconfirmedBalance` is RVN only; stock added mempool asset amounts to it.
+- Asset outputs do not get `isOwn` in history (Blockbook files them under no address).
+
+A ravend error is a generic 500 and the routes are 501 without daemon RPC. The confirmed
+`getaddresstxids` lists and `getaddressutxos` answers are cached per Blockbook tip as described
+above, so an airdrop-heavy address costs one such call per new block, not per request; the
+`getaddressmempool` call runs on every request.
 
 ## Readiness and shutdown
 

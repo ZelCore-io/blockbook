@@ -273,3 +273,9 @@ func Test_UnpackTx(t *testing.T) {
 		})
 	}
 }
+
+func TestInsightExtension(t *testing.T) {
+	if got := NewRavencoinParser(GetChainParams("main"), &btc.Configuration{}).InsightExtension(); got != "ravencoin" {
+		t.Errorf("InsightExtension() = %q, want ravencoin", got)
+	}
+}

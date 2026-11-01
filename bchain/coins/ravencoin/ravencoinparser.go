@@ -73,3 +73,10 @@ func (p *RavencoinParser) PackTx(tx *bchain.Tx, height uint32, blockTime int64) 
 func (p *RavencoinParser) UnpackTx(buf []byte) (*bchain.Tx, uint32, error) {
 	return p.baseparser.UnpackTx(buf)
 }
+
+// InsightExtension names the native Insight listener's Ravencoin extension,
+// which serves the asset routes and tx fields of the RVN stock Insight API
+// from ravend's address and asset indexes.
+func (p *RavencoinParser) InsightExtension() string {
+	return "ravencoin"
+}

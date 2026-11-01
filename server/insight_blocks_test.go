@@ -231,6 +231,20 @@ func TestInsightRawBlockFallback(t *testing.T) {
 	if !reflect.DeepEqual(seen, []interface{}{"getblock", hash, 0}) {
 		t.Fatalf("rpc %v", seen)
 	}
+	// A daemon that takes only a boolean verbose (anond) rejects 0; the
+	// listener asks again with false.
+	seen = nil
+	s.SetBackend(func(method string, params []interface{}, result interface{}) error {
+		seen = append(seen, params[1])
+		if params[1] != false {
+			return &bchain.RPCError{Code: -1, Message: "JSON value is not a boolean as expected"}
+		}
+		return json.Unmarshal([]byte(`"00ee"`), result)
+	}, "ANON")
+	w = insightRequest(s, "GET", "/api/rawblock/"+hash, "")
+	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"rawblock":"00ee"}` || !reflect.DeepEqual(seen, []interface{}{0, false}) {
+		t.Fatalf("%d %s, verbose sent %v", w.Code, w.Body, seen)
+	}
 	// Both fail: generic 500, nothing leaks.
 	s.SetBackend(func(string, []interface{}, interface{}) error { return errors.New("secret daemon text") }, "ZEC")
 	w = insightRequest(s, "GET", "/api/rawblock/"+hash, "")

@@ -167,7 +167,18 @@ func insightMatch(r *http.Request) (insightRoute, []string, bool) {
 // insightPathParts returns the path segments after the "api" or
 // "insight-api" prefix (insightSegments).
 func insightPathParts(r *http.Request) ([]string, bool) {
-	parts := insightSegments(r)
+	return insightPrefixed(insightSegments(r))
+}
+
+// insightEscapedPathParts is insightPathParts over the escaped path, so an
+// encoded "/" (%2F) inside a segment does not split it.
+func insightEscapedPathParts(r *http.Request) ([]string, bool) {
+	return insightPrefixed(insightSplitPath(r.URL.EscapedPath()))
+}
+
+// insightPrefixed returns the segments after the "api" or "insight-api"
+// prefix.
+func insightPrefixed(parts []string) ([]string, bool) {
 	if len(parts) < 3 || parts[0] != "" || (parts[1] != "api" && parts[1] != "insight-api") {
 		return nil, false
 	}
@@ -184,7 +195,12 @@ func insightPathParts(r *http.Request) ([]string, bool) {
 // that match no route, and the request itself is unchanged, so a fallthrough
 // to the -insightui handler sees the path as sent.
 func insightSegments(r *http.Request) []string {
-	parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
+	return insightSplitPath(r.URL.Path)
+}
+
+// insightSplitPath is insightSegments for a path string (decoded or escaped).
+func insightSplitPath(path string) []string {
+	parts := strings.Split(strings.TrimSuffix(path, "/"), "/")
 	if len(parts) > 3 && parts[0] == "" && (parts[1] == "api" || parts[1] == "insight-api") && parts[2] == "" {
 		i := 2
 		for i < len(parts)-1 && parts[i] == "" {
@@ -216,6 +232,14 @@ func insightOwnsPath(r *http.Request) bool {
 
 // match is insightMatch plus the routes of the coin's extension, if any.
 func (s *InsightServer) match(r *http.Request) (insightRoute, []string, bool) {
+	if em, ok := s.ext.(insightEscapedMatcher); ok {
+		if parts, ok := insightEscapedPathParts(r); ok {
+			if route, methods, ok := em.matchEscaped(parts); ok {
+				route.query = r.URL.Query()
+				return route, methods, true
+			}
+		}
+	}
 	route, methods, ok := insightMatch(r)
 	if ok || s.ext == nil {
 		return route, methods, ok
