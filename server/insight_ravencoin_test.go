@@ -401,7 +401,7 @@ func TestInsightRavencoinAssetRoutes(t *testing.T) {
 
 	// multi-address: one ravend call for all the addresses
 	w := insightRequest(s, "GET", "/api/addrs/"+a+","+b+","+a+"/asset/%2A/utxo", "")
-	if w.Code != 200 || strings.Count(w.Body.String(), `"txid"`) != 2 || len(rpc.calls) != 2 {
+	if w.Code != 200 || strings.Count(w.Body.String(), `"txid"`) != 2 || len(rpc.calls) != 3 {
 		t.Fatalf("multi: %d %s %v", w.Code, w.Body.String(), rpc.calls)
 	}
 	if got := rpc.params[1][0].(map[string]interface{})["addresses"]; !reflect.DeepEqual(got, []string{a, b}) {

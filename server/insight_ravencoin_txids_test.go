@@ -301,14 +301,14 @@ func TestInsightRavencoinTxidsKey(t *testing.T) {
 // list them the summary keeps Blockbook's counts instead of failing.
 func TestInsightRavencoinSummaryCountsAssetTxs(t *testing.T) {
 	s, rpc, _, _ := insightRvnTxidSetup(t)
-	rpc.txids["A"] = []string{"x1", "a", "b", "c", "x2"}
+	rpc.txids[insightRvnA] = []string{"x1", "a", "b", "c", "x2"}
 	rpc.mempool = []insightRvnDelta{{Txid: "pending"}}
 	var got struct {
 		Txs          int      `json:"txApperances"`
 		Pending      int      `json:"unconfirmedTxApperances"`
 		Transactions []string `json:"transactions"`
 	}
-	for _, path := range []string{"/api/addr/A?noTxList=1", "/api/addr/A"} {
+	for _, path := range []string{"/api/addr/" + insightRvnA + "?noTxList=1", "/api/addr/" + insightRvnA} {
 		w := insightRequest(s, "GET", path, "")
 		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 || got.Txs != 5 || got.Pending != 1 {
 			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
@@ -318,7 +318,7 @@ func TestInsightRavencoinSummaryCountsAssetTxs(t *testing.T) {
 		t.Fatalf("transactions %v, want %v", got.Transactions, want)
 	}
 	rpc.fail = true
-	for _, path := range []string{"/api/addr/A?noTxList=1", "/api/addr/A"} {
+	for _, path := range []string{"/api/addr/" + insightRvnA + "?noTxList=1", "/api/addr/" + insightRvnA} {
 		got.Transactions = nil
 		w := insightRequest(s, "GET", path, "")
 		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 || got.Txs != 3 {
