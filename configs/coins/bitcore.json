@@ -9,7 +9,8 @@
         "backend_rpc": 8054,
         "backend_message_queue": 38354,
         "blockbook_internal": 9054,
-        "blockbook_public": 9154
+        "blockbook_public": 9154,
+        "blockbook_electrum_http": 3456
     },
     "ipc": {
         "rpc_url_template": "http://127.0.0.1:{{.Ports.BackendRPC}}",
@@ -61,10 +62,11 @@
             "block_addresses_to_keep": 300,
             "additional_params": {
                 "fiat_rates": "coingecko",
-                "fiat_rates_vs_currencies": "AED,ARS,AUD,BDT,BHD,BMD,BRL,CAD,CHF,CLP,CNY,CZK,DKK,EUR,GBP,HKD,HUF,IDR,ILS,INR,JPY,KRW,KWD,LKR,MMK,MXN,MYR,NGN,NOK,NZD,PHP,PKR,PLN,RUB,SAR,SEK,SGD,THB,TRY,TWD,UAH,USD,VEF,VND,ZAR,BTC,ETH",
+                "fiat_rates_vs_currencies": "AED,ARS,AUD,BDT,BHD,BMD,BRL,CAD,CHF,CLP,CNY,CZK,DKK,EUR,GBP,HKD,HUF,IDR,ILS,INR,JPY,KRW,KWD,LKR,MMK,MXN,MYR,NGN,NOK,NZD,PHP,PKR,PLN,RUB,SAR,SEK,SGD,THB,TRY,TWD,UAH,USD,VND,ZAR,BTC,ETH",
                 "fiat_rates_params": "{\"coin\": \"bitcore\", \"periodSeconds\": 900}"
             }
-        }
+        },
+        "electrum_http_binding_template": "${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookElectrumHTTP}}"
     },
     "meta": {
         "package_maintainer": "LIMXTEC",

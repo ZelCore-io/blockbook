@@ -34,6 +34,8 @@ Good examples of coin configuration are
     * `blockbook_internal` – Blockbook's internal port that is used for metric collecting, debugging etc.
     * `blockbook_insight` – Optional native Insight HTTP port (1–65535). Must be paired with
        `blockbook.insight_binding_template`; absent fields leave Insight disabled.
+    * `blockbook_electrum_http` – Optional electrum-http compatible listener port (1–65535). Must be
+       paired with `blockbook.electrum_http_binding_template`; absent fields leave it disabled.
     * `blockbook_public` – Blockbook's public HTTP/API/WebSocket port.
 
 * `ipc` – Defines how Blockbook connects its back-end service.
@@ -113,6 +115,13 @@ Good examples of coin configuration are
        (`ports.blockbook_insight` and `insight_binding_template`). Set `public_url` in
        `block_chain.additional_params` with it, so pages on the second hostname carry the canonical
        URL of the main explorer. See [Explorer UI on the listener](insight-compatibility.md#explorer-ui-on-the-listener).
+    * `electrum_http_binding_template` – Optional template for *-electrumhttp*; requires
+       `ports.blockbook_electrum_http`, an explicit host and the configured port, checked like
+       `insight_binding_template` (the host may be the exact token `${BLOCKBOOK_INSIGHT_HOST}`).
+       For example `${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookElectrumHTTP}}` with port `3456`
+       generates `-electrumhttp=${BLOCKBOOK_INSIGHT_HOST}:3456`. Plain HTTP for a reverse proxy;
+       Bitcoin-type chains with eight decimals only. See
+       [electrum-http-compatibility.md](electrum-http-compatibility.md).
     * `explorer_url` – URL of blockchain explorer. Leave empty for internal explorer.
     * `additional_params` – Additional params of exec command (see [Dogecoin definition](/configs/coins/dogecoin.json)).
     * `block_chain` – Configuration of BlockChain type that ensures communication with back-end service. All options

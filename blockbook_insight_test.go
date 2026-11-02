@@ -62,7 +62,10 @@ func TestSignalShutdownDrainsInsightBeforeDaemon(t *testing.T) {
 	shutdownSig := make(chan os.Signal, 1)
 	chain := &shutdownInsightChain{closed: make(chan struct{})}
 	done := make(chan struct{})
-	go func() { waitForSignalAndShutdown(nil, nil, s, chain, shutdownSig, 10*time.Millisecond); close(done) }()
+	go func() {
+		waitForSignalAndShutdown(nil, nil, s, nil, chain, shutdownSig, 10*time.Millisecond)
+		close(done)
+	}()
 	select {
 	case <-done:
 		t.Fatal("shutdown did not wait for its dedicated signal")

@@ -938,3 +938,75 @@ func TestBlockbookServiceTemplateAppendsServiceParamsLast(t *testing.T) {
 		t.Fatalf("expected %q at the end of ExecStart:\n%s", want, out.String())
 	}
 }
+
+func TestElectrumHTTPServiceConfiguration(t *testing.T) {
+	var overrideKeys []string
+	for _, env := range os.Environ() {
+		key := strings.SplitN(env, "=", 2)[0]
+		if strings.HasPrefix(key, "BB_") {
+			overrideKeys = append(overrideKeys, key)
+		}
+	}
+	withTemporarilyUnsetEnv(t, overrideKeys...)
+	t.Setenv(buildEnvVar, buildEnvProd)
+	const insight = `,"blockbook_insight":9876`
+	const insightBinding = `,"insight_binding_template":"${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookInsight}}"`
+	for _, tc := range []struct {
+		name, port, binding, want string
+		invalid                   bool
+	}{
+		{name: "disabled"},
+		{name: "literal host", port: `,"blockbook_electrum_http":3456`, binding: `,"electrum_http_binding_template":"127.0.0.1:{{.Ports.BlockbookElectrumHTTP}}"`, want: " -electrumhttp=127.0.0.1:3456 "},
+		{name: "env host", port: `,"blockbook_electrum_http":3456`, binding: `,"electrum_http_binding_template":"${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookElectrumHTTP}}"`, want: " -electrumhttp=${BLOCKBOOK_INSIGHT_HOST}:3456 "},
+		{name: "with insight", port: insight + `,"blockbook_electrum_http":3456`, binding: insightBinding + `,"electrum_http_binding_template":"${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookElectrumHTTP}}"`, want: " -insight=${BLOCKBOOK_INSIGHT_HOST}:9876 -electrumhttp=${BLOCKBOOK_INSIGHT_HOST}:3456 "},
+		{name: "port only", port: `,"blockbook_electrum_http":3456`, invalid: true},
+		{name: "template only", binding: `,"electrum_http_binding_template":"127.0.0.1:3456"`, invalid: true},
+		{name: "bad port", port: `,"blockbook_electrum_http":65536`, binding: `,"electrum_http_binding_template":"127.0.0.1:{{.Ports.BlockbookElectrumHTTP}}"`, invalid: true},
+		{name: "wrong port", port: `,"blockbook_electrum_http":3456`, binding: `,"electrum_http_binding_template":"127.0.0.1:1234"`, invalid: true},
+		{name: "host required", port: `,"blockbook_electrum_http":3456`, binding: `,"electrum_http_binding_template":":{{.Ports.BlockbookElectrumHTTP}}"`, invalid: true},
+		{name: "other env var", port: `,"blockbook_electrum_http":3456`, binding: `,"electrum_http_binding_template":"${HOME}:{{.Ports.BlockbookElectrumHTTP}}"`, invalid: true},
+		{name: "unsafe whitespace", port: `,"blockbook_electrum_http":3456`, binding: `,"electrum_http_binding_template":"127.0.0.1:3456 -public=0.0.0.0:80"`, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Mkdir(filepath.Join(dir, "coins"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			coin := `{"coin":{"name":"Example","alias":"example"},"ports":{"blockbook_internal":9131,"blockbook_public":9130` + tc.port + `},"blockbook":{"package_name":"blockbook-example","public_binding_template":"127.0.0.1:{{.Ports.BlockbookPublic}}"` + tc.binding + `}}`
+			if err := os.WriteFile(filepath.Join(dir, "coins", "example.json"), []byte(coin), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "environ.json"), []byte(`{"blockbook_install_path":"/opt/coins"}`), 0644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadConfig(dir, "example")
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("invalid electrum-http configuration accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := filepath.Join(dir, "out")
+			if err := GeneratePackageDefinitions(cfg, "../templates", out); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(out, "blockbook/debian/service"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := string(data)
+			if tc.want == "" {
+				if strings.Contains(service, "-electrumhttp") {
+					t.Fatalf("electrum-http enabled by default: %s", service)
+				}
+				return
+			}
+			if !strings.Contains(service, tc.want) {
+				t.Fatalf("service lacks %q: %s", tc.want, service)
+			}
+		})
+	}
+}

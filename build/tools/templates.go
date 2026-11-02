@@ -72,6 +72,9 @@ type Config struct {
 		BlockbookInternal   int `json:"blockbook_internal"`
 		BlockbookPublic     int `json:"blockbook_public"`
 		BlockbookInsight    int `json:"blockbook_insight,omitempty"`
+		// BlockbookElectrumHTTP is the optional electrum-http compatible
+		// listener's port (-electrumhttp).
+		BlockbookElectrumHTTP int `json:"blockbook_electrum_http,omitempty"`
 	} `json:"ports"`
 	IPC struct {
 		RPCURLTemplate              string             `json:"rpc_url_template"`
@@ -91,10 +94,13 @@ type Config struct {
 		InsightBindingTemplate  string `json:"insight_binding_template,omitempty"`
 		// InsightUI adds -insightui: the Insight listener also serves the
 		// public explorer for paths Insight does not match.
-		InsightUI        bool   `json:"insight_ui,omitempty"`
-		ExplorerURL      string `json:"explorer_url"`
-		AdditionalParams string `json:"additional_params"`
-		BlockChain       struct {
+		InsightUI bool `json:"insight_ui,omitempty"`
+		// ElectrumHTTPBindingTemplate renders -electrumhttp; it requires
+		// ports.blockbook_electrum_http.
+		ElectrumHTTPBindingTemplate string `json:"electrum_http_binding_template,omitempty"`
+		ExplorerURL                 string `json:"explorer_url"`
+		AdditionalParams            string `json:"additional_params"`
+		BlockChain                  struct {
 			Parse                  bool   `json:"parse,omitempty"`
 			Subversion             string `json:"subversion,omitempty"`
 			AddressFormat          string `json:"address_format,omitempty"`
@@ -381,6 +387,7 @@ func (c *Config) ParseTemplate() *template.Template {
 		"Blockbook.InternalBindingTemplate":       c.Blockbook.InternalBindingTemplate,
 		"Blockbook.PublicBindingTemplate":         c.Blockbook.PublicBindingTemplate,
 		"Blockbook.InsightBindingTemplate":        c.Blockbook.InsightBindingTemplate,
+		"Blockbook.ElectrumHTTPBindingTemplate":   c.Blockbook.ElectrumHTTPBindingTemplate,
 	}
 
 	funcMap := template.FuncMap{
@@ -455,6 +462,9 @@ func LoadConfig(configsDir, coin string) (*Config, error) {
 	config.Meta.BuildDatetime = time.Now().Format("Mon, 02 Jan 2006 15:04:05 -0700")
 	config.Env.Architecture = runtime.GOARCH
 	if err := config.validateInsight(); err != nil {
+		return nil, err
+	}
+	if err := config.validateElectrumHTTP(); err != nil {
 		return nil, err
 	}
 	config.Env.BlockbookPprofBinding = blockbookPprofBindingForBuildEnv(config, buildEnv)
@@ -620,6 +630,9 @@ func GeneratePackageDefinitions(config *Config, templateDir, outputDir string) e
 	if err := config.validateInsight(); err != nil {
 		return err
 	}
+	if err := config.validateElectrumHTTP(); err != nil {
+		return err
+	}
 	templ := config.ParseTemplate()
 
 	err := makeOutputDir(outputDir)
@@ -708,13 +721,35 @@ func (c *Config) validateInsight() error {
 	if port < 1 || port > 65535 || binding == "" {
 		return fmt.Errorf("Insight requires both a valid blockbook_insight port and insight_binding_template")
 	}
-	t, err := template.New("insight").Option("missingkey=error").Parse(binding)
+	return c.validateListenerBinding("Insight", binding, port)
+}
+
+// validateElectrumHTTP checks the electrum-http listener's opt-in pair the
+// same way: both fields or neither, an explicit host and the configured port.
+// The host may be ${BLOCKBOOK_INSIGHT_HOST}, the private address the Insight
+// listener binds, so a coin can expose both listeners on the same interface.
+func (c *Config) validateElectrumHTTP() error {
+	port, binding := c.Ports.BlockbookElectrumHTTP, c.Blockbook.ElectrumHTTPBindingTemplate
+	if port == 0 && binding == "" {
+		return nil
+	}
+	if port < 1 || port > 65535 || binding == "" {
+		return fmt.Errorf("electrum-http requires both a valid blockbook_electrum_http port and electrum_http_binding_template")
+	}
+	return c.validateListenerBinding("electrum-http", binding, port)
+}
+
+// validateListenerBinding renders an optional listener's binding template and
+// requires an explicit host and the configured port, with
+// ${BLOCKBOOK_INSIGHT_HOST} as the only environment reference allowed.
+func (c *Config) validateListenerBinding(name, binding string, port int) error {
+	t, err := template.New("binding").Option("missingkey=error").Parse(binding)
 	if err != nil {
-		return fmt.Errorf("invalid Insight binding template: %w", err)
+		return fmt.Errorf("invalid %s binding template: %w", name, err)
 	}
 	var out bytes.Buffer
 	if err := t.Execute(&out, c); err != nil {
-		return fmt.Errorf("invalid Insight binding template: %w", err)
+		return fmt.Errorf("invalid %s binding template: %w", name, err)
 	}
 	value := out.String()
 	host, renderedPort, err := net.SplitHostPort(value)
@@ -727,12 +762,12 @@ func (c *Config) validateInsight() error {
 		checked = strings.TrimPrefix(value, insightBindHostEnv)
 	}
 	if err != nil || host == "" || renderedPort != strconv.Itoa(port) || strings.ContainsAny(checked, " \t\r\n\"'\\%$") {
-		return fmt.Errorf("Insight binding must contain an explicit host and configured port")
+		return fmt.Errorf("%s binding must contain an explicit host and configured port", name)
 	}
 	if !envHost && net.ParseIP(host) == nil {
 		for _, ch := range host {
 			if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '.' || ch == '-') {
-				return fmt.Errorf("invalid Insight bind host")
+				return fmt.Errorf("invalid %s bind host", name)
 			}
 		}
 	}
