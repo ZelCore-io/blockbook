@@ -52,10 +52,19 @@ func (f *fakeAnond) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.verboses = append(f.verboses, verbose)
 		f.mu.Unlock()
-		switch verbose {
-		case true:
+		var hash string
+		_ = json.Unmarshal(req.Params[0], &hash)
+		switch {
+		case verbose == true && hash == genesisHash:
+			result = `{"hash":"` + genesisHash + `","height":0,"time":1525564800,"tx":["` + unknownTxid + `"]}`
+		case verbose == true && hash == missingTxBlockHash:
+			result = `{"hash":"` + missingTxBlockHash + `","height":5,"time":1525565000,"tx":["` + coinbaseTxid + `","` + unknownTxid + `"]}`
+		}
+		switch {
+		case result != "":
+		case verbose == true:
 			result = string(readTestdata(f.t, "block_1368074.json"))
-		case false:
+		case verbose == false:
 			result = `"` + string(readTestdata(f.t, "block_1368074.hex")) + `"`
 		default:
 			rpcErr = `{"code":-1,"message":"JSON value is not a boolean as expected"}`
@@ -156,6 +165,30 @@ func TestAnonRPC_GetBlock(t *testing.T) {
 	}
 	if len(f.verboses) == 0 || f.verboses[len(f.verboses)-1] != false {
 		t.Errorf("verboses = %v", f.verboses)
+	}
+}
+
+const (
+	genesisHash        = "053a237d7ad7106e341a403286604df55bfe6f301fc9fff03a06f81c8c565b34"
+	missingTxBlockHash = "0000000000000000000000000000000000000000000000000000000000000005"
+	unknownTxid        = "e50058ee0a974a2e8562fe45782bc1a104af045df1b3d5c0de4aea2e972d1d59"
+)
+
+func TestAnonRPC_GetBlockGenesisSkipsCoinbase(t *testing.T) {
+	z, _ := newTestAnonRPC(t)
+	block, err := z.GetBlock(genesisHash, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if block.Height != 0 || block.Hash != genesisHash || len(block.Txs) != 0 {
+		t.Fatalf("genesis = %+v, %d txs", block.BlockHeader, len(block.Txs))
+	}
+}
+
+func TestAnonRPC_GetBlockMissingTxFails(t *testing.T) {
+	z, _ := newTestAnonRPC(t)
+	if _, err := z.GetBlock(missingTxBlockHash, 5); err == nil || !strings.Contains(err.Error(), unknownTxid) {
+		t.Fatalf("GetBlock with a missing tx = %v, want an error naming it", err)
 	}
 }
 
