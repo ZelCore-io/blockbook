@@ -10,6 +10,7 @@
         "backend_message_queue": 38354,
         "blockbook_internal": 9054,
         "blockbook_public": 9154,
+        "blockbook_insight": 8888,
         "blockbook_electrum_http": 3456
     },
     "ipc": {
@@ -66,6 +67,8 @@
                 "fiat_rates_params": "{\"coin\": \"bitcore\", \"periodSeconds\": 900}"
             }
         },
+        "insight_binding_template": "${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookInsight}}",
+        "insight_ui": true,
         "electrum_http_binding_template": "${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookElectrumHTTP}}"
     },
     "meta": {

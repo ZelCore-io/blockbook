@@ -54,6 +54,10 @@ check and rolls the install back. All of this holds with `--skip-build` and
 unit or `ExecStart` drop-in keeps its own command line and the listener is not started.
 Coins without `ports.blockbook_insight` are not checked or changed.
 
+Bitcore (BTX) runs the listener with `-insightui` on port 8888, taken over from btc-rpc-explorer
+(the pm2 `explorer` app) behind explorer.btx, next to its electrum-http listener on 3456. The wallet
+only opens `/tx/<txid>` links there, which the explorer UI serves. Stop the pm2 `explorer` app first.
+
 On BTC and ZEC hosts the listener takes over port 9876 from the converter (the converter is
 stopped and disabled, not removed), so HAProxy needs no change. Port 9876 is registered for both
 coins in the "blockbook insight" column of [ports.md](ports.md); two coins may share it because
