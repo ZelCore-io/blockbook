@@ -185,14 +185,42 @@ broadcast messages are ElectrumX's formats.
   address's `balance`, `history` and `utxo` here and not on the proxy.
 - **Mempool entry order.** ElectrumX leaves the order of mempool entries unspecified; the
   listener puts height `0` entries before `-1` entries, each sorted by txid.
-- **Raptoreum.** The proxy's Raptoreum-only coinbase special case is not reproduced (it depends on
-  `coin`, and Raptoreum is not a Bitcoin-type eight-decimal chain here).
+- **Raptoreum.** Raptoreum is a Bitcoin-type chain with eight decimals and is served like BTX.
+  The proxy's Raptoreum-only special case (it depends on `coin` and skips inputs funded by a
+  coinbase in `nicehistory`, so its fees come out wrong) is not reproduced: every input is
+  resolved as on any other coin. The two intended `utxo`/`niceutxo` differences are below.
 - **OPTIONS** answers 204 with the CORS headers and runs no call (the proxy runs the call for any
   method). Methods other than GET, HEAD and OPTIONS answer 405.
 - **A missing broadcast param** is sent to the daemon as an empty string, and the bracket of the
   refusal shows `[None]`.
 - **Repeated parameters** (`param=a&param=b`) are joined with `,` as JavaScript would print the
   array; ElectrumX would print a Python list.
+
+## Raptoreum spend rule
+
+ElectrumX lists every unspent output, so on Raptoreum the proxy's `utxo` and `niceutxo` include
+outputs the daemon refuses to spend, and a wallet that picks one gets its transaction rejected.
+For Raptoreum (blockchain config `coin_name` `Raptoreum`) the listener installs a spend rule
+(`server/electrumhttp_raptoreum.go`) and leaves those outputs out. These are the two intended
+differences from ElectrumX:
+
+- **Still-locked future outputs.** A future transaction (DIP2 type 7, `CFutureTx` in
+  `evo/providertx.h`) locks its output `lockOutputIndex` until
+  `(maturity >= 0 && confirmations >= maturity) || (lockTime >= 0 && now - blockTime >= lockTime)`
+  (`validateFutureCoin` in `consensus/tx_verify.cpp`, where `spendHeight - coinHeight` with the
+  next block as `spendHeight` is the output's confirmations). A negative `maturity` or `lockTime` disables that leg; both negative locks the
+  output for good. The time leg is checked 5 minutes late (`now - 5 min`), since the daemon uses
+  its network-adjusted time. An unconfirmed future output is never listed. The transaction's
+  other outputs are not locked.
+- **Immature coinbase outputs.** A coinbase output is listed from 100 confirmations
+  (`COINBASE_MATURITY`).
+
+`balance` is unchanged: locked and immature outputs still count, as on ElectrumX. The 600-entry
+cap applies after the rule, so left-out outputs do not take a place. Outputs below the future
+fork (height 420420) and coinbase outputs need no lookup; any other output's transaction is read
+once from the daemon (`getrawtransaction <txid> 0`, one backend lookup of the request budget)
+and its type and lock are kept in a process-wide LRU of 65536 txids. Other coins have no rule
+and answer exactly as before.
 
 ## Tests
 
@@ -206,3 +234,9 @@ live BTX proxy on 2026-11-01 (`server/testdata/electrumhttp/`), byte for byte: `
 outputs in `utxo` but not `niceutxo`), coinbase/P2SH/witness inputs and mempool times in
 `nicehistory`, `height`/`header`, `broadcast` (stubbed; nothing is sent to a network), the HTTP
 headers, readiness, the rate limit and the JavaScript number and ASM formatting.
+
+`server/electrumhttp_raptoreum_test.go` (`-run 'RTM|Raptoreum|EnableChainRules'`) parses the
+real future `1366dc99...` and asset mint `ccc31c7a...` (`bchain/coins/raptoreum/testdata/`),
+walks every leg of the spend rule (disabled legs, the time margin, coinbase maturity, pending
+futures, other outputs), checks the LRU bound and that `utxo`/`niceutxo` leave the outputs out
+while `balance` keeps them, and that left-out outputs do not count toward the 600 cap.

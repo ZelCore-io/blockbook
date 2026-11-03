@@ -284,8 +284,39 @@ func (s *ElectrumHTTPServer) ehListUnspent(addr string) (api.Utxos, error) {
 	return append(out, pending...), nil
 }
 
+// ehFirstSpendable returns the first limit outputs of a listunspent answer.
+// Without a chain spend rule that is a plain slice, as ElectrumX answers. With
+// one (Raptoreum), outputs the chain would refuse to spend in the next block
+// are left out first; the walk stops at limit, so the rule is asked about at
+// most limit outputs plus the ones it leaves out.
+func (s *ElectrumHTTPServer) ehFirstSpendable(b *ehBudget, utxos api.Utxos, limit int) (api.Utxos, error) {
+	if s.spendRule == nil {
+		if len(utxos) > limit {
+			utxos = utxos[:limit]
+		}
+		return utxos, nil
+	}
+	out := make(api.Utxos, 0, min(len(utxos), limit))
+	for i := range utxos {
+		if len(out) == limit {
+			break
+		}
+		if err := b.check(); err != nil {
+			return nil, err
+		}
+		ok, err := s.spendRule.spendable(b, &utxos[i], s.now())
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out = append(out, utxos[i])
+		}
+	}
+	return out, nil
+}
+
 // utxo: listunspent, first 600.
-func (s *ElectrumHTTPServer) callUtxo(param ehValue) (interface{}, error) {
+func (s *ElectrumHTTPServer) callUtxo(b *ehBudget, param ehValue) (interface{}, error) {
 	_, addr, err := s.ehAddrDesc(param)
 	if err != nil {
 		return nil, err
@@ -294,8 +325,8 @@ func (s *ElectrumHTTPServer) callUtxo(param ehValue) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(utxos) > ehUtxoLimit {
-		utxos = utxos[:ehUtxoLimit]
+	if utxos, err = s.ehFirstSpendable(b, utxos, ehUtxoLimit); err != nil {
+		return nil, err
 	}
 	out := make([]ehObject, len(utxos))
 	for i, u := range utxos {
@@ -306,7 +337,7 @@ func (s *ElectrumHTTPServer) callUtxo(param ehValue) (interface{}, error) {
 
 // niceutxo: the first 600 listunspent outputs that are confirmed, with the
 // address's output script.
-func (s *ElectrumHTTPServer) callNiceUtxo(param ehValue) (interface{}, error) {
+func (s *ElectrumHTTPServer) callNiceUtxo(b *ehBudget, param ehValue) (interface{}, error) {
 	desc, addr, err := s.ehAddrDesc(param)
 	if err != nil {
 		return nil, err
@@ -320,8 +351,8 @@ func (s *ElectrumHTTPServer) callNiceUtxo(param ehValue) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(utxos) > ehUtxoLimit {
-		utxos = utxos[:ehUtxoLimit]
+	if utxos, err = s.ehFirstSpendable(b, utxos, ehUtxoLimit); err != nil {
+		return nil, err
 	}
 	out := make([]ehObject, 0, len(utxos))
 	for _, u := range utxos {
