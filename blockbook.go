@@ -453,6 +453,18 @@ func mainWithExitCode() int {
 			err = electrumHTTPServer.EnableRateLimit(internalState.GetNetwork())
 		}
 		if err == nil {
+			err = electrumHTTPServer.EnableChainRules(internalState.Coin, func(height uint32) (int64, error) {
+				bi, err := index.GetBlockInfo(height)
+				if err != nil {
+					return 0, err
+				}
+				if bi == nil {
+					return 0, errors.New("block not indexed")
+				}
+				return bi.Time, nil
+			})
+		}
+		if err == nil {
 			err = electrumHTTPServer.Start()
 		}
 		if err != nil {

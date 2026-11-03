@@ -61,6 +61,9 @@ type ElectrumHTTPServer struct {
 	started   bool
 	listener  net.Listener
 	active    sync.WaitGroup
+	// spendRule is the chain's optional spendability rule for utxo and
+	// niceutxo (EnableChainRules); nil keeps ElectrumX's listunspent.
+	spendRule ehSpendRule
 	// now returns the current time (tests).
 	now func() time.Time
 	// Per-request budget (ehRequestTimeout, ehMaxBackendCalls, ehNiceMaxTxs
@@ -336,7 +339,7 @@ func (s *ElectrumHTTPServer) handle(ctx context.Context, q electrumHTTPQuery) ([
 	case "transactionverbose":
 		v, err = s.callVerboseTx(q.param)
 	case "utxo":
-		v, err = s.callUtxo(q.param)
+		v, err = s.callUtxo(b, q.param)
 	case "broadcast":
 		v, err = s.callBroadcast(q.param)
 	case "height":
@@ -348,7 +351,7 @@ func (s *ElectrumHTTPServer) handle(ctx context.Context, q electrumHTTPQuery) ([
 	case "niceentirehistory":
 		v, err = s.callNiceHistory(b, q.param, 30001)
 	case "niceutxo":
-		v, err = s.callNiceUtxo(q.param)
+		v, err = s.callNiceUtxo(b, q.param)
 	default:
 		// The proxy has no default case and never answers; answer instead.
 		return nil, ehError("Unknown call")
