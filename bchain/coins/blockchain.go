@@ -53,6 +53,7 @@ import (
 	"github.com/trezor/blockbook/bchain/coins/polis"
 	"github.com/trezor/blockbook/bchain/coins/polygon"
 	"github.com/trezor/blockbook/bchain/coins/qtum"
+	"github.com/trezor/blockbook/bchain/coins/raptoreum"
 	"github.com/trezor/blockbook/bchain/coins/ravencoin"
 	"github.com/trezor/blockbook/bchain/coins/ritocoin"
 	"github.com/trezor/blockbook/bchain/coins/robinhood"
@@ -150,6 +151,7 @@ func init() {
 	// versions and network magic; its RPC reads blocks with getblock <hash>
 	// true because anond rejects a numeric verbosity.
 	BlockChainFactories["Anon"] = anon.NewAnonRPC
+	BlockChainFactories["Raptoreum"] = raptoreum.NewRaptoreumRPC
 	BlockChainFactories["Ravencoin"] = ravencoin.NewRavencoinRPC
 	BlockChainFactories["Ritocoin"] = ritocoin.NewRitocoinRPC
 	BlockChainFactories["Divi"] = divi.NewDiviRPC
