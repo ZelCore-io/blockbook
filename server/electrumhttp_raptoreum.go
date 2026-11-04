@@ -234,49 +234,57 @@ func (r *rtmReader) varint() uint64 {
 
 // rtmFutureCache is a bounded LRU of parsed transactions by txid. A
 // transaction's payload never changes, so entries need no expiry.
-type rtmFutureCache struct {
-	mu    sync.Mutex
-	max   int
-	order *list.List // front = most recently used; values are *rtmCacheEntry
-	items map[string]*list.Element
-}
-
-type rtmCacheEntry struct {
-	txid string
-	f    rtmFuture
-}
+type rtmFutureCache = ehLRU[string, rtmFuture]
 
 func newRTMFutureCache(max int) *rtmFutureCache {
-	return &rtmFutureCache{max: max, order: list.New(), items: make(map[string]*list.Element)}
+	return newEHLRU[string, rtmFuture](max)
 }
 
-func (c *rtmFutureCache) get(txid string) (rtmFuture, bool) {
+// ehLRU is a bounded, concurrency-safe LRU map.
+type ehLRU[K comparable, V any] struct {
+	mu    sync.Mutex
+	max   int
+	order *list.List // front = most recently used; values are *ehLRUEntry
+	items map[K]*list.Element
+}
+
+type ehLRUEntry[K comparable, V any] struct {
+	key K
+	v   V
+}
+
+func newEHLRU[K comparable, V any](max int) *ehLRU[K, V] {
+	return &ehLRU[K, V]{max: max, order: list.New(), items: make(map[K]*list.Element)}
+}
+
+func (c *ehLRU[K, V]) get(key K) (V, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if e, ok := c.items[txid]; ok {
+	if e, ok := c.items[key]; ok {
 		c.order.MoveToFront(e)
-		return e.Value.(*rtmCacheEntry).f, true
+		return e.Value.(*ehLRUEntry[K, V]).v, true
 	}
-	return rtmFuture{}, false
+	var zero V
+	return zero, false
 }
 
-func (c *rtmFutureCache) add(txid string, f rtmFuture) {
+func (c *ehLRU[K, V]) add(key K, v V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if e, ok := c.items[txid]; ok {
-		e.Value.(*rtmCacheEntry).f = f
+	if e, ok := c.items[key]; ok {
+		e.Value.(*ehLRUEntry[K, V]).v = v
 		c.order.MoveToFront(e)
 		return
 	}
-	c.items[txid] = c.order.PushFront(&rtmCacheEntry{txid, f})
+	c.items[key] = c.order.PushFront(&ehLRUEntry[K, V]{key, v})
 	for c.order.Len() > c.max {
 		e := c.order.Back()
 		c.order.Remove(e)
-		delete(c.items, e.Value.(*rtmCacheEntry).txid)
+		delete(c.items, e.Value.(*ehLRUEntry[K, V]).key)
 	}
 }
 
-func (c *rtmFutureCache) len() int {
+func (c *ehLRU[K, V]) len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.order.Len()

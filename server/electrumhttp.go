@@ -73,6 +73,12 @@ type ElectrumHTTPServer struct {
 	niceMaxTxs      int
 	// historyLimit is ElectrumX's history DoS limit (SetMaxSend).
 	historyLimit int
+	// maxOrderLookups bounds the getblock lookups one history request makes
+	// to put mixed blocks in block order (ehMaxOrderLookups).
+	maxOrderLookups int
+	// blockOrder caches an address's transactions of a block in block
+	// order, by block hash and address descriptor.
+	blockOrder *ehLRU[string, []string]
 }
 
 // NewElectrumHTTPServer creates the listener. rpc may be nil: the calls that
@@ -102,6 +108,8 @@ func NewElectrumHTTPServer(binding string, parser bchain.BlockChainParser, worke
 		maxBackendCalls: ehMaxBackendCalls,
 		niceMaxTxs:      ehNiceMaxTxs,
 		historyLimit:    ehHistoryLimit,
+		maxOrderLookups: ehMaxOrderLookups,
+		blockOrder:      newEHLRU[string, []string](ehBlockOrderCacheSize),
 	}
 	s.handler = s
 	s.http = &http.Server{Addr: binding, Handler: http.HandlerFunc(s.serve), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}

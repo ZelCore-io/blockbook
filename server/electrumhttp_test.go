@@ -4,6 +4,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -40,8 +41,10 @@ type ehStubIndex struct {
 	best    uint32
 	hashes  map[uint32]string
 	history map[string][]ehStubHistory // addrDesc hex -> ascending history, block order
-	// inputOnly marks the txids that only spend from the address.
+	// inputOnly marks the txids that only spend from the address, both those
+	// that pay it (output 0) and spend from it (input 1).
 	inputOnly map[string]bool
+	both      map[string]bool
 	calls     int
 }
 
@@ -79,6 +82,8 @@ func (x *ehStubIndex) GetAddrDescTransactions(addrDesc bchain.AddressDescriptor,
 			indexes := []int32{0}
 			if x.inputOnly[e.txid] {
 				indexes = []int32{^int32(0)}
+			} else if x.both[e.txid] {
+				indexes = []int32{0, ^int32(1)}
 			}
 			if err := fn(e.txid, e.height, indexes); err != nil {
 				if _, ok := err.(*db.StopIteration); ok {
@@ -224,7 +229,7 @@ const ehBest = 1890700
 func newEHEnv(t *testing.T) *ehEnv {
 	t.Helper()
 	e := &ehEnv{
-		index:   &ehStubIndex{best: ehBest, hashes: map[uint32]string{}, history: map[string][]ehStubHistory{}, inputOnly: map[string]bool{}},
+		index:   &ehStubIndex{best: ehBest, hashes: map[uint32]string{}, history: map[string][]ehStubHistory{}, inputOnly: map[string]bool{}, both: map[string]bool{}},
 		mempool: &ehStubMempool{outpoints: map[string][]bchain.Outpoint{}, times: map[string]uint32{}},
 		worker:  &ehStubWorker{addresses: map[string]*api.Address{}, utxos: map[string]api.Utxos{}, txs: map[string]*api.Tx{}},
 		rpc:     &ehStubRPC{raw: map[string]string{}, verbose: map[string]json.RawMessage{}, headers: map[string]string{}, blocks: map[string][]string{}},
@@ -1130,13 +1135,17 @@ func TestElectrumHTTPBlockOrder(t *testing.T) {
 		name      string
 		block     []string // block order
 		inputOnly []string
+		both      []string // pay and spend
 		getblock  int
 	}{
-		{"outputs only", []string{"a1", "a2", "a3"}, nil, 0},
-		{"inputs only", []string{"a1", "a2", "a3"}, []string{"a1", "a2", "a3"}, 0},
-		{"one tx", []string{"a1"}, nil, 0},
-		{"mixed", []string{"a1", "a2", "a3", "a4"}, []string{"a1", "a3"}, 1},
-		{"mixed, input last", []string{"a1", "a2", "a3"}, []string{"a3"}, 1},
+		{"outputs only", []string{"a1", "a2", "a3"}, nil, nil, 0},
+		{"inputs only", []string{"a1", "a2", "a3"}, []string{"a1", "a2", "a3"}, nil, 0},
+		{"one tx", []string{"a1"}, nil, nil, 0},
+		{"mixed", []string{"a1", "a2", "a3", "a4"}, []string{"a1", "a3"}, nil, 1},
+		{"mixed, input last", []string{"a1", "a2", "a3"}, []string{"a3"}, nil, 1},
+		{"pays and spends, no spend-only", []string{"a1", "a2", "a3"}, nil, []string{"a1", "a3"}, 0},
+		{"pays and spends, mixed", []string{"a1", "a2", "a3", "a4"}, []string{"a1", "a4"}, []string{"a3"}, 1},
+		{"pays and spends after spend-only", []string{"a1", "a2", "a3"}, []string{"a1", "a2"}, []string{"a3"}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEHEnv(t)
@@ -1151,6 +1160,9 @@ func TestElectrumHTTPBlockOrder(t *testing.T) {
 			for _, txid := range tc.inputOnly {
 				e.index.inputOnly[txid] = true
 			}
+			for _, txid := range tc.both {
+				e.index.both[txid] = true
+			}
 			e.index.hashes[100] = "h100"
 			e.rpc.blocks["h100"] = append([]string{"coinbase", "other"}, tc.block...)
 			want := append(append([]string{"p0"}, tc.block...), "n0", "n1")
@@ -1159,8 +1171,9 @@ func TestElectrumHTTPBlockOrder(t *testing.T) {
 					t.Fatalf("%s: %v, want %v", call, got, want)
 				}
 			}
-			if n := getblocks(e); n != 2*tc.getblock {
-				t.Fatalf("%d getblock calls, want %d", n, 2*tc.getblock)
+			// The second call is served from the block-order cache.
+			if n := getblocks(e); n != tc.getblock {
+				t.Fatalf("%d getblock calls, want %d", n, tc.getblock)
 			}
 		})
 	}
@@ -1195,6 +1208,144 @@ func TestElectrumHTTPBlockOrder(t *testing.T) {
 		e.index.inputOnly["x-in"] = true
 		e.index.hashes[100] = "h100"
 		e.rpc.blocks["h100"] = []string{"cb", "x-out"}
-		ehExpect(t, e.get(ehProxyPrefix+"entirehistory&param="+addr), "Error: internal error")
+		// The block keeps the index order and the request still answers.
+		if got := ids(t, e.get(ehProxyPrefix+"entirehistory&param="+addr)); !slices.Equal(got, []string{"x-out", "x-in"}) {
+			t.Fatalf("entirehistory: %v", got)
+		}
 	})
+
+	t.Run("getblock error", func(t *testing.T) {
+		e := newEHEnv(t)
+		addr := ehAddrNice
+		desc := ehDescHex(t, e.parser, addr)
+		// Two mixed blocks; the daemon knows neither, so the newest one's
+		// getblock fails and the older one is not tried.
+		e.index.history[desc] = []ehStubHistory{{"o-in", 100}, {"o-out", 100}, {"n-in", 101}, {"n-out", 101}}
+		e.index.inputOnly["o-in"] = true
+		e.index.inputOnly["n-in"] = true
+		e.index.hashes[100] = "h100"
+		e.index.hashes[101] = "h101"
+		for _, call := range []string{"entirehistory", "history"} {
+			if got := ids(t, e.get(ehProxyPrefix+call+"&param="+addr)); !slices.Equal(got, []string{"o-out", "o-in", "n-out", "n-in"}) {
+				t.Fatalf("%s: %v", call, got)
+			}
+		}
+		if n := getblocks(e); n != 2 {
+			t.Fatalf("%d getblock calls, want 2", n)
+		}
+		// A block the index has no hash for keeps the index order too.
+		e = newEHEnv(t)
+		e.index.history[desc] = []ehStubHistory{{"o-in", 100}, {"o-out", 100}}
+		e.index.inputOnly["o-in"] = true
+		if got := ids(t, e.get(ehProxyPrefix+"entirehistory&param="+addr)); !slices.Equal(got, []string{"o-out", "o-in"}) || getblocks(e) != 0 {
+			t.Fatalf("entirehistory: %v, %d getblock", got, getblocks(e))
+		}
+	})
+
+	// manyMixed gives the address n mixed blocks (heights 1000..), each
+	// "<h>-in" (spend-only) then "<h>-out" in block order.
+	manyMixed := func(t *testing.T, e *ehEnv, n int) string {
+		addr := ehAddrNice
+		desc := ehDescHex(t, e.parser, addr)
+		var h []ehStubHistory
+		for i := 0; i < n; i++ {
+			height := uint32(1000 + i)
+			in, out := fmt.Sprintf("%d-in", height), fmt.Sprintf("%d-out", height)
+			h = append(h, ehStubHistory{in, height}, ehStubHistory{out, height})
+			e.index.inputOnly[in] = true
+			hash := fmt.Sprintf("h%d", height)
+			e.index.hashes[height] = hash
+			e.rpc.blocks[hash] = []string{"cb", in, out}
+		}
+		e.index.history[desc] = h
+		return addr
+	}
+
+	t.Run("entirehistory lookup cap", func(t *testing.T) {
+		e := newEHEnv(t)
+		const n = 300
+		addr := manyMixed(t, e, n)
+		got := ids(t, e.get(ehProxyPrefix+"entirehistory&param="+addr))
+		if len(got) != 2*n || getblocks(e) != ehMaxOrderLookups {
+			t.Fatalf("%d entries, %d getblock, want %d, %d", len(got), getblocks(e), 2*n, ehMaxOrderLookups)
+		}
+		for i := 0; i < n; i++ {
+			height := 1000 + i
+			want := []string{fmt.Sprintf("%d-in", height), fmt.Sprintf("%d-out", height)}
+			if i < n-ehMaxOrderLookups {
+				// Past the cap: index order.
+				want[0], want[1] = want[1], want[0]
+			}
+			if !slices.Equal(got[2*i:2*i+2], want) {
+				t.Fatalf("block %d: %v, want %v", height, got[2*i:2*i+2], want)
+			}
+		}
+		// The cached blocks cost nothing the next time: the next 200 are
+		// looked up.
+		e.rpc.calls = nil
+		got = ids(t, e.get(ehProxyPrefix+"entirehistory&param="+addr))
+		if getblocks(e) != n-ehMaxOrderLookups || got[0] != "1000-in" {
+			t.Fatalf("second call: %d getblock, first %s", getblocks(e), got[0])
+		}
+
+		// The lookups count against the request budget, which still fails
+		// the request.
+		e = newEHEnv(t)
+		addr = manyMixed(t, e, n)
+		e.s.maxBackendCalls = 50
+		ehExpect(t, e.get(ehProxyPrefix+"entirehistory&param="+addr), "Error: request too large")
+	})
+
+	t.Run("niceentirehistory cap before ordering", func(t *testing.T) {
+		e := newEHEnv(t)
+		addr := manyMixed(t, e, 600)
+		ehExpect(t, e.get(ehProxyPrefix+"niceentirehistory&param="+addr), "Error: history too large: 1200 transactions, at most 1000 per request")
+		if n := getblocks(e); n != 0 {
+			t.Fatalf("%d getblock calls before the cap error", n)
+		}
+	})
+
+	t.Run("nice window with a mempool tail", func(t *testing.T) {
+		// A mixed block, 29 single-transaction blocks and two mempool
+		// transactions: nicehistory's 31 newest entries leave the mixed block
+		// out, so it is not looked up; without the mempool tail they hold it.
+		for _, tc := range []struct {
+			mempool  bool
+			getblock int
+		}{{true, 0}, {false, 1}} {
+			e := newEHEnv(t)
+			desc := ehDescHex(t, e.parser, ehAddrNice)
+			h := []ehStubHistory{{"m-in", 100}, {"m-out", 100}}
+			for i := 0; i < 29; i++ {
+				h = append(h, ehStubHistory{fmt.Sprintf("c%02d", i), uint32(200 + i)})
+			}
+			e.index.history[desc] = h
+			e.index.inputOnly["m-in"] = true
+			e.index.hashes[100] = "h100"
+			e.rpc.blocks["h100"] = []string{"cb", "m-in", "m-out"}
+			if tc.mempool {
+				e.mempool.outpoints[desc] = []bchain.Outpoint{{Txid: "p1", Vout: 0}, {Txid: "p2", Vout: 0}}
+				e.worker.txs["p1"] = &api.Tx{Txid: "p1", FeesSat: (*api.Amount)(big.NewInt(1))}
+				e.worker.txs["p2"] = &api.Tx{Txid: "p2", FeesSat: (*api.Amount)(big.NewInt(1))}
+			}
+			b := &ehBudget{ctx: context.Background(), calls: 100}
+			entries, err := e.s.ehHistory(b, mustDesc(t, desc), e.s.ehNiceWindow(31))
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := []string{entries[0].txid, entries[1].txid}
+			want := []string{"m-in", "m-out"}
+			if tc.mempool {
+				want = []string{"m-out", "m-in"}
+			}
+			if getblocks(e) != tc.getblock || !slices.Equal(first, want) {
+				t.Fatalf("mempool %v: %d getblock, first %v, want %d, %v", tc.mempool, getblocks(e), first, tc.getblock, want)
+			}
+		}
+	})
+}
+
+func mustDesc(t *testing.T, h string) bchain.AddressDescriptor {
+	t.Helper()
+	return bchain.AddressDescriptor(mustHex(t, h))
 }

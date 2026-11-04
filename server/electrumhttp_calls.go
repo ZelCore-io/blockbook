@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/martinboehm/btcutil"
 	"github.com/trezor/blockbook/api"
 	"github.com/trezor/blockbook/bchain"
@@ -42,6 +43,15 @@ const (
 	ehNiceMaxTxs = 1000
 	// ehPrevCacheMax bounds the per-request cache of previous transactions.
 	ehPrevCacheMax = 256
+	// ehMaxOrderLookups bounds the getblock lookups one history request makes
+	// to put blocks holding both paying and spend-only transactions in block
+	// order, newest first; older such blocks keep the index order. With
+	// niceentirehistory's 1000 transactions (2000 lookups) it stays within
+	// ehMaxBackendCalls.
+	ehMaxOrderLookups = 200
+	// ehBlockOrderCacheSize bounds the cache of block orders (by block hash
+	// and address), shared by all requests.
+	ehBlockOrderCacheSize = 4096
 )
 
 var errEHHistoryTooLarge = errors.New("history too large")
@@ -153,9 +163,12 @@ func ehHistoryLimitFor(maxSend int) int {
 // limited_history does: an address with historyLimit or more answers "history
 // too large".
 //
-// window is the number of trailing entries the caller uses (0 for all): the
-// block order of the confirmed entries is exact within it (ehBlockOrder).
-func (s *ElectrumHTTPServer) ehHistory(b *ehBudget, desc bchain.AddressDescriptor, window int) ([]ehHistoryEntry, error) {
+// window, if set, gets the number of entries (confirmed and mempool) before
+// any block-order lookup and answers the number of trailing entries the
+// caller uses (0 for all), or an error that refuses the request. The block
+// order of the confirmed entries is restored within that window
+// (ehOrderBlocks).
+func (s *ElectrumHTTPServer) ehHistory(b *ehBudget, desc bchain.AddressDescriptor, window func(n int) (int, error)) ([]ehHistoryEntry, error) {
 	// The index yields blocks newest first and, within a block, the txs in
 	// reverse of the order the block was indexed in (packTxIndexes).
 	var groups []ehBlockGroup
@@ -181,27 +194,13 @@ func (s *ElectrumHTTPServer) ehHistory(b *ehBudget, desc bchain.AddressDescripto
 	}
 	// Ascending heights; each block back in indexing order.
 	slices.Reverse(groups)
-	for i := range groups {
-		slices.Reverse(groups[i].txids)
-		slices.Reverse(groups[i].inputOnly)
-	}
-	from := 0
-	if window > 0 && window < count {
-		from = count - window
-	}
-	pos := 0
-	for i := range groups {
-		end := pos + len(groups[i].txids)
-		if end > from {
-			if err := s.ehBlockOrder(b, &groups[i]); err != nil {
-				return nil, err
-			}
-		}
-		pos = end
-	}
 	entries := make([]ehHistoryEntry, 0, count)
 	confirmed := make(map[string]struct{}, count)
-	for _, g := range groups {
+	for i := range groups {
+		g := &groups[i]
+		slices.Reverse(g.txids)
+		slices.Reverse(g.inputOnly)
+		g.start = len(entries)
 		for _, txid := range g.txids {
 			entries = append(entries, ehHistoryEntry{txid: txid, height: int(g.height)})
 			confirmed[txid] = struct{}{}
@@ -244,7 +243,21 @@ func (s *ElectrumHTTPServer) ehHistory(b *ehBudget, desc bchain.AddressDescripto
 		}
 		return pending[i].txid < pending[j].txid
 	})
-	return append(entries, pending...), nil
+	entries = append(entries, pending...)
+	from := 0
+	if window != nil {
+		w, err := window(len(entries))
+		if err != nil {
+			return nil, err
+		}
+		if w > 0 && w < len(entries) {
+			from = len(entries) - w
+		}
+	}
+	if err := s.ehOrderBlocks(b, desc, groups, entries, from); err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
 
 // history / entirehistory. history keeps the proxy's truncation: more than
@@ -254,10 +267,14 @@ func (s *ElectrumHTTPServer) callHistory(b *ehBudget, param ehValue, limited boo
 	if err != nil {
 		return nil, err
 	}
-	// history answers at most the last 200 entries.
-	window := 0
+	var window func(int) (int, error)
 	if limited {
-		window = 200
+		window = func(n int) (int, error) {
+			if n > 200 {
+				return 100, nil
+			}
+			return 0, nil
+		}
 	}
 	entries, err := s.ehHistory(b, desc, window)
 	if err != nil {
@@ -611,14 +628,11 @@ func (s *ElectrumHTTPServer) callNiceHistory(b *ehBudget, param ehValue, amountO
 	if err != nil {
 		return nil, err
 	}
-	entries, err := s.ehHistory(b, desc, max(amountOfTxs, 1))
+	entries, err := s.ehHistory(b, desc, s.ehNiceWindow(amountOfTxs))
 	if err != nil {
 		return nil, err
 	}
 	limit := min(len(entries), amountOfTxs)
-	if limit > s.niceMaxTxs {
-		return nil, ehError(fmt.Sprintf("history too large: %d transactions, at most %d per request", limit, s.niceMaxTxs))
-	}
 	now := float64(s.now().Unix())
 	cache := make(map[string]*bchain.Tx)
 	out := make([]ehObject, 0, limit)
@@ -652,6 +666,19 @@ func (s *ElectrumHTTPServer) callNiceHistory(b *ehBudget, param ehValue, amountO
 		out = append(out, result)
 	}
 	return out, nil
+}
+
+// ehNiceWindow is the history window of nicehistory / niceentirehistory: the
+// newest amountOfTxs entries. It refuses more than niceMaxTxs before any
+// block-order lookup.
+func (s *ElectrumHTTPServer) ehNiceWindow(amountOfTxs int) func(int) (int, error) {
+	return func(n int) (int, error) {
+		limit := min(n, amountOfTxs)
+		if limit > s.niceMaxTxs {
+			return 0, ehError(fmt.Sprintf("history too large: %d transactions, at most %d per request", limit, s.niceMaxTxs))
+		}
+		return max(limit, 1), nil
+	}
 }
 
 // ehNiceInput is the previous output an input spends: its value and output
@@ -809,11 +836,21 @@ func (b *ehBudget) spend() error {
 	return nil
 }
 
-// ehBlockGroup is one block's transactions of an address.
+// ehBlockGroup is one block's transactions of an address, from entries[start].
 type ehBlockGroup struct {
 	height    uint32
+	start     int
 	txids     []string
 	inputOnly []bool
+}
+
+// mixed reports whether the block holds both transactions paying the address
+// and transactions only spending from it: the index adds a block's
+// transactions in two passes, those paying the address (or paying and
+// spending) in block order, then those only spending from it in block order,
+// so only such a block is out of block order.
+func (g *ehBlockGroup) mixed() bool {
+	return slices.Contains(g.inputOnly, true) && slices.Contains(g.inputOnly, false)
 }
 
 // ehInputOnly reports whether a transaction touches the address only through
@@ -827,41 +864,93 @@ func ehInputOnly(indexes []int32) bool {
 	return len(indexes) > 0
 }
 
-// ehBlockOrder puts a block's transactions in block order. The index adds a
-// block's transactions in two passes, those paying the address in block order
-// and then those only spending from it in block order, so a block holding
-// both kinds needs the block's transaction list (one getblock); any other
-// block is already in block order.
-func (s *ElectrumHTTPServer) ehBlockOrder(b *ehBudget, g *ehBlockGroup) error {
-	if !slices.Contains(g.inputOnly, true) || !slices.Contains(g.inputOnly, false) {
-		return nil
+// ehOrderBlocks puts the mixed blocks that end at or after entries[from] in
+// block order, newest first, from the block-order cache or one getblock each.
+// At most maxOrderLookups getblocks are made; older mixed blocks keep the
+// index order. A failed lookup (block not indexed, daemon error, block changed
+// by a reorg) leaves that block in index order and the request still answers;
+// after a daemon error no further getblock is tried. Only the request budget
+// (deadline, backend lookups) fails the request.
+func (s *ElectrumHTTPServer) ehOrderBlocks(b *ehBudget, desc bchain.AddressDescriptor, groups []ehBlockGroup, entries []ehHistoryEntry, from int) error {
+	lookups := 0
+	for i := len(groups) - 1; i >= 0; i-- {
+		g := &groups[i]
+		if g.start+len(g.txids) <= from {
+			break
+		}
+		if !g.mixed() {
+			continue
+		}
+		hash, err := s.index.GetBlockHash(g.height)
+		if err != nil || hash == "" {
+			glog.Warningf("electrum-http: block %d not indexed (%v), its transactions keep the index order", g.height, err)
+			continue
+		}
+		key := hash + string(desc)
+		order, ok := s.blockOrder.get(key)
+		if !ok || !ehSameTxids(order, g.txids) {
+			if lookups >= s.maxOrderLookups {
+				glog.V(1).Infof("electrum-http: block order looked up for %d blocks, mixed blocks at height %d and below keep the index order", lookups, g.height)
+				return nil
+			}
+			lookups++
+			if err := b.spend(); err != nil {
+				return err
+			}
+			var rpcErr bool
+			order, rpcErr, err = s.ehBlockOrder(hash, g.txids)
+			if err != nil {
+				glog.Warningf("electrum-http: block %d %s: %v, its transactions keep the index order", g.height, hash, err)
+				if rpcErr {
+					return nil
+				}
+				continue
+			}
+			s.blockOrder.add(key, order)
+		}
+		for j, txid := range order {
+			entries[g.start+j].txid = txid
+		}
 	}
-	if err := b.spend(); err != nil {
-		return err
-	}
-	hash, err := s.index.GetBlockHash(g.height)
-	if err != nil {
-		return err
-	}
-	if hash == "" {
-		return errors.New("block not indexed")
-	}
+	return nil
+}
+
+// ehBlockOrder returns txids, the address's transactions of the block hash,
+// in block order (one getblock). rpcErr reports a daemon error.
+func (s *ElectrumHTTPServer) ehBlockOrder(hash string, txids []string) ([]string, bool, error) {
 	var block struct {
 		Tx []string `json:"tx"`
 	}
 	if err := s.rpcCall("getblock", []interface{}{hash, 1}, &block); err != nil {
-		return err
+		return nil, true, err
 	}
 	pos := make(map[string]int, len(block.Tx))
 	for i, txid := range block.Tx {
 		pos[txid] = i
 	}
-	for _, txid := range g.txids {
+	for _, txid := range txids {
 		if _, ok := pos[txid]; !ok {
-			// The block changed under the request (reorg).
-			return errors.New("block transactions changed, retry")
+			return nil, false, errors.New("block transactions changed (reorg)")
 		}
 	}
-	sort.SliceStable(g.txids, func(i, j int) bool { return pos[g.txids[i]] < pos[g.txids[j]] })
-	return nil
+	order := slices.Clone(txids)
+	sort.SliceStable(order, func(i, j int) bool { return pos[order[i]] < pos[order[j]] })
+	return order, false, nil
+}
+
+// ehSameTxids reports whether a and b hold the same txids.
+func ehSameTxids(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[string]struct{}, len(a))
+	for _, txid := range a {
+		set[txid] = struct{}{}
+	}
+	for _, txid := range b {
+		if _, ok := set[txid]; !ok {
+			return false
+		}
+	}
+	return true
 }
