@@ -151,7 +151,7 @@ The wallet uses `balance`, `utxo`, `niceutxo`, `nicehistory` and `broadcast`.
 | header height above the tip | `Error: height 1,890,701 out of range` |
 | daemon RPC error (unknown tx, ...) | `Error: daemon error: DaemonError({'code': -5, 'message': '...'})` |
 | broadcast refused by the daemon | `Error: the transaction was rejected by network rules.\n\n<daemon message>\n[<raw tx>]` |
-| more than ElectrumX's history limit (10100 confirmed txs) | `Error: history too large` |
+| ElectrumX's history limit or more: `max(MAX_SEND, 350000) // 99` confirmed txs (10101 by default, 202020 with Raptoreum's `electrum_http_max_send` 20000000); mempool entries do not count | `Error: history too large` |
 | unknown call | `Error: Unknown call` |
 | request budget exhausted | `Error: request too large` / `Error: request timed out` |
 | niceentirehistory over 1000 transactions | `Error: history too large: <n> transactions, at most 1000 per request` |

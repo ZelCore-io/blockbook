@@ -952,8 +952,8 @@ func TestElectrumHTTPServiceConfiguration(t *testing.T) {
 	const insight = `,"blockbook_insight":9876`
 	const insightBinding = `,"insight_binding_template":"${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookInsight}}"`
 	for _, tc := range []struct {
-		name, port, binding, want string
-		invalid                   bool
+		name, port, binding, want, absent string
+		invalid                           bool
 	}{
 		{name: "disabled"},
 		{name: "literal host", port: `,"blockbook_electrum_http":3456`, binding: `,"electrum_http_binding_template":"127.0.0.1:{{.Ports.BlockbookElectrumHTTP}}"`, want: " -electrumhttp=127.0.0.1:3456 "},
@@ -966,6 +966,10 @@ func TestElectrumHTTPServiceConfiguration(t *testing.T) {
 		{name: "host required", port: `,"blockbook_electrum_http":3456`, binding: `,"electrum_http_binding_template":":{{.Ports.BlockbookElectrumHTTP}}"`, invalid: true},
 		{name: "other env var", port: `,"blockbook_electrum_http":3456`, binding: `,"electrum_http_binding_template":"${HOME}:{{.Ports.BlockbookElectrumHTTP}}"`, invalid: true},
 		{name: "unsafe whitespace", port: `,"blockbook_electrum_http":3456`, binding: `,"electrum_http_binding_template":"127.0.0.1:3456 -public=0.0.0.0:80"`, invalid: true},
+		{name: "max send", port: `,"blockbook_electrum_http":3456`, binding: `,"electrum_http_binding_template":"127.0.0.1:{{.Ports.BlockbookElectrumHTTP}}","electrum_http_max_send":20000000`, want: " -electrumhttp=127.0.0.1:3456 -electrumhttpmaxsend=20000000 "},
+		{name: "default max send", port: `,"blockbook_electrum_http":3456`, binding: `,"electrum_http_binding_template":"127.0.0.1:{{.Ports.BlockbookElectrumHTTP}}"`, want: " -electrumhttp=127.0.0.1:3456 -certfile=", absent: "-electrumhttpmaxsend"},
+		{name: "max send without listener", binding: `,"electrum_http_max_send":20000000`, invalid: true},
+		{name: "negative max send", port: `,"blockbook_electrum_http":3456`, binding: `,"electrum_http_binding_template":"127.0.0.1:{{.Ports.BlockbookElectrumHTTP}}","electrum_http_max_send":-1`, invalid: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1006,6 +1010,9 @@ func TestElectrumHTTPServiceConfiguration(t *testing.T) {
 			}
 			if !strings.Contains(service, tc.want) {
 				t.Fatalf("service lacks %q: %s", tc.want, service)
+			}
+			if tc.absent != "" && strings.Contains(service, tc.absent) {
+				t.Fatalf("service has %q: %s", tc.absent, service)
 			}
 		})
 	}
