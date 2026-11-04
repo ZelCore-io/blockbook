@@ -71,6 +71,8 @@ type ElectrumHTTPServer struct {
 	requestTimeout  time.Duration
 	maxBackendCalls int
 	niceMaxTxs      int
+	// historyLimit is ElectrumX's history DoS limit (SetMaxSend).
+	historyLimit int
 }
 
 // NewElectrumHTTPServer creates the listener. rpc may be nil: the calls that
@@ -99,6 +101,7 @@ func NewElectrumHTTPServer(binding string, parser bchain.BlockChainParser, worke
 		requestTimeout:  ehRequestTimeout,
 		maxBackendCalls: ehMaxBackendCalls,
 		niceMaxTxs:      ehNiceMaxTxs,
+		historyLimit:    ehHistoryLimit,
 	}
 	s.handler = s
 	s.http = &http.Server{Addr: binding, Handler: http.HandlerFunc(s.serve), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
@@ -120,6 +123,23 @@ func (s *ElectrumHTTPServer) serve(w http.ResponseWriter, r *http.Request) {
 
 func electrumHTTPRootPath(r *http.Request) bool {
 	return r.URL != nil && r.URL.Path == "/" && strings.HasPrefix(r.RequestURI, "/")
+}
+
+// SetMaxSend sets the MAX_SEND of the ElectrumX the listener replaces, which
+// sets the history limit as ElectrumX does (max(MAX_SEND, 350000) // 99
+// confirmed transactions); 0 keeps ElectrumX's default of 1,000,000. Call it
+// before Start.
+func (s *ElectrumHTTPServer) SetMaxSend(maxSend int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.started {
+		return errors.New("electrum-http max send must be set before Start")
+	}
+	if maxSend < 0 {
+		return errors.New("electrum-http max send must not be negative")
+	}
+	s.historyLimit = ehHistoryLimitFor(maxSend)
+	return nil
 }
 
 // EnableRateLimit puts a per-client request-rate limit in front of the

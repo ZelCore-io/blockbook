@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -38,14 +39,19 @@ type ehStubHistory struct {
 type ehStubIndex struct {
 	best    uint32
 	hashes  map[uint32]string
-	history map[string][]ehStubHistory // addrDesc hex -> ascending history
-	calls   int
+	history map[string][]ehStubHistory // addrDesc hex -> ascending history, block order
+	// inputOnly marks the txids that only spend from the address.
+	inputOnly map[string]bool
+	calls     int
 }
 
+// GetAddrDescTransactions yields the history as RocksDB does: blocks newest
+// first and, within a block, the reverse of the indexing order, which adds
+// the transactions paying the address (output index i) in block order, then
+// those only spending from it (input index ^i) in block order.
 func (x *ehStubIndex) GetAddrDescTransactions(addrDesc bchain.AddressDescriptor, lower, higher uint32, fn db.GetTransactionsCallback) error {
 	x.calls++
 	h := x.history[hex.EncodeToString(addrDesc)]
-	// Blocks newest first, each block's txs in block order, as RocksDB does.
 	var groups [][]ehStubHistory
 	for _, e := range h {
 		if n := len(groups); n == 0 || groups[n-1][0].height != e.height {
@@ -54,11 +60,27 @@ func (x *ehStubIndex) GetAddrDescTransactions(addrDesc bchain.AddressDescriptor,
 		groups[len(groups)-1] = append(groups[len(groups)-1], e)
 	}
 	for i := len(groups) - 1; i >= 0; i-- {
+		var stored []ehStubHistory
 		for _, e := range groups[i] {
+			if !x.inputOnly[e.txid] {
+				stored = append(stored, e)
+			}
+		}
+		for _, e := range groups[i] {
+			if x.inputOnly[e.txid] {
+				stored = append(stored, e)
+			}
+		}
+		for j := len(stored) - 1; j >= 0; j-- {
+			e := stored[j]
 			if e.height < lower || e.height > higher {
 				continue
 			}
-			if err := fn(e.txid, e.height, []int32{0}); err != nil {
+			indexes := []int32{0}
+			if x.inputOnly[e.txid] {
+				indexes = []int32{^int32(0)}
+			}
+			if err := fn(e.txid, e.height, indexes); err != nil {
 				if _, ok := err.(*db.StopIteration); ok {
 					return nil
 				}
@@ -117,6 +139,7 @@ type ehStubRPC struct {
 	raw       map[string]string          // txid -> raw hex
 	verbose   map[string]json.RawMessage // txid -> verbose JSON
 	headers   map[string]string          // block hash -> header hex
+	blocks    map[string][]string        // block hash -> txids in block order
 	broadcast func(string) (string, error)
 	calls     []string
 }
@@ -139,6 +162,12 @@ func (r *ehStubRPC) call(method string, params []interface{}, result interface{}
 			return &bchain.RPCError{Code: -5, Message: "No such mempool or blockchain transaction. Use gettransaction for wallet transactions."}
 		}
 		res = v
+	case "getblock":
+		v, ok := r.blocks[params[0].(string)]
+		if !ok {
+			return &bchain.RPCError{Code: -5, Message: "Block not found"}
+		}
+		res = map[string]interface{}{"tx": v}
 	case "getblockheader":
 		v, ok := r.headers[params[0].(string)]
 		if !ok {
@@ -195,10 +224,10 @@ const ehBest = 1890700
 func newEHEnv(t *testing.T) *ehEnv {
 	t.Helper()
 	e := &ehEnv{
-		index:   &ehStubIndex{best: ehBest, hashes: map[uint32]string{}, history: map[string][]ehStubHistory{}},
+		index:   &ehStubIndex{best: ehBest, hashes: map[uint32]string{}, history: map[string][]ehStubHistory{}, inputOnly: map[string]bool{}},
 		mempool: &ehStubMempool{outpoints: map[string][]bchain.Outpoint{}, times: map[string]uint32{}},
 		worker:  &ehStubWorker{addresses: map[string]*api.Address{}, utxos: map[string]api.Utxos{}, txs: map[string]*api.Tx{}},
-		rpc:     &ehStubRPC{raw: map[string]string{}, verbose: map[string]json.RawMessage{}, headers: map[string]string{}},
+		rpc:     &ehStubRPC{raw: map[string]string{}, verbose: map[string]json.RawMessage{}, headers: map[string]string{}, blocks: map[string][]string{}},
 		parser:  ehParser(),
 	}
 	s, err := NewElectrumHTTPServer("127.0.0.1:0", e.parser, e.worker, e.index, e.mempool, e.rpc.call, func(raw string) (string, error) {
@@ -995,4 +1024,177 @@ func TestElectrumHTTPPrevTxFallback(t *testing.T) {
 	if _, err := e.s.ehPrevTx(&ehBudget{ctx: t.Context()}, ehTx0, map[string]*bchain.Tx{}); err == nil || err.Error() != "request too large" {
 		t.Fatalf("exhausted budget: %v", err)
 	}
+}
+
+func TestElectrumHTTPHistoryLimitFor(t *testing.T) {
+	for _, tc := range []struct{ maxSend, want int }{
+		{0, 10101},            // ElectrumX's DEFAULT_MAX_SEND 1,000,000 // 99
+		{1000000, 10101},      // explicit default
+		{20000000, 202020},    // Raptoreum production MAX_SEND
+		{1000, 350000 / 99},   // raised to SessionManager's 350,000 floor
+		{350000, 350000 / 99}, // at the floor
+		{350099, 350099 / 99}, // above the floor
+		{-5, ehHistoryLimit},  // never reached (SetMaxSend refuses it)
+	} {
+		if got := ehHistoryLimitFor(tc.maxSend); got != tc.want {
+			t.Errorf("ehHistoryLimitFor(%d) = %d, want %d", tc.maxSend, got, tc.want)
+		}
+	}
+	if ehHistoryLimit != 10101 {
+		t.Fatalf("default limit %d", ehHistoryLimit)
+	}
+	e := newEHEnv(t)
+	if err := e.s.SetMaxSend(-1); err == nil {
+		t.Fatal("negative max send accepted")
+	}
+}
+
+// ElectrumX refuses an address with limit or more confirmed transactions
+// (len(limited_history(limit)) >= limit); mempool entries do not count.
+func TestElectrumHTTPHistoryLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		maxSend int
+		limit   int
+	}{
+		{"default", 0, 10101},
+		{"raptoreum", 20000000, 202020},
+		{"floor", 1000, 3535},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEHEnv(t)
+			if err := e.s.SetMaxSend(tc.maxSend); err != nil {
+				t.Fatal(err)
+			}
+			addr := ehAddrNice
+			desc := ehDescHex(t, e.parser, addr)
+			h := make([]ehStubHistory, tc.limit+1)
+			for i := range h {
+				h[i] = ehStubHistory{fmt.Sprintf("t%07d", i), uint32(i)}
+			}
+			for _, n := range []struct {
+				count    int
+				tooLarge bool
+			}{{tc.limit - 1, false}, {tc.limit, true}, {tc.limit + 1, true}} {
+				e.index.history[desc] = h[:n.count]
+				for _, call := range []string{"history", "entirehistory", "nicehistory"} {
+					w := e.get(ehProxyPrefix + call + "&param=" + addr)
+					if n.tooLarge {
+						ehExpect(t, w, "Error: history too large")
+					} else if call != "nicehistory" && !strings.HasPrefix(w.Body.String(), "[") {
+						t.Fatalf("%s with %d txs (limit %d): %.100s", call, n.count, tc.limit, w.Body.String())
+					}
+				}
+			}
+			// limit-1 confirmed plus mempool entries still answers.
+			e.index.history[desc] = h[:tc.limit-1]
+			e.mempool.outpoints[desc] = []bchain.Outpoint{{Txid: "m1", Vout: 0}, {Txid: "m2", Vout: 0}}
+			e.worker.txs["m1"] = &api.Tx{Txid: "m1", FeesSat: (*api.Amount)(big.NewInt(1))}
+			e.worker.txs["m2"] = &api.Tx{Txid: "m2", FeesSat: (*api.Amount)(big.NewInt(1))}
+			var got []map[string]interface{}
+			if err := json.Unmarshal(e.get(ehProxyPrefix+"entirehistory&param="+addr).Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != tc.limit+1 {
+				t.Fatalf("limit-1 confirmed + 2 mempool: %d entries", len(got))
+			}
+		})
+	}
+}
+
+// Same-block transactions come out in block order, as ElectrumX lists them
+// (tx_num order), although RocksDB stores them reversed and in two passes.
+func TestElectrumHTTPBlockOrder(t *testing.T) {
+	ids := func(t *testing.T, w *httptest.ResponseRecorder) []string {
+		t.Helper()
+		var got []map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("%v: %s", err, w.Body.String())
+		}
+		out := make([]string, len(got))
+		for i, g := range got {
+			out[i] = g["tx_hash"].(string)
+		}
+		return out
+	}
+	getblocks := func(e *ehEnv) int {
+		n := 0
+		for _, c := range e.rpc.calls {
+			if strings.HasPrefix(c, "getblock[") {
+				n++
+			}
+		}
+		return n
+	}
+	for _, tc := range []struct {
+		name      string
+		block     []string // block order
+		inputOnly []string
+		getblock  int
+	}{
+		{"outputs only", []string{"a1", "a2", "a3"}, nil, 0},
+		{"inputs only", []string{"a1", "a2", "a3"}, []string{"a1", "a2", "a3"}, 0},
+		{"one tx", []string{"a1"}, nil, 0},
+		{"mixed", []string{"a1", "a2", "a3", "a4"}, []string{"a1", "a3"}, 1},
+		{"mixed, input last", []string{"a1", "a2", "a3"}, []string{"a3"}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEHEnv(t)
+			addr := ehAddrNice
+			desc := ehDescHex(t, e.parser, addr)
+			h := []ehStubHistory{{"p0", 99}}
+			for _, txid := range tc.block {
+				h = append(h, ehStubHistory{txid, 100})
+			}
+			h = append(h, ehStubHistory{"n0", 101}, ehStubHistory{"n1", 101})
+			e.index.history[desc] = h
+			for _, txid := range tc.inputOnly {
+				e.index.inputOnly[txid] = true
+			}
+			e.index.hashes[100] = "h100"
+			e.rpc.blocks["h100"] = append([]string{"coinbase", "other"}, tc.block...)
+			want := append(append([]string{"p0"}, tc.block...), "n0", "n1")
+			for _, call := range []string{"entirehistory", "history"} {
+				if got := ids(t, e.get(ehProxyPrefix+call+"&param="+addr)); !slices.Equal(got, want) {
+					t.Fatalf("%s: %v, want %v", call, got, want)
+				}
+			}
+			if n := getblocks(e); n != 2*tc.getblock {
+				t.Fatalf("%d getblock calls, want %d", n, 2*tc.getblock)
+			}
+		})
+	}
+
+	t.Run("outside the history window", func(t *testing.T) {
+		e := newEHEnv(t)
+		addr := ehAddrNice
+		desc := ehDescHex(t, e.parser, addr)
+		h := []ehStubHistory{{"m-in", 100}, {"m-out", 100}}
+		for i := 0; i < 248; i++ {
+			h = append(h, ehStubHistory{fmt.Sprintf("t%03d", i), uint32(200 + i)})
+		}
+		e.index.history[desc] = h
+		e.index.inputOnly["m-in"] = true
+		e.index.hashes[100] = "h100"
+		e.rpc.blocks["h100"] = []string{"cb", "m-in", "m-out"}
+		got := ids(t, e.get(ehProxyPrefix+"history&param="+addr))
+		if len(got) != 100 || got[0] != "t148" || got[99] != "t247" || getblocks(e) != 0 {
+			t.Fatalf("history: %d entries %v..., %d getblock", len(got), got[:1], getblocks(e))
+		}
+		got = ids(t, e.get(ehProxyPrefix+"entirehistory&param="+addr))
+		if got[0] != "m-in" || got[1] != "m-out" || getblocks(e) != 1 {
+			t.Fatalf("entirehistory: %v..., %d getblock", got[:2], getblocks(e))
+		}
+	})
+
+	t.Run("block changed", func(t *testing.T) {
+		e := newEHEnv(t)
+		addr := ehAddrNice
+		desc := ehDescHex(t, e.parser, addr)
+		e.index.history[desc] = []ehStubHistory{{"x-in", 100}, {"x-out", 100}}
+		e.index.inputOnly["x-in"] = true
+		e.index.hashes[100] = "h100"
+		e.rpc.blocks["h100"] = []string{"cb", "x-out"}
+		ehExpect(t, e.get(ehProxyPrefix+"entirehistory&param="+addr), "Error: internal error")
+	})
 }

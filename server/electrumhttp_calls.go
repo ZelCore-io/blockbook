@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,10 +20,15 @@ import (
 )
 
 const (
-	// ehHistoryLimit is ElectrumX's history DoS limit with its default
+	// ehDefaultMaxSend is ElectrumX's default MAX_SEND (DEFAULT_MAX_SEND).
+	ehDefaultMaxSend = 1000000
+	// ehMinMaxSend is the floor ElectrumX's SessionManager puts on MAX_SEND.
+	ehMinMaxSend = 350000
+	// ehHistoryLimit is ElectrumX's history DoS limit with the default
 	// MAX_SEND (1,000,000 // 99): an address with this many confirmed
 	// transactions answers "history too large", as the proxy then does.
-	ehHistoryLimit = 1000000 / 99
+	// SetMaxSend changes it.
+	ehHistoryLimit = ehDefaultMaxSend / 99
 	// ehUtxoLimit is the proxy's slice of listunspent.
 	ehUtxoLimit = 600
 	// ehRequestTimeout bounds one request; the loops check it.
@@ -127,28 +133,44 @@ func (e ehHistoryEntry) object() ehObject {
 	return o
 }
 
+// ehHistoryLimitFor is ElectrumX's limit for a MAX_SEND (0 is the default):
+// SessionManager raises MAX_SEND to at least 350,000 and limited_history
+// allows max_send // 99 entries.
+func ehHistoryLimitFor(maxSend int) int {
+	if maxSend <= 0 {
+		maxSend = ehDefaultMaxSend
+	}
+	return max(maxSend, ehMinMaxSend) / 99
+}
+
 // ehHistory is blockchain.scripthash.get_history: confirmed transactions in
 // blockchain order (ascending height, block position within a block), then
 // the mempool transactions with height 0, or -1 when one of their inputs is
 // unconfirmed, and their fee. Mempool entries are ordered height 0 first, then
 // by txid (ElectrumX leaves that order unspecified).
-func (s *ElectrumHTTPServer) ehHistory(b *ehBudget, desc bchain.AddressDescriptor) ([]ehHistoryEntry, error) {
-	// The index yields blocks newest first and each block's txs in block order.
-	type group struct {
-		height uint32
-		txids  []string
-	}
-	var groups []group
+//
+// The limit counts confirmed transactions only, as ElectrumX's
+// limited_history does: an address with historyLimit or more answers "history
+// too large".
+//
+// window is the number of trailing entries the caller uses (0 for all): the
+// block order of the confirmed entries is exact within it (ehBlockOrder).
+func (s *ElectrumHTTPServer) ehHistory(b *ehBudget, desc bchain.AddressDescriptor, window int) ([]ehHistoryEntry, error) {
+	// The index yields blocks newest first and, within a block, the txs in
+	// reverse of the order the block was indexed in (packTxIndexes).
+	var groups []ehBlockGroup
 	count := 0
-	err := s.index.GetAddrDescTransactions(desc, 0, math.MaxUint32, func(txid string, height uint32, _ []int32) error {
+	err := s.index.GetAddrDescTransactions(desc, 0, math.MaxUint32, func(txid string, height uint32, indexes []int32) error {
 		count++
-		if count >= ehHistoryLimit {
+		if count >= s.historyLimit {
 			return errEHHistoryTooLarge
 		}
 		if n := len(groups); n == 0 || groups[n-1].height != height {
-			groups = append(groups, group{height: height})
+			groups = append(groups, ehBlockGroup{height: height})
 		}
-		groups[len(groups)-1].txids = append(groups[len(groups)-1].txids, txid)
+		g := &groups[len(groups)-1]
+		g.txids = append(g.txids, txid)
+		g.inputOnly = append(g.inputOnly, ehInputOnly(indexes))
 		return nil
 	})
 	if errors.Is(err, errEHHistoryTooLarge) {
@@ -157,11 +179,31 @@ func (s *ElectrumHTTPServer) ehHistory(b *ehBudget, desc bchain.AddressDescripto
 	if err != nil {
 		return nil, err
 	}
+	// Ascending heights; each block back in indexing order.
+	slices.Reverse(groups)
+	for i := range groups {
+		slices.Reverse(groups[i].txids)
+		slices.Reverse(groups[i].inputOnly)
+	}
+	from := 0
+	if window > 0 && window < count {
+		from = count - window
+	}
+	pos := 0
+	for i := range groups {
+		end := pos + len(groups[i].txids)
+		if end > from {
+			if err := s.ehBlockOrder(b, &groups[i]); err != nil {
+				return nil, err
+			}
+		}
+		pos = end
+	}
 	entries := make([]ehHistoryEntry, 0, count)
 	confirmed := make(map[string]struct{}, count)
-	for i := len(groups) - 1; i >= 0; i-- {
-		for _, txid := range groups[i].txids {
-			entries = append(entries, ehHistoryEntry{txid: txid, height: int(groups[i].height)})
+	for _, g := range groups {
+		for _, txid := range g.txids {
+			entries = append(entries, ehHistoryEntry{txid: txid, height: int(g.height)})
 			confirmed[txid] = struct{}{}
 		}
 	}
@@ -212,7 +254,12 @@ func (s *ElectrumHTTPServer) callHistory(b *ehBudget, param ehValue, limited boo
 	if err != nil {
 		return nil, err
 	}
-	entries, err := s.ehHistory(b, desc)
+	// history answers at most the last 200 entries.
+	window := 0
+	if limited {
+		window = 200
+	}
+	entries, err := s.ehHistory(b, desc, window)
 	if err != nil {
 		return nil, err
 	}
@@ -564,7 +611,7 @@ func (s *ElectrumHTTPServer) callNiceHistory(b *ehBudget, param ehValue, amountO
 	if err != nil {
 		return nil, err
 	}
-	entries, err := s.ehHistory(b, desc)
+	entries, err := s.ehHistory(b, desc, max(amountOfTxs, 1))
 	if err != nil {
 		return nil, err
 	}
@@ -759,5 +806,62 @@ func (b *ehBudget) spend() error {
 		return ehError("request too large")
 	}
 	b.calls--
+	return nil
+}
+
+// ehBlockGroup is one block's transactions of an address.
+type ehBlockGroup struct {
+	height    uint32
+	txids     []string
+	inputOnly []bool
+}
+
+// ehInputOnly reports whether a transaction touches the address only through
+// inputs: RocksDB stores an input index as ^i (negative), an output index as i.
+func ehInputOnly(indexes []int32) bool {
+	for _, i := range indexes {
+		if i >= 0 {
+			return false
+		}
+	}
+	return len(indexes) > 0
+}
+
+// ehBlockOrder puts a block's transactions in block order. The index adds a
+// block's transactions in two passes, those paying the address in block order
+// and then those only spending from it in block order, so a block holding
+// both kinds needs the block's transaction list (one getblock); any other
+// block is already in block order.
+func (s *ElectrumHTTPServer) ehBlockOrder(b *ehBudget, g *ehBlockGroup) error {
+	if !slices.Contains(g.inputOnly, true) || !slices.Contains(g.inputOnly, false) {
+		return nil
+	}
+	if err := b.spend(); err != nil {
+		return err
+	}
+	hash, err := s.index.GetBlockHash(g.height)
+	if err != nil {
+		return err
+	}
+	if hash == "" {
+		return errors.New("block not indexed")
+	}
+	var block struct {
+		Tx []string `json:"tx"`
+	}
+	if err := s.rpcCall("getblock", []interface{}{hash, 1}, &block); err != nil {
+		return err
+	}
+	pos := make(map[string]int, len(block.Tx))
+	for i, txid := range block.Tx {
+		pos[txid] = i
+	}
+	for _, txid := range g.txids {
+		if _, ok := pos[txid]; !ok {
+			// The block changed under the request (reorg).
+			return errors.New("block transactions changed, retry")
+		}
+	}
+	sort.SliceStable(g.txids, func(i, j int) bool { return pos[g.txids[i]] < pos[g.txids[j]] })
 	return nil
 }
