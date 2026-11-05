@@ -35,6 +35,7 @@ type BulkConnect struct {
 	height             uint32
 	bulkStats          bulkConnectStats
 	bulkHotness        bulkHotnessStats
+	heapGuard          *bulkHeapGuard
 }
 
 const (
@@ -91,6 +92,9 @@ func (d *RocksDB) InitBulkConnect() (*BulkConnect, error) {
 	}
 	if b.chainType == bchain.ChainEthereumType {
 		d.addrContractsCacheMaxBytes = d.bulkAddrContractsCacheMaxBytes
+	}
+	if b.chainType == bchain.ChainBitcoinType && d.bulkMaxHeapBytes > 0 {
+		b.heapGuard = newBulkHeapGuard(d.bulkMaxHeapBytes)
 	}
 	glog.Info("rocksdb: bulk connect init, db set to inconsistent state")
 	return b, nil
@@ -299,7 +303,17 @@ func (b *BulkConnect) connectBlockBitcoinType(block *bchain.Block, storeBlockTxs
 	}
 	var storeAddressesChan, storeBalancesChan chan error
 	var sa bool
-	if len(b.txAddressesMap) > maxBulkTxAddresses || len(b.balances) > maxBulkBalances {
+	heapFlush, heapBefore := b.heapGuard.due()
+	heapStart := time.Now()
+	if heapFlush {
+		// The caches hold more memory than allowed: store all of them, the
+		// same way Close does, instead of a random tenth.
+		sa = true
+		storeAddressesChan = make(chan error)
+		go b.parallelStoreTxAddresses(storeAddressesChan, true)
+		storeBalancesChan = make(chan error)
+		go b.parallelStoreBalances(storeBalancesChan, true)
+	} else if len(b.txAddressesMap) > maxBulkTxAddresses || len(b.balances) > maxBulkBalances {
 		sa = true
 		if len(b.txAddressesMap)+partialStoreAddresses > maxBulkTxAddresses {
 			storeAddressesChan = make(chan error)
@@ -367,6 +381,11 @@ func (b *BulkConnect) connectBlockBitcoinType(block *bchain.Block, storeBlockTxs
 		if err := <-storeBalancesChan; err != nil {
 			return err
 		}
+	}
+	if heapFlush {
+		after := releaseHeap(b.heapGuard)
+		b.heapGuard.flushed(after)
+		logHeapFlush(b.height, heapBefore, after, b.heapGuard, time.Since(heapStart))
 	}
 	return nil
 }

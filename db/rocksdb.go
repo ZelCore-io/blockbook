@@ -319,6 +319,9 @@ type RocksDB struct {
 	// addrContractsCacheBytes tracks cached size based on the packed size at insertion time.
 	addrContractsCacheBytes int64
 	hotAddrTracker          *addressHotness
+	// bulkMaxHeapBytes is the live-heap limit of the Bitcoin-type bulk connect
+	// caches (-bulkmaxheap), 0 = no limit; see bulkconnect_heap.go.
+	bulkMaxHeapBytes uint64
 	// lastAddrContractsCacheStore is only read/written from the block-connect goroutine.
 	lastAddrContractsCacheStore time.Time
 	setBlockTimesWG             sync.WaitGroup

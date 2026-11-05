@@ -66,6 +66,7 @@ var (
 
 	syncChunk   = flag.Int("chunk", 100, "block chunk size for processing in bulk mode")
 	syncWorkers = flag.Int("workers", 8, "number of workers to process blocks in bulk mode")
+	bulkMaxHeap = flag.Int64("bulkmaxheap", 0, "live Go heap limit in MiB for the bulk mode address caches of Bitcoin-type coins; when reached they are stored to the DB (0 = a third of physical memory, -1 = no limit)")
 	dryRun      = flag.Bool("dryrun", false, "do not index blocks, only download")
 
 	debugMode = flag.Bool("debug", false, "debug mode, return more verbose errors, reload templates on each request")
@@ -237,6 +238,7 @@ func mainWithExitCode() int {
 		glog.Error("rocksDB: ", err)
 		return exitCodeFatal
 	}
+	index.SetBulkMaxHeap(*bulkMaxHeap)
 	defer func() {
 		glog.Info("shutdown: rocksdb close start")
 		if err := index.Close(); err != nil {
