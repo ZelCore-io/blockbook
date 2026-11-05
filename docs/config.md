@@ -122,6 +122,10 @@ Good examples of coin configuration are
        generates `-electrumhttp=${BLOCKBOOK_INSIGHT_HOST}:3456`. Plain HTTP for a reverse proxy;
        Bitcoin-type chains with eight decimals only. See
        [electrum-http-compatibility.md](electrum-http-compatibility.md).
+    * `electrum_http_max_send` – Optional, default ElectrumX's `1000000`. The `MAX_SEND` of the
+       ElectrumX the electrum-http listener replaces; generates *-electrumhttpmaxsend*. The history
+       limit is `max(MAX_SEND, 350000) // 99` confirmed transactions, as in ElectrumX. Requires the
+       electrum-http listener.
     * `explorer_url` – URL of blockchain explorer. Leave empty for internal explorer.
     * `additional_params` – Additional params of exec command (see [Dogecoin definition](/configs/coins/dogecoin.json)).
     * `block_chain` – Configuration of BlockChain type that ensures communication with back-end service. All options

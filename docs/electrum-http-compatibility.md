@@ -70,6 +70,13 @@ Each request has a budget, so one call cannot fan out into unbounded backend wor
   `Error: history too large: <n> transactions, at most 1000 per request` before any transaction
   is loaded. `nicehistory` (31) is unaffected. History calls also stop at ElectrumX's limit
   below, and their mempool lookups count against the budget.
+- block order inside a block costs one `getblock` for each block that holds both transactions
+  paying the address and transactions only spending from it (Blockbook's index stores those in
+  two passes); other blocks need none. Only blocks inside the answer are looked up (the last
+  100 or 200 entries of `history`, the newest 31 or 1000 of the nice calls), newest first, at
+  most 200 per request, and each lookup counts against the budget. The order is cached by block
+  hash and address (4096 entries, shared by all requests), so repeated calls do not repeat the
+  lookups. `niceentirehistory`'s 1000-transaction cap is checked before any lookup.
 
 ## Rate limit
 
@@ -151,7 +158,7 @@ The wallet uses `balance`, `utxo`, `niceutxo`, `nicehistory` and `broadcast`.
 | header height above the tip | `Error: height 1,890,701 out of range` |
 | daemon RPC error (unknown tx, ...) | `Error: daemon error: DaemonError({'code': -5, 'message': '...'})` |
 | broadcast refused by the daemon | `Error: the transaction was rejected by network rules.\n\n<daemon message>\n[<raw tx>]` |
-| more than ElectrumX's history limit (10100 confirmed txs) | `Error: history too large` |
+| ElectrumX's history limit or more: `max(MAX_SEND, 350000) // 99` confirmed txs (10101 by default, 202020 with Raptoreum's `electrum_http_max_send` 20000000); mempool entries do not count | `Error: history too large` |
 | unknown call | `Error: Unknown call` |
 | request budget exhausted | `Error: request too large` / `Error: request timed out` |
 | niceentirehistory over 1000 transactions | `Error: history too large: <n> transactions, at most 1000 per request` |
@@ -183,6 +190,14 @@ broadcast messages are ElectrumX's formats.
 - **P2PK outputs.** Blockbook indexes a P2PK output under the matching P2PKH address, ElectrumX
   under its own script hash, so such outputs (early coinbase outputs) appear in the P2PKH
   address's `balance`, `history` and `utxo` here and not on the proxy.
+- **Block order in long histories.** ElectrumX lists a block's transactions in block order. The
+  listener does too for the newest 200 blocks that need a `getblock` to restore it (see Request
+  budget), and for any older one whose order is already cached. In `entirehistory` of an address
+  with more such blocks, the older ones list the transactions paying the address first, then
+  those only spending from it, each in block order. The listener logs this at `-v=1`. When the
+  lookup fails (daemon error, block not indexed, block replaced by a reorg) the block is listed
+  the same way, a warning is logged and the request still answers; after a daemon error no
+  further block is looked up in that request.
 - **Mempool entry order.** ElectrumX leaves the order of mempool entries unspecified; the
   listener puts height `0` entries before `-1` entries, each sorted by txid.
 - **Raptoreum.** Raptoreum is a Bitcoin-type chain with eight decimals and is served like BTX.

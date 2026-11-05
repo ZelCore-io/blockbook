@@ -54,6 +54,7 @@
     "explorer_url": "",
     "additional_params": "-workers=1",
     "electrum_http_binding_template": "${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookElectrumHTTP}}",
+    "electrum_http_max_send": 20000000,
     "block_chain": {
       "parse": false,
       "subversion": "/Raptoreum Core:2.0.3.1/",

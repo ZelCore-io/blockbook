@@ -98,9 +98,13 @@ type Config struct {
 		// ElectrumHTTPBindingTemplate renders -electrumhttp; it requires
 		// ports.blockbook_electrum_http.
 		ElectrumHTTPBindingTemplate string `json:"electrum_http_binding_template,omitempty"`
-		ExplorerURL                 string `json:"explorer_url"`
-		AdditionalParams            string `json:"additional_params"`
-		BlockChain                  struct {
+		// ElectrumHTTPMaxSend renders -electrumhttpmaxsend, the MAX_SEND of
+		// the ElectrumX the listener replaces (its history limit); it
+		// requires the listener. 0 keeps ElectrumX's default.
+		ElectrumHTTPMaxSend int    `json:"electrum_http_max_send,omitempty"`
+		ExplorerURL         string `json:"explorer_url"`
+		AdditionalParams    string `json:"additional_params"`
+		BlockChain          struct {
 			Parse                  bool   `json:"parse,omitempty"`
 			Subversion             string `json:"subversion,omitempty"`
 			AddressFormat          string `json:"address_format,omitempty"`
@@ -725,11 +729,15 @@ func (c *Config) validateInsight() error {
 }
 
 // validateElectrumHTTP checks the electrum-http listener's opt-in pair the
-// same way: both fields or neither, an explicit host and the configured port.
+// same way: both fields or neither, an explicit host and the configured port;
+// electrum_http_max_send needs the listener.
 // The host may be ${BLOCKBOOK_INSIGHT_HOST}, the private address the Insight
 // listener binds, so a coin can expose both listeners on the same interface.
 func (c *Config) validateElectrumHTTP() error {
 	port, binding := c.Ports.BlockbookElectrumHTTP, c.Blockbook.ElectrumHTTPBindingTemplate
+	if maxSend := c.Blockbook.ElectrumHTTPMaxSend; maxSend < 0 || (maxSend > 0 && port == 0 && binding == "") {
+		return fmt.Errorf("electrum_http_max_send must not be negative and requires the electrum-http listener")
+	}
 	if port == 0 && binding == "" {
 		return nil
 	}

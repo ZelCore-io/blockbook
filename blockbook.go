@@ -78,6 +78,8 @@ var (
 
 	electrumHTTPBinding = flag.String("electrumhttp", "", "optional electrum-http compatible HTTP binding host:port behind a trusted reverse proxy (default disabled)")
 
+	electrumHTTPMaxSend = flag.Int("electrumhttpmaxsend", 0, "MAX_SEND of the ElectrumX the electrum-http listener replaces; its history limit is max(MAX_SEND, 350000)/99 confirmed transactions (default 0, ElectrumX's 1000000)")
+
 	insightUI = flag.Bool("insightui", false, "serve the public explorer (UI, /api/v2, websocket) on the Insight listener for paths Insight does not match; requires -insight and -public")
 
 	certFiles = flag.String("certfile", "", "to enable SSL specify path to certificate files without extension, expecting <certfile>.crt and <certfile>.key (default no SSL)")
@@ -451,6 +453,9 @@ func mainWithExitCode() int {
 		})
 		if err == nil {
 			err = electrumHTTPServer.EnableRateLimit(internalState.GetNetwork())
+		}
+		if err == nil {
+			err = electrumHTTPServer.SetMaxSend(*electrumHTTPMaxSend)
 		}
 		if err == nil {
 			err = electrumHTTPServer.EnableChainRules(internalState.Coin, func(height uint32) (int64, error) {
