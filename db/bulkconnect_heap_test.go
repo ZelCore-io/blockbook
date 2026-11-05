@@ -94,10 +94,15 @@ func Test_BulkConnect_BitcoinType_HeapFlush(t *testing.T) {
 	if bc.heapGuard == nil {
 		t.Fatal("InitBulkConnect() did not set the heap guard")
 	}
+	// Odd reads are the due() checks (over the limit), even reads come after
+	// the store (heap released), as a real flush would see it.
 	flushes := 0
 	bc.heapGuard.read = func() uint64 {
 		flushes++
-		return 1 << 40 // always over the limit
+		if flushes%2 == 1 {
+			return 1 << 40
+		}
+		return 0
 	}
 
 	bc.heapGuard.blocks = bulkHeapCheckEvery - 1
