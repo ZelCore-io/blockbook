@@ -145,7 +145,7 @@ EVM coverage is inherited by every coin built on `EthereumRPC` (Ethereum, Polygo
 
 ## Bulk sync memory (Bitcoin-type coins)
 
-During the initial bulk sync Blockbook caches address balances (each with its UTXO list) and tx addresses in memory and writes them to RocksDB in batches. The batches used to be triggered only by entry counts (700k balances, 500k tx addresses). On chains where a few addresses hold many UTXOs, such as Komodo, the cache can outgrow RAM long before those counts: 400k balances held 7.5 GB on an 8 GB host, the kernel killed Blockbook, and the DB was left in inconsistent state and had to be reindexed.
+During the initial bulk sync Blockbook caches address balances (each with its UTXO list) and tx addresses in memory and writes them to RocksDB in batches. The batches used to be triggered only by entry counts (700k balances, 500k tx addresses). On chains where a few addresses hold many UTXOs, such as Komodo, the cache can outgrow RAM long before those counts: with about 400k cached balances Blockbook reached 7.5 GB on an 8 GB host and the kernel killed it, and the DB was left in inconsistent state and had to be reindexed.
 
 `-bulkmaxheap` adds a byte limit on the live Go heap, in MiB:
 

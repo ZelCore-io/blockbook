@@ -13,7 +13,7 @@ import (
 // UTXO list) and tx addresses, and stores them only when the maps reach
 // maxBulkBalances / maxBulkTxAddresses entries. Those caps count entries, not
 // bytes. On chains where few addresses carry many UTXOs (Komodo notaries,
-// mining pools), 400k cached balances held 7.5 GB and the process was killed
+// mining pools), with about 400k cached balances the process reached 7.5 GB and was killed
 // before the count cap was ever reached, leaving the DB in inconsistent state.
 // The heap guard below stores everything once the live Go heap passes a byte
 // limit, so memory stays bounded whatever the chain's address shape.
