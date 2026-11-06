@@ -143,6 +143,20 @@ Key invariants this design relies on:
 
 EVM coverage is inherited by every coin built on `EthereumRPC` (Ethereum, Polygon, BSC, Arbitrum, Optimism, Base, Avalanche); Tron runs the same watchdog poll-only over its ZeroMQ feed. BTC-family coins do not use this cached-tip feed and are unaffected.
 
+## Bulk sync memory (Bitcoin-type coins)
+
+During the initial bulk sync Blockbook caches address balances (each with its UTXO list) and tx addresses in memory and writes them to RocksDB in batches. The batches used to be triggered only by entry counts (700k balances, 500k tx addresses). On chains where a few addresses hold many UTXOs, such as Komodo, the cache can outgrow RAM long before those counts: with about 400k cached balances Blockbook reached 7.5 GB on an 8 GB host and the kernel killed it, and the DB was left in inconsistent state and had to be reindexed.
+
+`-bulkmaxheap` adds a byte limit on the live Go heap, in MiB:
+
+- `0` (default): a third of physical memory. The Go runtime can hold about twice the live heap between collections, so the process stays near two thirds of RAM.
+- a positive value: that limit, at least 256 MiB.
+- `-1`: no limit (the old behaviour).
+
+The heap is read every 100 blocks. Past the limit, every cached balance and tx address is written, the same as at the end of the bulk sync, and the memory is returned to the OS. The log shows `heap limit flush: live heap X MiB -> Y MiB`. If the working set alone stays near the limit, the next flush waits until the heap grows by another quarter of the limit, and a warning asks to raise `-bulkmaxheap` or add memory.
+
+A clean stop (`systemctl stop`) always writes the caches first, so stopping during bulk sync is safe. A kill (OOM, timeout) is not: the DB stays inconsistent and needs a reindex.
+
 ## Troubleshooting
 
 The retry policy is exposed per chain under `additional_params.missingBlockRetry` in `configs/coins/*.json`. Each field is optional; missing or `<= 0` values fall back to the built-in defaults below.
