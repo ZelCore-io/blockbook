@@ -34,7 +34,7 @@ if ([ $package = "blockbook" ] || [ $package = "all" ]) && [ -d build/pkg-defs/b
         fi
     fi
     export GITCOMMIT
-    export VERSION=$(cd build/pkg-defs/blockbook && dpkg-parsechangelog | sed -rne 's/^Version: ([0-9.]+)([-+~].+)?$/\1/p')
+    export VERSION=$(cd build/pkg-defs/blockbook && dpkg-parsechangelog | sed -rne 's/^Version: ([^-]+)(-.+)?$/\1/p')
 
     cp Makefile ldb sst_dump build/pkg-defs/blockbook
     cp /src/openapi.yaml build/pkg-defs/blockbook

@@ -19,7 +19,7 @@ UPDATE_VENDOR="${UPDATE_VENDOR:-0}"
 
 cd "${REPO}"
 
-VERSION="$(cd build/deb && dpkg-parsechangelog | sed -rne 's/^Version: ([0-9.]+)([-+~].+)?$/\1/p')"
+VERSION="$(cd build/deb && dpkg-parsechangelog | sed -rne 's/^Version: ([^-]+)(-.+)?$/\1/p')"
 
 make deb "UPDATE_VENDOR=${UPDATE_VENDOR}"
 

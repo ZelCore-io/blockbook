@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0+zelcore.1
+
+First release of the ZelCore fork under its own version. The version is
+`<upstream base>+zelcore.<N>` (see `docs/fork-release-policy.md`), so it cannot be
+confused with upstream `0.6.0`; the tag is `zelcore-v0.6.0+zelcore.1`.
+
+- **Upstream base:** upstream tag v0.6.0 plus the upstream development branch merged through `0cbf6324`, the changes listed under "Unreleased" below. Fork master is 199 commits ahead of upstream master (136 excluding merges). Three upstream commits are not merged yet: #1869, #1818 and #1855.
+- **Version:** `configs/environ.json` is `0.6.0+zelcore.1`. Package versions, package file names and `blockbook.version` in `/api/` carry the full string. The build script used to drop everything after the `MAJOR.MINOR.PATCH` part; it now strips only a Debian revision.
+- **Fork highlights:** native Insight-compatible and Electrum-over-HTTP listeners (`-electrumhttp`, Raptoreum and Bitcore bindings), a live-heap limit for bulk-connect caches (`-bulkmaxheap`), the ZelCore explorer content feed, ZelCore branding, and Zcash Zebra 7.0.0 for NU7.
+- **Not recorded here:** the database compatibility note and the required daemon version per coin belong to the release record written when the exact revision is qualified and tagged.
+
 ## Unreleased
 
 ### Performance and Scalability
