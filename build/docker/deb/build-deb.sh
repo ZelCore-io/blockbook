@@ -44,5 +44,18 @@ if ([ $package = "blockbook" ] || [ $package = "all" ]) && [ -d build/pkg-defs/b
 fi
 
 # copy packages
+debs=$(cd build/pkg-defs && ls -- *.deb)
 mv build/pkg-defs/*.deb /out
 chown $PACKAGER /out/*.deb
+
+# The instruction sets RocksDB in this image was compiled for (see build/docker/bin/Dockerfile) go
+# next to each blockbook package as <deb>.isa. An image without the record leaves no .isa, so a
+# stale one from an earlier build cannot vouch for this package.
+for deb in $debs; do
+    case $deb in blockbook-*) ;; *) continue ;; esac
+    rm -f "/out/$deb.isa"
+    if [ -f /opt/rocksdb/isa ]; then
+        cp /opt/rocksdb/isa "/out/$deb.isa"
+        chown "$PACKAGER" "/out/$deb.isa"
+    fi
+done

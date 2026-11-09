@@ -51,7 +51,14 @@ RUN cd /opt && git clone -b $ROCKSDB_VERSION --depth 1 https://github.com/facebo
     && test "$(git -C /opt/rocksdb rev-parse HEAD)" = "ae8fb3e5000e46d8d4c9dbf3a36019c0aaceebff"
 # RocksDB must not detect jemalloc: it would link ldb and sst_dump against libjemalloc.so and the package
 # would stop installing with a bare dpkg -i. The Blockbook binary links the static archive instead.
-RUN cd /opt/rocksdb && ROCKSDB_DISABLE_JEMALLOC=1 CFLAGS=-fPIC CXXFLAGS=-fPIC PORTABLE=$PORTABLE_ROCKSDB DISABLE_WARNING_AS_ERROR=1 make -j 4 release
+# The same RUN records which instruction sets RocksDB was compiled for: gcc expands its -m flags
+# (-march=native included) on the CPU that compiled it, which no later step can do. build-deb.sh
+# copies /opt/rocksdb/isa next to the package as <deb>.isa; contrib/scripts/deploy-blockbook.sh
+# checks it against the target CPU. A portable build records flags without extensions.
+RUN cd /opt/rocksdb && ROCKSDB_DISABLE_JEMALLOC=1 CFLAGS=-fPIC CXXFLAGS=-fPIC PORTABLE=$PORTABLE_ROCKSDB DISABLE_WARNING_AS_ERROR=1 make -j 4 release \
+    && mflags=$(sed -n 's/^PLATFORM_CXXFLAGS=//p' make_config.mk | tr ' \t' '\n\n' | sed -n '/^-m/p' | tr '\n' ' ') \
+    && { echo 'rocksdb-isa 1'; echo "flags=$mflags"; gcc -Q --help=target $mflags; } > /opt/rocksdb/isa.tmp \
+    && mv /opt/rocksdb/isa.tmp /opt/rocksdb/isa
 RUN strip /opt/rocksdb/ldb /opt/rocksdb/sst_dump && \
     cp /opt/rocksdb/ldb /opt/rocksdb/sst_dump /build
 
