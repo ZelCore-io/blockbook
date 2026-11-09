@@ -45,8 +45,26 @@
 #
 # After the restart the listener is probed (GET /api/status, 200 or 503);
 # a refused connection is a failed check and triggers the rollback. The check also runs with
-# --skip-build and --use-package-unit. Note that a host unit or ExecStart drop-in kept without
-# --use-package-unit never gets the flag.
+# --skip-build and --use-package-unit.
+#
+# Effective Insight port: a host unit or ExecStart drop-in kept without --use-package-unit never
+# gets the package's flag; it runs its own command line. The port check and the probe then use the
+# -insight=HOST:PORT of the ExecStart that will run after the restart, read from the unit and
+# drop-in files on disk (a host may keep Blockbook on another port on purpose while a legacy
+# explorer still holds the config port). A kept ExecStart without -insight opens no listener, so
+# the Insight port check and probe are skipped. With --use-package-unit, or without any override,
+# the port comes from the coin config. The script prints the port and where it came from.
+#
+# CPU instruction sets: RocksDB in the build image is compiled with -march=native unless the image
+# was built with PORTABLE=1 (make passes PORTABLE only when it (re)builds the image), so a package
+# can need AVX2/BMI2 and die with SIGILL on an older CPU. The build records what the package needs
+# in build/<package>.deb.isa (from the image's RocksDB flags, expanded by its gcc); --skip-build
+# without that file reads the local build image. --check and the step before the stop compare it
+# with /proc/cpuinfo and refuse when a flag is missing.
+#
+# Rollback: restores the files, clears systemd's start limit (reset-failed), starts the service
+# and waits up to 60 s for it to stay active, then says whether it runs. dpkg keeps listing the
+# new version; the script warns and names any copy of the previous package it finds.
 #
 # Only the blockbook-<coin> package is built and installed. The backend package is never
 # built, installed or restarted, and the index database is never touched.
@@ -209,6 +227,8 @@ insight_preflight() {
     local cfg=$1 envfile=$2 port host
     port=$(jq -r '(.ports.blockbook_insight // 0) | tostring' "$cfg") || { echo "cannot read $cfg" >&2; return 1; }
     [[ $port =~ ^[0-9]+$ && $port != 0 ]] || return 0
+    # Optional third argument: the effective port from a kept ExecStart, for the message only.
+    port=${3:-$port}
     host=$(insight_env_value "$envfile")
     if [[ -z $host ]]; then
         echo "$cfg enables Insight on port $port, but $envfile does not define a non-empty BLOCKBOOK_INSIGHT_HOST. Add the host's private address, e.g. BLOCKBOOK_INSIGHT_HOST=10.100.0.x, and run again; nothing was stopped or installed." >&2
@@ -303,6 +323,167 @@ insight_unit_ok() {
     unit=$(dpkg-deb --fsys-tarfile "$1" | tar -xO --wildcards "*/$2.service" 2>/dev/null) || return 1
     # shellcheck disable=SC2016 # the literal systemd variable reference is what we look for
     grep -qF -- ' -insight=${BLOCKBOOK_INSIGHT_HOST}:' <<<"$unit"
+}
+
+# ---- Effective ExecStart and Insight address -----------------------------------------------
+# A host unit or ExecStart drop-in that the deploy keeps decides which -insight address Blockbook
+# binds after the restart. These read the unit files on disk (what the next daemon-reload loads),
+# not the running unit, so a drop-in written since the last reload counts too.
+
+# Unit directories in systemd's precedence order (a unit in an earlier one masks later ones).
+unit_dirs=(/etc/systemd/system /run/systemd/system /usr/lib/systemd/system /lib/systemd/system)
+
+# unit_files SERVICE [ROOT]: print "fragment PATH" for the unit file systemd loads and then
+# "dropin PATH" for each SERVICE.service.d/*.conf in the order systemd applies them (sorted by file
+# name; a name in an earlier directory masks the same name later). ROOT prefixes every path (tests).
+unit_files() {
+    local svc=$1 root=${2:-} d f name seen=' '
+    for d in "${unit_dirs[@]}"; do
+        if [[ -f $root$d/$svc.service ]]; then echo "fragment $root$d/$svc.service"; break; fi
+    done
+    for d in "${unit_dirs[@]}"; do
+        for f in "$root$d/$svc.service.d"/*.conf; do
+            [[ -f $f ]] || continue
+            name=${f##*/}
+            [[ $seen == *" $name "* ]] && continue
+            seen+="$name "
+            printf '%s\t%s\n' "$name" "$f"
+        done
+    done | LC_ALL=C sort -t $'\t' -k1,1 | cut -f2- | sed 's/^/dropin /'
+}
+
+# unit_exec_start FILE...: the [Service] ExecStart that results from reading FILEs in order (an
+# empty ExecStart= clears it, a later one replaces it; Blockbook units are Type=simple with one).
+# Prints the file that set it on the first line and the command line on the second; both are empty
+# when no file sets one. Joins lines continued with a trailing backslash.
+unit_exec_start() {
+    awk '
+        function take(l,   v) {
+            if (l ~ /^[ \t]*\[/) { sect = l; gsub(/[ \t]/, "", sect); return }
+            if (sect != "[Service]" || l ~ /^[ \t]*[#;]/) return
+            if (match(l, /^[ \t]*ExecStart[ \t]*=/)) {
+                v = substr(l, RLENGTH + 1); sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v)
+                cmd = v; src = (v == "" ? "" : FILENAME)
+            }
+        }
+        FNR == 1 { sect = ""; buf = "" }
+        {
+            l = $0; sub(/\r$/, "", l)
+            if (l ~ /\\$/) { buf = buf substr(l, 1, length(l) - 1) " "; next }
+            take(buf l); buf = ""
+        }
+        END { print src; print cmd }' "$@"
+}
+
+# exec_insight_addr CMDLINE: print "PORT HOST" of the last -insight=HOST:PORT (or -insight HOST:PORT,
+# --insight) on CMDLINE, as Go's flag package keeps the last one. HOST may be empty or a systemd
+# variable reference. Prints nothing when the flag is absent or empty; returns 2 when its value
+# has no :PORT.
+exec_insight_addr() {
+    local -a words
+    local i v='' found=0
+    read -r -a words <<<"$1"
+    for ((i = 0; i < ${#words[@]}; i++)); do
+        case ${words[i]} in
+            -insight=*|--insight=*) v=${words[i]#*=}; found=1 ;;
+            -insight|--insight) v=${words[i+1]:-}; found=1 ;;
+        esac
+    done
+    (( found )) && [[ -n $v ]] || return 0
+    [[ $v =~ ^(.*):([0-9]{1,5})$ ]] || return 2
+    printf '%s %s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[1]}"
+}
+
+# insight_effective SERVICE CONFIG_PORT USE_PACKAGE_UNIT [ROOT]: print "PORT|HOST|SOURCE" for the
+# Insight listener that will run after the restart.
+#   - --use-package-unit, or no host unit and no ExecStart drop-in: the package unit runs, so the
+#     coin config port with ${BLOCKBOOK_INSIGHT_HOST}.
+#   - otherwise the kept ExecStart decides; PORT and HOST are empty when it has no -insight flag.
+# Returns 1 with a message when the kept ExecStart has an -insight value without a port.
+insight_effective() {
+    local svc=$1 cfgport=$2 usepkg=$3 root=${4:-} kind f frag='' kept_unit='' src cmd addr port host
+    local -a files=() dropins=()
+    while read -r kind f; do
+        files+=("$f")
+        if [[ $kind == fragment ]]; then
+            frag=$f
+        elif grep -q '^[[:space:]]*ExecStart[[:space:]]*=' "$f" 2>/dev/null; then
+            dropins+=("$f")
+        fi
+    done < <(unit_files "$svc" "$root")
+    # A fragment outside /lib and /usr/lib is a host unit that replaces the package's.
+    [[ -n $frag && $frag != "$root"/lib/* && $frag != "$root"/usr/lib/* ]] && kept_unit=$frag
+    # shellcheck disable=SC2016 # the literal systemd variable reference is the host spec
+    if (( usepkg )) || [[ -z $kept_unit && ${#dropins[@]} == 0 ]]; then
+        printf '%s|%s|%s\n' "$cfgport" '${BLOCKBOOK_INSIGHT_HOST}' 'ports.blockbook_insight in the coin config (package unit)'
+        return 0
+    fi
+    { read -r src; read -r cmd; } < <(unit_exec_start "${files[@]}")
+    [[ -n $src ]] || src=${kept_unit:-${dropins[0]}}
+    if ! addr=$(exec_insight_addr "$cmd"); then
+        echo "The ExecStart kept from $src has an -insight value without :PORT." >&2
+        return 1
+    fi
+    if [[ -z $addr ]]; then
+        printf '||kept ExecStart in %s\n' "$src"
+        return 0
+    fi
+    read -r port host <<<"$addr"
+    printf '%s|%s|-insight in the kept ExecStart in %s\n' "$port" "$host" "$src"
+}
+
+# ---- CPU instruction-set preflight ---------------------------------------------------------
+# Go code is built with the default GOAMD64=v1 (nothing in the build sets it) and the Go runtime
+# checks its level itself, and jemalloc comes from the distribution. The part that can need newer
+# instructions is RocksDB, compiled in the build image with -march=native unless the image was
+# built with PORTABLE=1 (build_detect_platform then sets no -march). Its flags are recorded in
+# /opt/rocksdb/make_config.mk (PLATFORM_CXXFLAGS).
+
+# isa_march FLAGS: the value of the last -march= in a compiler flag string (empty when none).
+isa_march() {
+    local -a words
+    local w m=''
+    read -r -a words <<<"$1"
+    for w in "${words[@]}"; do [[ $w == -march=* ]] && m=${w#-march=}; done
+    printf '%s\n' "$m"
+}
+
+# isa_from_gcc: read `gcc -Q --help=target -march=X` on stdin and print the enabled instruction
+# set extensions beyond baseline x86-64 as /proc/cpuinfo flag names, space separated and sorted.
+isa_from_gcc() {
+    awk '
+        BEGIN {
+            n = split("sse3:pni ssse3:ssse3 sse4.1:sse4_1 sse4.2:sse4_2 popcnt:popcnt pclmul:pclmulqdq " \
+                      "aes:aes avx:avx avx2:avx2 fma:fma f16c:f16c bmi:bmi1 bmi2:bmi2 lzcnt:abm " \
+                      "movbe:movbe adx:adx sha:sha_ni avx512f:avx512f avx512cd:avx512cd " \
+                      "avx512bw:avx512bw avx512dq:avx512dq avx512vl:avx512vl", t, " ")
+            for (i = 1; i <= n; i++) { split(t[i], kv, ":"); map[kv[1]] = kv[2] }
+        }
+        $NF == "[enabled]" && $1 ~ /^-m/ { o = substr($1, 3); if (o in map) print map[o] }' |
+        LC_ALL=C sort -u | paste -sd' ' -
+}
+
+# isa_cpu_flags: read /proc/cpuinfo on stdin and print the flags of the first CPU.
+isa_cpu_flags() { awk -F: '$1 ~ /^flags[ \t]*$/ { sub(/^[ \t]+/, "", $2); print $2; exit }'; }
+
+# isa_missing REQUIRED HAVE: print the words of REQUIRED that are not in HAVE (space separated).
+isa_missing() {
+    local w out=''
+    for w in $1; do [[ " $2 " == *" $w "* ]] || out+="${out:+ }$w"; done
+    printf '%s\n' "$out"
+}
+
+# isa_probe_image IMAGE: print "MARCH|FLAGS" for RocksDB in the build image (both empty for a
+# portable build). -march=native is expanded by the image's gcc on this host, which is the CPU
+# that built the image when it was built here (make builds it locally).
+isa_probe_image() {
+    local img=$1 cxx march out
+    cxx=$(docker run --rm "$img" sed -n 's/^PLATFORM_CXXFLAGS=//p' /opt/rocksdb/make_config.mk 2>/dev/null) || return 1
+    [[ -n $cxx ]] || return 1
+    march=$(isa_march "$cxx")
+    if [[ -z $march ]]; then echo '|'; return 0; fi
+    out=$(docker run --rm "$img" gcc -Q --help=target "-march=$march" 2>/dev/null) || return 1
+    printf '%s|%s\n' "$march" "$(isa_from_gcc <<<"$out")"
 }
 
 # Sourced (by the test): stop here, only the functions above are wanted.
@@ -446,26 +627,94 @@ fi
 # Insight: the env file must name a usable address that is assigned to this host (before any
 # build). The port check runs later, just before the service stop (step 5), so the converter keeps
 # serving during the build; --check runs both now. insight_host and insight_port stay empty for
-# other coins.
+# other coins and when the kept ExecStart has no -insight flag.
+#
+# The port is the one that will be bound after the restart: a kept host unit or ExecStart drop-in
+# may run Blockbook on another port than the coin config (see Effective Insight port above).
 insight_host=''
-insight_port=$(jq -r '(.ports.blockbook_insight // 0) | tostring' "$config")
-[[ $insight_port != 0 ]] || insight_port=''
+insight_port=''
 insight_msg=''
-if [[ -n $insight_port ]]; then
-    if insight_msg=$(insight_preflight "$config" "$insight_env_file" 2>&1); then
-        insight_host=$(insight_env_value "$insight_env_file")
-        if (( check_only )); then
-            own_pid=$(num "$(systemctl show -p MainPID --value "$service")")
-            insight_msg=$(insight_runtime_check "$insight_host" "$insight_port" "$own_pid" 2>&1) &&
-                log "Insight: $insight_host:$insight_port is bindable (BLOCKBOOK_INSIGHT_HOST from $insight_env_file)"
+insight_local=1   # 0: the bind host is a wildcard or a name, so the "assigned here" check is skipped
+cfg_insight_port=$(jq -r '(.ports.blockbook_insight // 0) | tostring' "$config")
+if [[ $cfg_insight_port != 0 ]]; then
+    insight_eff=$(insight_effective "$service" "$cfg_insight_port" "$use_package_unit" 2>&1) ||
+        fail "$insight_eff Nothing was stopped or installed."
+    IFS='|' read -r insight_port insight_spec insight_src <<<"$insight_eff"
+    if [[ -z $insight_port ]]; then
+        log "Insight: the $insight_src has no -insight flag, so Blockbook opens no Insight listener; the Insight port check and probe are skipped (--use-package-unit would run the package unit on port $cfg_insight_port)."
+    else
+        log "Insight: port $insight_port from the $insight_src"
+        # shellcheck disable=SC2016 # literal systemd variable references
+        if [[ $insight_spec == '${BLOCKBOOK_INSIGHT_HOST}' || $insight_spec == '$BLOCKBOOK_INSIGHT_HOST' ]]; then
+            insight_host_src="BLOCKBOOK_INSIGHT_HOST from $insight_env_file"
+            if insight_msg=$(insight_preflight "$config" "$insight_env_file" "$insight_port" 2>&1); then
+                insight_host=$(insight_env_value "$insight_env_file")
+            fi
+        elif insight_host_valid "$insight_spec"; then
+            insight_host=$insight_spec
+            insight_host_src="literal address in the kept ExecStart"
         else
-            insight_msg=$(insight_local_check "$insight_host" 2>&1) &&
-                log "Insight: $insight_host is assigned to this host (BLOCKBOOK_INSIGHT_HOST from $insight_env_file); port $insight_port is checked before the stop"
+            # Empty or 0.0.0.0 binds every address, so probe loopback; a name is probed as given.
+            insight_local=0
+            insight_host=$insight_spec
+            [[ -n $insight_host && $insight_host != 0.0.0.0 ]] || insight_host=127.0.0.1
+            insight_host_src="kept ExecStart binds '${insight_spec}', probed at $insight_host"
+        fi
+        if [[ -n $insight_host ]]; then
+            own_pid=$(num "$(systemctl show -p MainPID --value "$service")")
+            if (( check_only )); then
+                if (( insight_local )); then
+                    insight_msg=$(insight_runtime_check "$insight_host" "$insight_port" "$own_pid" 2>&1) || true
+                else
+                    insight_msg=$(insight_port_check "$insight_port" "$own_pid" 2>&1) || true
+                fi
+                [[ -n $insight_msg ]] || log "Insight: $insight_host:$insight_port is bindable ($insight_host_src)"
+            elif (( insight_local )); then
+                insight_msg=$(insight_local_check "$insight_host" 2>&1) || true
+                [[ -n $insight_msg ]] || log "Insight: $insight_host is assigned to this host ($insight_host_src); port $insight_port is checked before the stop"
+            else
+                log "Insight: $insight_host_src; port $insight_port is checked before the stop"
+            fi
+        fi
+        if [[ -z $insight_host ]] || [[ -n $insight_msg ]]; then
+            if (( check_only )); then log "Warning: $insight_msg"; else fail "$insight_msg"; fi
         fi
     fi
-    if [[ -z $insight_host ]] || [[ -n $insight_msg ]]; then
-        if (( check_only )); then log "Warning: $insight_msg"; else fail "$insight_msg"; fi
+fi
+
+# CPU: the package's RocksDB may need instruction sets this CPU lacks (see CPU instruction sets
+# above). Checked here for --check and again before the stop, against the package that is installed.
+bin_image=blockbook-build
+# cpu_check DEB: return 1 with the reason in cpu_msg when this CPU lacks a flag the package needs.
+# Logs which flags it needs and where that came from; unknown needs are only a warning.
+cpu_msg=''
+cpu_check() {
+    local deb_file=$1 src march req missing line
+    if [[ -f $deb_file.isa ]]; then
+        march=$(sed -n 's/^march=//p' "$deb_file.isa")
+        req=$(sed -n 's/^requires=//p' "$deb_file.isa")
+        src="$deb_file.isa, recorded when the package was built"
+    elif (( docker_ok )) && line=$(isa_probe_image "$bin_image"); then
+        march=${line%%|*}
+        req=${line#*|}
+        src="RocksDB flags in the local $bin_image image; assumes ${deb_file##*/} was built from it here"
+    else
+        log "Warning: cannot tell which instruction sets ${deb_file##*/} needs (no $deb_file.isa and the $bin_image image cannot be read); CPU check skipped."
+        return 0
     fi
+    if [[ -z $march ]]; then
+        log "CPU: RocksDB was built portable (no -march; $src); any x86-64 CPU runs it"
+        return 0
+    fi
+    missing=$(isa_missing "$req" "$(isa_cpu_flags < /proc/cpuinfo)")
+    if [[ -n $missing ]]; then
+        cpu_msg="CPU lacks $missing, which ${deb_file##*/} needs (RocksDB built with -march=$march; $src). Blockbook would die with SIGILL (invalid opcode). Rebuild the build image portable (make build-images PORTABLE=1) and build the package again. Nothing was stopped or installed."
+        return 1
+    fi
+    log "CPU: has every instruction set the package needs (RocksDB -march=$march: ${req:-none beyond x86-64}; $src)"
+}
+if (( check_only )); then
+    cpu_check "$deb" || log "Warning: $cpu_msg"
 fi
 
 if (( check_only )); then
@@ -478,11 +727,22 @@ if (( ! skip_build )); then
     (( docker_ok )) || fail 'Docker is required to build (docker info failed).'
     (( git_dirty == 0 )) || fail 'The checkout has uncommitted or untracked files; release builds need a clean tree.'
     (( disk_repo >= 8192 )) || fail "Need at least 8192 MiB free next to the checkout (have $disk_repo)."
-    rm -f -- "$repo/build/${package}_"*.deb
+    rm -f -- "$repo/build/${package}_"*.deb "$repo/build/${package}_"*.deb.isa
     if (( use_swap )); then
         BB_BUILD_ENV=prod "$repo/contrib/scripts/build-with-swap.sh" "$coin"
     else
         (cd "$repo" && BB_BUILD_ENV=prod make "release-deb-blockbook-$coin" PORTABLE=1)
+    fi
+    # Record what the package's RocksDB needs, so a later --skip-build (or a copy of the package
+    # with this file on another host) is checked against the CPU that built it. PORTABLE=1 only
+    # takes effect when make (re)builds the image; an older image keeps its -march.
+    if [[ -f $deb ]] && isa_line=$(isa_probe_image "$bin_image"); then
+        printf 'march=%s\nrequires=%s\nimage=%s\n' "${isa_line%%|*}" "${isa_line#*|}" \
+            "$(docker image inspect -f '{{.Id}}' "$bin_image" 2>/dev/null || true)" > "$deb.isa"
+        [[ -z ${isa_line%%|*} ]] ||
+            log "Warning: the $bin_image image has RocksDB built with -march=${isa_line%%|*} (PORTABLE=1 does not rebuild an existing image); the package needs ${isa_line#*|}. Recorded in $deb.isa."
+    else
+        log "Warning: could not read the RocksDB flags of the $bin_image image; $deb.isa not written."
     fi
 fi
 [[ -f $deb ]] || fail "Package not found: $deb"
@@ -518,11 +778,45 @@ restore_backup() {
             [[ -f $backup/dropins/$(basename "$dropin") ]] && cp -a "$backup/dropins/$(basename "$dropin")" "$dropin"
         done < "$backup/dropins.list"
     fi
-    systemctl daemon-reload
-    systemctl start "$service"
-    sleep 10
-    log "Service after restore: $(systemctl is-active "$service" || true)"
-    log "dpkg still lists $package $(dpkg-deb -f "$deb" Version); reinstall $installed_version later to align it."
+    systemctl daemon-reload || true
+    # A failed new version (a crash loop, SIGILL) leaves the unit at systemd's start limit, and the
+    # start below would be refused ("Start request repeated too quickly"), leaving Blockbook down.
+    systemctl reset-failed "$service" || true
+    systemctl start "$service" || log "systemctl start $service failed; checking its state"
+    # Running means active on two polls in a row, so a unit that crash-loops (active, then
+    # activating again) does not count.
+    local state='' streak=0 waited
+    for ((waited = 0; waited <= 60; waited += 5)); do
+        state=$(systemctl is-active "$service" || true)
+        if [[ $state == active ]]; then
+            streak=$((streak + 1))
+            (( streak >= 2 )) && break
+        else
+            streak=0
+        fi
+        sleep 5
+    done
+    if (( streak >= 2 )); then
+        log "Rollback: $service is running (active) on the restored files."
+    else
+        log "Rollback: $service is NOT running (state '$state' after ${waited}s). Start it by hand: systemctl reset-failed $service && systemctl start $service; journalctl -u $service shows why."
+    fi
+    # dpkg is not rolled back: reinstalling a package in this failure path would run its
+    # maintainer scripts again on a host in an unknown state, and no copy of the previous package
+    # can be trusted (the build removes build/${package}_*.deb, dpkg -i installs are not cached by
+    # apt, and the version string often stays the same across commits).
+    local new_version prev_deb=''
+    new_version=$(dpkg-deb -f "$deb" Version)
+    # apt keeps a package it downloaded under this name (an epoch's ':' is stored as %3a).
+    if [[ -f /var/cache/apt/archives/${package}_${installed_version//:/%3a}_amd64.deb ]]; then
+        prev_deb=/var/cache/apt/archives/${package}_${installed_version//:/%3a}_amd64.deb
+    fi
+    log "Warning: dpkg now lists $package $new_version (from $deb), but the files on disk are the restored $installed_version from $backup."
+    if [[ -n $prev_deb ]]; then
+        log "A copy of the previous package is at $prev_deb; dpkg --force-confold -i it to align dpkg."
+    else
+        log "No copy of the previous $installed_version package was found; to align dpkg, build commit ${pre_commit:-<previous commit>} and install it with dpkg --force-confold -i. The restored files are in $backup."
+    fi
 }
 
 verify_failed() {
@@ -542,8 +836,9 @@ verify_failed() {
 if [[ -n $insight_host ]]; then
     own_pid=$(num "$(systemctl show -p MainPID --value "$service")")
     if ! insight_msg=$(insight_port_check "$insight_port" "$own_pid" 2>&1); then fail "$insight_msg"; fi
-    log "Insight: port $insight_port is free or held by $service"
+    log "Insight: port $insight_port is free or held by $service ($insight_src)"
 fi
+cpu_check "$deb" || fail "$cpu_msg"
 log "Stopping $service"
 systemctl stop "$service"
 log 'Installing (existing blockchaincfg.json is kept)'
@@ -639,7 +934,7 @@ if [[ -n $insight_host ]]; then
         systemctl is-active --quiet "$service" || break
         sleep 5
     done
-    (( probed )) || verify_failed "Insight listener $insight_host:$insight_port does not answer /api/status (a host unit or ExecStart drop-in that replaces the package unit needs --use-package-unit)"
+    (( probed )) || verify_failed "Insight listener $insight_host:$insight_port ($insight_src) does not answer /api/status"
     log "Insight listener answers on $insight_host:$insight_port"
 fi
 
