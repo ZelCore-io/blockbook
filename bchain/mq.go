@@ -3,6 +3,7 @@ package bchain
 import (
 	"context"
 	"encoding/binary"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang/glog"
@@ -16,11 +17,15 @@ type SubscriptionTopics struct {
 	TxReceive      string
 }
 
-// MQ is message queue listener handle
+// MQ is message queue listener handle.
+//
+// ZeroMQ sockets are not thread-safe: once NewMQ starts the run goroutine, only run may use
+// socket. Shutdown stops it through the context (zmq_ctx_term is thread-safe), never through
+// the socket.
 type MQ struct {
 	context   *zmq.Context
 	socket    *zmq.Socket
-	isRunning bool
+	isRunning atomic.Bool
 	finished  chan error
 	binding   string
 	subs      SubscriptionTopics
@@ -91,6 +96,13 @@ func NewMQ(binding string, curve *CurveConfig, callback func(NotificationType), 
 		}
 	}
 
+	// Discard anything still queued (e.g. subscriptions to a peer that is down) when the socket
+	// is closed, so that context.Term in Shutdown does not wait for it. It is set here because
+	// libzmq rejects setsockopt with ETERM once the context is being terminated.
+	if err := socket.SetLinger(0); err != nil {
+		return nil, err
+	}
+
 	// for now do not use raw subscriptions - we would have to handle skipped/lost notifications from zeromq
 	// on each notification we do sync or syncmempool respectively
 	// socket.SetSubscribe("rawblock")
@@ -100,25 +112,40 @@ func NewMQ(binding string, curve *CurveConfig, callback func(NotificationType), 
 		return nil, err
 	}
 	glog.Info("MQ listening to ", binding)
-	mq := &MQ{context, socket, true, make(chan error), binding, subs}
+	mq := &MQ{
+		context: context,
+		socket:  socket,
+		// run sends on finished once; Shutdown's Term goroutine may send an error too. Buffer
+		// both so neither blocks forever when Shutdown has already returned on its deadline.
+		finished: make(chan error, 2),
+		binding:  binding,
+		subs:     subs,
+	}
+	mq.isRunning.Store(true)
 	go mq.run(callback)
 	return mq, nil
 }
 
 func (mq *MQ) run(callback func(NotificationType)) {
 	defer func() {
+		// A panic in callback ends the loop; log it and still close the socket.
 		if r := recover(); r != nil {
 			glog.Error("MQ loop recovered from ", r)
 		}
-		mq.isRunning = false
+		// Close the socket here, in the goroutine that owns it. context.Term in Shutdown
+		// returns only after this.
+		if err := mq.socket.Close(); err != nil {
+			glog.Error("MQ socket close error ", err)
+		}
+		mq.isRunning.Store(false)
 		glog.Info("MQ loop terminated")
 		mq.finished <- nil
 	}()
-	mq.isRunning = true
 	repeatedError := false
 	for {
 		msg, err := mq.socket.RecvMessageBytes(0)
 		if err != nil {
+			// ETERM: Shutdown called context.Term
 			if zmq.AsErrno(err) == zmq.Errno(zmq.ETERM) || err.Error() == "Socket is closed" {
 				break
 			}
@@ -161,32 +188,14 @@ func (mq *MQ) run(callback func(NotificationType)) {
 // Shutdown stops listening to the ZeroMQ and closes the connection
 func (mq *MQ) Shutdown(ctx context.Context) error {
 	glog.Info("MQ server shutdown")
-	if mq.isRunning {
+	if mq.isRunning.Load() {
+		// Do not touch mq.socket here: run may be blocked in a recv on it, and using a ZeroMQ
+		// socket from two threads can crash libzmq. context.Term makes the blocked recv return
+		// ETERM, run then closes the socket and Term returns. Term blocks until that close, so
+		// it runs in its own goroutine.
 		go func() {
-			// if errors in the closing sequence, let it close ungracefully
-			if mq.subs.BlockSubscribe != "" {
-				if err := mq.socket.SetUnsubscribe(mq.subs.BlockSubscribe); err != nil {
-					mq.finished <- err
-					return
-				}
-			}
-			if mq.subs.TxSubscribe != "" {
-				if err := mq.socket.SetUnsubscribe(mq.subs.TxSubscribe); err != nil {
-					mq.finished <- err
-					return
-				}
-			}
-			if err := mq.socket.Unbind(mq.binding); err != nil {
-				mq.finished <- err
-				return
-			}
-			if err := mq.socket.Close(); err != nil {
-				mq.finished <- err
-				return
-			}
 			if err := mq.context.Term(); err != nil {
 				mq.finished <- err
-				return
 			}
 		}()
 		var err error
