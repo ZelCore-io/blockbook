@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0+zelcore.2
+
+Bug-fix release on the same upstream base. `0.6.0+zelcore.1` was built from `662342b7`
+and only deployed to canary hosts; it was not tagged for the whole fleet.
+
+- **ZeroMQ shutdown race:** stopping Blockbook used the ZeroMQ subscriber socket from two threads at once. `MQ.Shutdown` unsubscribed, unbound and closed the socket while the listener goroutine was still blocked receiving on it, and ZeroMQ sockets are not thread-safe. Every stop logged `MQ loop recovered from nil pointer`; some stops waited 10 s and logged `MQ.Shutdown error: context deadline exceeded`; a few aborted the process in libzmq (`Assertion failed ... src/signaler.cpp`) before the database was closed cleanly. Shutdown now only terminates the ZeroMQ context, which makes the blocked receive return; the listener goroutine then closes its own socket. The socket's linger is set to 0 so the context cannot wait on queued subscriptions to a backend that is down. The same code is in upstream master.
+- **Version:** `configs/environ.json` is `0.6.0+zelcore.2`.
+
 ## 0.6.0+zelcore.1
 
 First release of the ZelCore fork under its own version. The version is
