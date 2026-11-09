@@ -869,7 +869,6 @@ installed_version=$(dpkg-query -W -f='${Version}' "$package")
 pre_json=$(api_get /api/ || true)
 pre_commit=$(api_field "$pre_json" gitCommit)
 pre_height=$(api_field "$pre_json" bestHeight)
-pre_restarts=$(num "$(systemctl show -p NRestarts --value "$service")")
 log "Installed: $package $installed_version, service $(systemctl is-active "$service" || true)"
 if [[ -n $pre_json ]]; then
     log "Running: version $(api_field "$pre_json" version), commit ${pre_commit:0:12}, height $pre_height, inSync $(api_field "$pre_json" inSync)"
@@ -1150,10 +1149,13 @@ if (( use_package_unit )); then
     systemctl daemon-reload
     log "Service unit now: $(systemctl show -p FragmentPath --value "$service")"
 fi
-# Count restarts from here: a unit switch or daemon-reload resets NRestarts, and only automatic
-# restarts after this start count as a failed check.
-pre_restarts=$(num "$(systemctl show -p NRestarts --value "$service")")
 systemctl start "$service"
+# Count restarts from here. A manual start, a unit switch or a daemon-reload resets NRestarts, so
+# the baseline is read after the start: a counter left over from an earlier crash would otherwise
+# make the check fail with a negative count. The MainPID is kept too, so a restart is caught even
+# if the counter was reset again in between.
+start_restarts=$(num "$(systemctl show -p NRestarts --value "$service")")
+start_pid=$(num "$(systemctl show -p MainPID --value "$service")")
 
 # 6. Verify
 log "Waiting up to ${api_timeout}s for the API"
@@ -1200,7 +1202,10 @@ done
 log "In sync at height $height (backend $(api_field "$post_json" backendBlocks))"
 
 restarts=$(num "$(systemctl show -p NRestarts --value "$service")")
-[[ $restarts == "$pre_restarts" ]] || verify_failed "service restarted $((restarts - pre_restarts)) times"
+pid=$(num "$(systemctl show -p MainPID --value "$service")")
+(( restarts <= start_restarts )) || verify_failed "service restarted $((restarts - start_restarts)) times"
+(( start_pid == 0 || pid == start_pid )) ||
+    verify_failed "service MainPID changed from $start_pid to $pid (it was restarted)"
 
 home=$(api_get / || true)
 [[ $home == *hub-page* ]] || verify_failed 'home page does not render the explorer layout'
