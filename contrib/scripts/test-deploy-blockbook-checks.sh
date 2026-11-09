@@ -117,6 +117,35 @@ gcc_out='The following options are target specific:
 eq 'isa: gcc options map to cpuinfo names' "$(isa_from_gcc <<<"$gcc_out")" \
     'abm aes avx avx2 bmi1 bmi2 fma pclmulqdq popcnt sse4_2'
 
+# Newer extensions map to the kernel's names; baseline and ABI/tuning options are ignored.
+gcc_new='  -mavx512vnni                          [enabled]
+  -mavx512vbmi                          [enabled]
+  -mavx512vbmi2                         [enabled]
+  -mavxvnni                             [enabled]
+  -mgfni                                [enabled]
+  -mvaes                                [enabled]
+  -mamx-tile                            [enabled]
+  -msha                                 [enabled]
+  -mrdseed                              [enabled]
+  -mmmx                                 [enabled]
+  -msse                                 [enabled]
+  -msse4                                [enabled]
+  -mfxsr                                [enabled]
+  -mred-zone                            [enabled]
+  -mieee-fp                             [enabled]
+  -mvzeroupper                          [enabled]
+  -mavx512fp16                          [disabled]'
+eq 'isa: newer extensions map, baseline and tuning options are ignored' "$(isa_from_gcc <<<"$gcc_new")" \
+    'amx_tile avx512_vbmi2 avx512_vnni avx512vbmi avx_vnni gfni rdseed sha_ni vaes'
+eq 'isa: nothing unknown in the mapped set' "$(isa_unknown_from_gcc <<<"$gcc_new")" ''
+# Fail closed: an enabled extension the map lacks is kept by gcc's name, never dropped.
+gcc_unk='  -mavx512vnni                          [enabled]
+  -mfuturext                            [enabled]
+  -mavx10.1-512                         [enabled]
+  -mother-tuning                        [disabled]'
+eq 'isa: unmapped enabled extensions are reported by gcc name' "$(isa_unknown_from_gcc <<<"$gcc_unk")" '-mavx10.1-512 -mfuturext'
+eq 'isa: mapped ones still map beside unmapped ones' "$(isa_from_gcc <<<"$gcc_unk")" 'avx512_vnni'
+
 qemu_cpuinfo='processor	: 0
 vendor_id	: AuthenticAMD
 model name	: QEMU Virtual CPU version 2.5+
@@ -159,10 +188,36 @@ eq 'insight: dash-prefix drop-in counts' "$(insight_effective "$svc" 3001 0 "$ro
 f=$root/etc/systemd/system/blockbook-.service.d/all.conf
 if unit_dropin_shared "$svc" "$f"; then ok 'dropin: prefix directory is shared'; else bad 'dropin: prefix directory is shared'; fi
 if unit_dropin_shared "$svc" "$root/etc/systemd/system/$svc.service.d/a.conf"; then bad 'dropin: own directory is not shared'; else ok 'dropin: own directory is not shared'; fi
-# The same name in the unit's own directory beats the prefix directory.
+# The same name: the earlier unit directory (/etc) wins even over the unit's own directory in /lib.
 mkdir -p "$root/lib/systemd/system/$svc.service.d"
 printf '[Service]\nExecStart=\nExecStart=/opt/bb -insight=:9200\n' > "$root/lib/systemd/system/$svc.service.d/all.conf"
-eq 'insight: own directory masks the same name in a prefix directory' "$(insight_effective "$svc" 3001 0 "$root" | cut -d'|' -f1)" 9200
+eq 'insight: /etc prefix directory masks the same name in the /lib own directory' "$(insight_effective "$svc" 3001 0 "$root" | cut -d'|' -f1)" 9100
+# systemd lists directories one unit directory at a time (own name, then dash prefixes), then the
+# type directory per unit directory (dropin.c unit_file_find_dropin_paths); the first with a name wins.
+win() { insight_effective "$svc" 3001 0 "$root" | cut -d'|' -f1; }
+wr() { mkdir -p "${1%/*}"; printf '[Service]\nExecStart=\nExecStart=/opt/bb -insight=:%s\n' "$2" > "$1"; }
+new_root prec
+wr "$root/usr/lib/systemd/system/$svc.service.d/x.conf" 9401
+wr "$root/etc/systemd/system/blockbook-.service.d/x.conf" 9402
+eq 'prec: /etc prefix dir beats /usr/lib own dir (unit directory first)' "$(win)" 9402
+wr "$root/etc/systemd/system/$svc.service.d/x.conf" 9403
+eq 'prec: same unit directory: own dir beats prefix dir' "$(win)" 9403
+rm -rf -- "$root/etc/systemd/system/$svc.service.d" "$root/etc/systemd/system/blockbook-.service.d"
+wr "$root/etc/systemd/system/service.d/x.conf" 9404
+eq 'prec: /usr/lib own dir beats /etc service.d (type dir last)' "$(win)" 9401
+rm -rf -- "$root/usr/lib/systemd/system/$svc.service.d"
+wr "$root/usr/lib/systemd/system/blockbook-.service.d/x.conf" 9405
+eq 'prec: /usr/lib prefix dir beats /etc service.d' "$(win)" 9405
+rm -rf -- "$root/usr/lib/systemd/system/blockbook-.service.d"
+eq 'prec: service.d is used when it is the only one' "$(win)" 9404
+new_root prec2
+wr "$root/run/systemd/generator/$svc.service.d/x.conf" 9411
+wr "$root/etc/systemd/system/blockbook-.service.d/x.conf" 9412
+eq 'prec: /etc prefix dir beats /run/systemd/generator own dir' "$(win)" 9412
+wr "$root/run/systemd/transient/$svc.service.d/x.conf" 9413
+eq 'prec: transient own dir beats /etc prefix dir' "$(win)" 9413
+wr "$root/etc/systemd/system.control/service.d/x.conf" 9414
+eq 'prec: system.control service.d still loses to a name dir elsewhere' "$(win)" 9413
 new_root runctl
 for d in run/systemd/system.control run/systemd/transient run/systemd/system run/systemd/generator etc/systemd/system.control; do
     mkdir -p "$root/$d/$svc.service.d"
@@ -195,11 +250,19 @@ if unit_sets_exec_start "$f"; then bad 'exec_start: comment and ExecStartPre are
 
 insight_env_file=$work/default.env
 printf 'BLOCKBOOK_INSIGHT_HOST=10.0.0.1\n' > "$insight_env_file"
+new_root envs-pkg
 new_root envs
 dd=$root/etc/systemd/system/$svc.service.d
 mkdir -p "$dd" "$root/etc/bb"
 printf '[Service]\nExecStart=\nExecStart=/opt/bb -insight=${BLOCKBOOK_INSIGHT_HOST}:9876\n' > "$dd/10-exec.conf"
-eq 'env: unit sets nothing, default env file' "$(insight_host_setting "$svc" 0 "$root")" "10.0.0.1|$insight_env_file"
+eq 'env: kept drop-in uses the variable, nothing sets it, no EnvironmentFile: empty, refused' \
+    "$(insight_host_setting "$svc" 0 "$root" | cut -d'|' -f1)" ''
+if insight_host_setting "$svc" 0 "$root" | grep -qF "add EnvironmentFile=$insight_env_file to the override"; then ok 'env: the refusal tells the operator what to add'; else bad 'env: the refusal tells the operator what to add'; fi
+eq 'env: package unit only (no host files kept) reads the default env file' "$(insight_host_setting "$svc" 0 "$work/envs-pkg")" "10.0.0.1|$insight_env_file"
+mkdir -p "$root${insight_env_file%/*}"; cp "$insight_env_file" "$root$insight_env_file"
+printf '[Service]\nEnvironmentFile=-%s\n' "$insight_env_file" > "$dd/05-default.conf"
+eq 'env: a kept file naming the default env file reads it' "$(insight_host_setting "$svc" 0 "$root")" "10.0.0.1|$insight_env_file (EnvironmentFile= in $dd/05-default.conf)"
+rm -f -- "$dd/05-default.conf" "$root$insight_env_file"
 printf '[Service]\nEnvironment="BLOCKBOOK_INSIGHT_HOST=10.0.0.4" "OTHER=x"\n' > "$dd/20-env.conf"
 eq 'env: quoted Environment= in a drop-in' "$(insight_host_setting "$svc" 0 "$root")" "10.0.0.4|Environment= in $dd/20-env.conf"
 printf '[Service]\nEnvironment=BLOCKBOOK_INSIGHT_HOST=10.0.0.5\n' > "$dd/30-env.conf"
@@ -208,13 +271,29 @@ printf 'BLOCKBOOK_INSIGHT_HOST="10.0.0.9"\n' > "$root/etc/bb/custom.env"
 printf '[Service]\nEnvironmentFile=-/etc/bb/custom.env\nEnvironmentFile=-/etc/bb/missing.env\n' > "$dd/15-file.conf"
 eq 'env: EnvironmentFile= overrides Environment=' "$(insight_host_setting "$svc" 0 "$root")" "10.0.0.9|/etc/bb/custom.env (EnvironmentFile= in $dd/15-file.conf)"
 printf '[Service]\nEnvironmentFile=\nEnvironment=\n' > "$dd/90-reset.conf"
-eq 'env: empty settings clear them, default env file' "$(insight_host_setting "$svc" 0 "$root" | cut -d'|' -f2)" "$insight_env_file"
+eq 'env: empty settings clear them: nothing sets it, refused' "$(insight_host_setting "$svc" 0 "$root" | cut -d'|' -f1)" ''
 rm -f -- "$dd/90-reset.conf"
 printf '[Service]\nEnvironment=BLOCKBOOK_INSIGHT_HOST=\n' > "$dd/30-env.conf"
 rm -f -- "$dd/15-file.conf"
 eq 'env: an empty assignment is an empty value' "$(insight_host_setting "$svc" 0 "$root")" "|Environment= in $dd/30-env.conf"
 eq 'env: --use-package-unit reads the default env file' "$(insight_host_setting "$svc" 1 "$root")" "10.0.0.1|$insight_env_file"
 if insight_host_check '' "Environment= in $dd/30-env.conf" cfg.json 9876 2>/dev/null; then bad 'env: empty value is refused'; else ok 'env: empty value is refused'; fi
+
+# cpu_check with an unmapped extension warns (never a silent pass) and still checks the mapped ones.
+udeb=$work/unk.deb
+printf 'flags\t\t: fpu avx2\n' > "$work/cpuinfo-avx2"
+printf 'flags\t\t: fpu sse2\n' > "$work/cpuinfo-sse2"
+printf 'rocksdb-isa 1\nflags=-march=native \nThe following options are target specific:\n  -mavx2   [enabled]\n  -mfuturext   [enabled]\n' > "$udeb.isa"
+rc=0; out=$(cpu_check "$udeb" "$work/cpuinfo-avx2") || rc=$?
+eq 'cpu: unmapped extension: mapped ones met passes' "$rc" 0
+if [[ $out == *'unknown extension(s) -mfuturext'*'CPU check cannot confirm'* ]]; then ok 'cpu: unmapped extension is warned about'; else bad "cpu: unmapped extension is warned about ($out)"; fi
+if [[ $out == *'any x86-64 CPU runs it'* ]]; then bad 'cpu: unmapped extension is not called portable'; else ok 'cpu: unmapped extension is not called portable'; fi
+rc=0; out=$(cpu_check "$udeb" "$work/cpuinfo-sse2") || rc=$?
+eq 'cpu: unmapped extension: a missing mapped one still fails' "$rc" 1
+printf 'rocksdb-isa 1\nflags=-march=native \nThe following options are target specific:\n  -mfuturext   [enabled]\n' > "$udeb.isa"
+rc=0; out=$(cpu_check "$udeb" "$work/cpuinfo-sse2") || rc=$?
+eq 'cpu: only unmapped extensions: warning, not a failure' "$rc" 0
+if [[ $out == *'unknown extension(s) -mfuturext'* && $out != *'any x86-64 CPU runs it'* ]]; then ok 'cpu: only unmapped extensions: warned, not called portable'; else bad "cpu: only unmapped extensions: warned, not called portable ($out)"; fi
 
 # ---- rollback: running means a steady MainPID and NRestarts --------------------------------
 
@@ -252,8 +331,8 @@ The following options are target specific:
   -m64                                  [enabled]
   -mavx                                 [disabled]
   -msse2                                [enabled]'
-eq 'isa record: native' "$(isa_record_parse <<<"$native_rec")" '-march=native|abm aes avx avx2 bmi1 bmi2 fma popcnt sse4_2'
-eq 'isa record: portable needs nothing' "$(isa_record_parse <<<"$portable_rec")" '|'
+eq 'isa record: native' "$(isa_record_parse <<<"$native_rec")" '-march=native|abm aes avx avx2 bmi1 bmi2 fma popcnt sse4_2|'
+eq 'isa record: portable needs nothing' "$(isa_record_parse <<<"$portable_rec")" '||'
 for junk in '' 'march=native
 requires=avx avx2' 'rocksdb-isa 1
 flags=-march=native'; do

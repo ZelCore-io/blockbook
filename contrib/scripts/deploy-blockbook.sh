@@ -357,7 +357,7 @@ unit_dirs=(/etc/systemd/system.control /run/systemd/system.control /run/systemd/
            /run/systemd/generator.late)
 
 # unit_dropin_dirs SERVICE: the drop-in directory names systemd reads for SERVICE.service, most
-# specific first: SERVICE.service.d, one per dash prefix (blockbook-.service.d for blockbook-zero),
+# specific first (unit_files orders them across unit directories): SERVICE.service.d, one per dash prefix (blockbook-.service.d for blockbook-zero),
 # then service.d (systemd 243+). The prefix and type directories apply to other units too.
 unit_dropin_dirs() {
     local n=$1
@@ -370,23 +370,35 @@ unit_dropin_dirs() {
 }
 
 # unit_files SERVICE [ROOT]: print "fragment PATH" for the unit file systemd loads and then
-# "dropin PATH" for each *.conf drop-in in the order systemd applies them (sorted by file name; for
-# the same name, the more specific directory and then the earlier unit directory wins, as
-# systemd's dropin.c lists them). ROOT prefixes every path (tests).
+# "dropin PATH" for each *.conf drop-in in the order systemd applies them (sorted by file name).
+# Which file wins when several directories hold the same name follows systemd's
+# unit_file_find_dropin_paths() (src/shared/dropin.c) and conf_files_list_strv()
+# (src/basic/conf-files.c): the directory list is built one unit directory at a time, in the load
+# path order of unit_dirs, taking for each the unit's own SERVICE.service.d and then its dash
+# prefixes (blockbook-zero-.service.d, blockbook-.service.d), and only after all of those the
+# type directory service.d for each unit directory; the first directory that has a name wins
+# (files_add() skips a name already seen). So a file in /etc/systemd/system/blockbook-.service.d
+# beats the same name in /usr/lib/systemd/system/SERVICE.service.d, and any prefix directory
+# beats service.d everywhere. ROOT prefixes every path (tests).
 unit_files() {
     local svc=$1 root=${2:-} d dd f name seen=' '
+    local -a dds=() tiers=()
     for d in "${unit_dirs[@]}"; do
         if [[ -f $root$d/$svc.service ]]; then echo "fragment $root$d/$svc.service"; break; fi
     done
-    for dd in $(unit_dropin_dirs "$svc"); do
-        for d in "${unit_dirs[@]}"; do
-            for f in "$root$d/$dd"/*.conf; do
-                [[ -f $f ]] || continue
-                name=${f##*/}
-                [[ $seen == *" $name "* ]] && continue
-                seen+="$name "
-                printf '%s\t%s\n' "$name" "$f"
-            done
+    while IFS= read -r dd; do dds+=("$dd"); done < <(unit_dropin_dirs "$svc")
+    # Tier 1: per unit directory, own name then dash prefixes; tier 2: service.d per unit directory.
+    for d in "${unit_dirs[@]}"; do
+        for dd in "${dds[@]:0:${#dds[@]}-1}"; do tiers+=("$d/$dd"); done
+    done
+    for d in "${unit_dirs[@]}"; do tiers+=("$d/${dds[${#dds[@]}-1]}"); done
+    for dd in "${tiers[@]}"; do
+        for f in "$root$dd"/*.conf; do
+            [[ -f $f ]] || continue
+            name=${f##*/}
+            [[ $seen == *" $name "* ]] && continue
+            seen+="$name "
+            printf '%s\t%s\n' "$name" "$f"
         done
     done | LC_ALL=C sort -t $'\t' -k1,1 | cut -f2- | sed 's/^/dropin /'
 }
@@ -551,13 +563,19 @@ unit_env_events() {
 # the unit and drop-in files on disk: EnvironmentFile= files override Environment= (systemd.exec(5)),
 # the last assignment or file that sets it wins, an empty Environment= or EnvironmentFile= clears
 # the earlier ones, and a '-' marks an optional file. Falls back to the default env file
-# ($insight_env_file) when the unit does not set the variable, or with --use-package-unit (the
-# package unit reads that file). ROOT prefixes every path (tests).
+# ($insight_env_file) only when systemd reads it: with --use-package-unit, when no host unit or
+# drop-in is kept (the package unit names it in EnvironmentFile=), or when a kept file names it in
+# EnvironmentFile=. A kept host unit or drop-in that uses the variable but never sets it or names
+# that file leaves it unset in systemd (Blockbook would get -insight=:PORT and bind every
+# interface), so the value is then empty and the caller refuses. ROOT prefixes every path (tests).
 insight_host_setting() {
-    local svc=$1 usepkg=$2 root=${3:-} kind a b val='' where='' p
+    local svc=$1 usepkg=$2 root=${3:-} kind a b val='' where='' p host_kept=0 named=0
     local -a files=() envfiles=()
     if (( ! usepkg )); then
-        while read -r kind a; do files+=("$a"); done < <(unit_files "$svc" "$root")
+        while read -r kind a; do
+            files+=("$a")
+            if [[ $kind == dropin ]] || ! unit_in_package_dir "$a" "$root"; then host_kept=1; fi
+        done < <(unit_files "$svc" "$root")
     fi
     if (( ${#files[@]} )); then
         while IFS=$'\037' read -r kind a b; do
@@ -570,12 +588,17 @@ insight_host_setting() {
         done < <(unit_env_events "${files[@]}")
         for a in ${envfiles[@]+"${envfiles[@]}"}; do
             p=${a%%$'\037'*}; p=${p#-}
+            [[ $p == "$insight_env_file" ]] && named=1
             if grep -Eq '^[[:space:]]*BLOCKBOOK_INSIGHT_HOST[[:space:]]*=' "$root$p" 2>/dev/null; then
                 val=$(insight_env_value "$root$p")
                 where="$p (EnvironmentFile= in ${a#*$'\037'})"
             fi
         done
         if [[ -n $where ]]; then printf '%s|%s\n' "$val" "$where"; return 0; fi
+        if (( host_kept && ! named )); then
+            printf '|%s\n' "the kept unit files of $svc (they use \${BLOCKBOOK_INSIGHT_HOST} but nothing sets it, and none has EnvironmentFile=$insight_env_file, so systemd does not read that file; add EnvironmentFile=$insight_env_file to the override)"
+            return 0
+        fi
     fi
     printf '%s|%s\n' "$(insight_env_value "$insight_env_file")" "$insight_env_file"
 }
@@ -601,20 +624,58 @@ isa_march() {
     printf '%s\n' "$m"
 }
 
-# isa_from_gcc: read `gcc -Q --help=target -march=X` on stdin and print the enabled instruction
-# set extensions beyond baseline x86-64 as /proc/cpuinfo flag names, space separated and sorted.
-isa_from_gcc() {
-    awk '
+# isa_gcc MODE: read `gcc -Q --help=target -march=X` on stdin; every "-mNAME [enabled]" line is one
+# of three kinds. Known ISA extensions map to the /proc/cpuinfo flag of arch/x86/include/asm/
+# cpufeatures.h (kernel names: sse3 is pni, bmi is bmi1, lzcnt is abm, sha is sha_ni, avx512vnni is
+# avx512_vnni, ...). Options that are baseline x86-64 (mmx, sse, sse2, fxsr, 64-bit) or ABI and
+# tuning switches that name no instruction set (red-zone, ieee-fp, vzeroupper, ...) are ignored.
+# Anything else enabled is an extension this map does not know: it never passes silently. MODE
+# "known" prints the cpuinfo names, MODE "unknown" prints the unmapped gcc names (as -mNAME);
+# both space separated and sorted.
+isa_gcc() {
+    awk -v mode="$1" '
         BEGIN {
-            n = split("sse3:pni ssse3:ssse3 sse4.1:sse4_1 sse4.2:sse4_2 popcnt:popcnt pclmul:pclmulqdq " \
-                      "aes:aes avx:avx avx2:avx2 fma:fma f16c:f16c bmi:bmi1 bmi2:bmi2 lzcnt:abm " \
-                      "movbe:movbe adx:adx sha:sha_ni avx512f:avx512f avx512cd:avx512cd " \
-                      "avx512bw:avx512bw avx512dq:avx512dq avx512vl:avx512vl", t, " ")
+            n = split("sse3:pni ssse3:ssse3 sse4.1:sse4_1 sse4.2:sse4_2 crc32:sse4_2 popcnt:popcnt " \
+                      "pclmul:pclmulqdq aes:aes avx:avx avx2:avx2 fma:fma f16c:f16c bmi:bmi1 bmi2:bmi2 " \
+                      "lzcnt:abm abm:abm movbe:movbe adx:adx sha:sha_ni cx16:cx16 sahf:lahf_lm " \
+                      "prfchw:3dnowprefetch rdrnd:rdrand rdseed:rdseed fsgsbase:fsgsbase xsave:xsave " \
+                      "xsaveopt:xsaveopt xsavec:xsavec xsaves:xsaves clflushopt:clflushopt clwb:clwb " \
+                      "clzero:clzero vaes:vaes vpclmulqdq:vpclmulqdq gfni:gfni " \
+                      "avx512f:avx512f avx512cd:avx512cd avx512bw:avx512bw avx512dq:avx512dq " \
+                      "avx512vl:avx512vl avx512ifma:avx512ifma avx512vbmi:avx512vbmi " \
+                      "avx512vbmi2:avx512_vbmi2 avx512vnni:avx512_vnni avx512bitalg:avx512_bitalg " \
+                      "avx512vpopcntdq:avx512_vpopcntdq avx512bf16:avx512_bf16 avx512fp16:avx512_fp16 " \
+                      "avx512vp2intersect:avx512_vp2intersect avx512er:avx512er avx512pf:avx512pf " \
+                      "avx5124fmaps:avx512_4fmaps avx5124vnniw:avx512_4vnniw avxvnni:avx_vnni " \
+                      "avxifma:avx_ifma avxvnniint8:avx_vnni_int8 avxneconvert:avx_ne_convert " \
+                      "avxvnniint16:avx_vnni_int16 sha512:sha512 sm3:sm3 sm4:sm4 amx-tile:amx_tile " \
+                      "amx-int8:amx_int8 amx-bf16:amx_bf16 amx-fp16:amx_fp16 movdiri:movdiri " \
+                      "movdir64b:movdir64b waitpkg:waitpkg cldemote:cldemote serialize:serialize " \
+                      "tsxldtrk:tsxldtrk uintr:uintr hreset:hreset enqcmd:enqcmd invpcid:invpcid " \
+                      "rtm:rtm hle:hle pconfig:pconfig wbnoinvd:wbnoinvd rdpid:rdpid pku:pku sgx:sgx " \
+                      "prefetchi:prefetchi raoint:raoint cmpccxadd:cmpccxadd sse4a:sse4a xop:xop " \
+                      "fma4:fma4 tbm:tbm lwp:lwp", t, " ")
             for (i = 1; i <= n; i++) { split(t[i], kv, ":"); map[kv[1]] = kv[2] }
+            n = split("64 mmx sse sse2 sse4 fxsr 80387 128bit-long-double long-double-80 hard-float " \
+                      "fancy-math-387 fp-ret-in-387 ieee-fp glibc align-stringops push-args red-zone " \
+                      "stv tls-direct-seg-refs vzeroupper", t, " ")
+            for (i = 1; i <= n; i++) skip[t[i]] = 1
         }
-        $NF == "[enabled]" && $1 ~ /^-m/ { o = substr($1, 3); if (o in map) print map[o] }' |
-        LC_ALL=C sort -u | paste -sd' ' -
+        $NF == "[enabled]" && $1 ~ /^-m/ {
+            o = substr($1, 3)
+            if (o in map) known[map[o]] = 1
+            else if (!(o in skip)) unknown["-m" o] = 1
+        }
+        END {
+            if (mode == "known") for (k in known) print k
+            else for (k in unknown) print k
+        }' | LC_ALL=C sort -u | paste -sd' ' -
 }
+
+# isa_from_gcc: the enabled instruction set extensions beyond baseline x86-64, as /proc/cpuinfo
+# flag names. isa_unknown_from_gcc: the enabled ones isa_gcc has no mapping for (gcc names).
+isa_from_gcc() { isa_gcc known; }
+isa_unknown_from_gcc() { isa_gcc unknown; }
 
 # isa_cpu_flags: read /proc/cpuinfo on stdin and print the flags of the first CPU.
 isa_cpu_flags() { awk -F: '$1 ~ /^flags[ \t]*$/ { sub(/^[ \t]+/, "", $2); print $2; exit }'; }
@@ -629,8 +690,9 @@ isa_missing() {
 # isa_record_parse: read an ISA record (written by build/docker/bin/Dockerfile: a
 # "rocksdb-isa 1" line, "flags=<RocksDB's -m flags>", then gcc -Q --help=target for those flags on
 # the CPU that compiled RocksDB) on stdin and print "FLAGS|REQUIRES", REQUIRES being the enabled
-# extensions as /proc/cpuinfo names (empty for a portable build). Fails when the input is not such
-# a record, so a missing or foreign file never passes the check.
+# extensions as /proc/cpuinfo names (empty for a portable build), plus UNKNOWN, the enabled ones
+# isa_gcc cannot map, as "FLAGS|REQUIRES|UNKNOWN". Fails when the input is not such a record, so a
+# missing or foreign file never passes the check.
 isa_record_parse() {
     local first flags rest
     IFS= read -r first || return 1
@@ -640,7 +702,7 @@ isa_record_parse() {
     flags=${flags#flags=}; flags=${flags%"${flags##*[! ]}"}
     rest=$(cat)
     [[ $rest == *'[enabled]'* ]] || return 1
-    printf '%s|%s\n' "$flags" "$(isa_from_gcc <<<"$rest")"
+    printf '%s|%s|%s\n' "$flags" "$(isa_from_gcc <<<"$rest")" "$(isa_unknown_from_gcc <<<"$rest")"
 }
 
 # cpu_check DEB [CPUINFO]: return 1 with the reason in cpu_msg when this CPU (CPUINFO, default
@@ -648,7 +710,7 @@ isa_record_parse() {
 # only warns: the requirement is unknown, and is never reported as met.
 cpu_msg=''
 cpu_check() {
-    local deb_file=$1 cpuinfo=${2:-/proc/cpuinfo} line flags march req missing
+    local deb_file=$1 cpuinfo=${2:-/proc/cpuinfo} line flags march req unknown missing
     cpu_msg=''
     if [[ ! -f $deb_file.isa ]] || ! line=$(isa_record_parse < "$deb_file.isa"); then
         log "Warning: ${deb_file##*/}: required instruction sets unknown (image predates ISA recording, or no valid $deb_file.isa next to the package); CPU check skipped. Rebuild the image with PORTABLE=1 NO_CACHE=true (make build-images PORTABLE=1 NO_CACHE=true), or rebuild it to record them, and build the package again."
@@ -656,17 +718,23 @@ cpu_check() {
     fi
     flags=${line%%|*}
     req=${line#*|}
+    unknown=${req#*|}
+    req=${req%%|*}
     march=$(isa_march "$flags")
-    if [[ -z $req ]]; then
+    if [[ -n $unknown ]]; then
+        log "Warning: ${deb_file##*/}: unknown extension(s) $unknown (enabled for RocksDB, recorded in $deb_file.isa): CPU check cannot confirm this CPU has them; if it lacks one, Blockbook dies with SIGILL. Check with 'grep -m1 flags /proc/cpuinfo', or rebuild the image portable (make build-images PORTABLE=1 NO_CACHE=true)."
+    fi
+    if [[ -z $req && -z $unknown ]]; then
         log "CPU: RocksDB in ${deb_file##*/} was built portable (flags '${flags:-none}' enable nothing beyond x86-64; recorded in $deb_file.isa); any x86-64 CPU runs it"
         return 0
     fi
+    [[ -n $req ]] || return 0
     missing=$(isa_missing "$req" "$(isa_cpu_flags < "$cpuinfo")")
     if [[ -n $missing ]]; then
         cpu_msg="CPU lacks $missing, which ${deb_file##*/} needs (RocksDB compiled with ${march:+-march=$march, }flags '$flags' on a CPU with $req; recorded in $deb_file.isa). Blockbook would die with SIGILL (invalid opcode). Rebuild the build image portable (make build-images PORTABLE=1 NO_CACHE=true) and build the package again. Nothing was stopped or installed."
         return 1
     fi
-    log "CPU: has every instruction set the package needs ($req; RocksDB flags '$flags', recorded in $deb_file.isa)"
+    log "CPU: has every instruction set the package needs that the check can confirm ($req; RocksDB flags '$flags', recorded in $deb_file.isa)"
 }
 
 # svc_stable SAMPLE...: each SAMPLE is "SECONDS STATE MAINPID NRESTARTS" from one poll, oldest
