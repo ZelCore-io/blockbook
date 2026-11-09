@@ -78,6 +78,34 @@ merging a fork contribution. Superseded PR runs are cancelled on both lines.
 
 ## Release identity and promotion
 
+### Version scheme
+
+The fork carries its own version so it never collides with an
+[upstream](https://github.com/trezor/blockbook) release or package version. The format
+is `<upstream base>+zelcore.<N>`, for example `0.6.0+zelcore.1`. `<upstream base>` is
+the `MAJOR.MINOR.PATCH` upstream version the fork is built on, and `N` is a positive
+integer with no leading zero. `configs/environ.json` is the only place the version is
+set. Debian packages (`blockbook-<coin>_<version>_amd64.deb`), the changelog of each
+package and the `version` reported by `/api/` (`blockbook.version`) all carry the
+full string, suffix included. `contrib/scripts/test-build-deb-version.sh` and
+`TestEnvironVersionIsForkVersion` in `build/tools` check the format and that the
+build script keeps the suffix.
+
+- Increment `N` by one for every new release of the same upstream base, and never
+  reuse an `N`. A correction is a new `N` on a new tag.
+- When an upstream sync moves the base (for example from `0.6.0` to `0.6.1`), the
+  next release is `<new base>+zelcore.1`; `N` resets to 1 on the new base.
+- Debian ordering is `0.5.0 < 0.6.0 < 0.6.0+zelcore.1 < 0.6.0+zelcore.2 < 0.6.1`
+  (the `+` part sorts after the bare base and before the next upstream version), so
+  an install over an older 0.5.0 or 0.6.0 build is a normal upgrade. Do not use `~`,
+  which sorts below the bare base, and do not use a `-N` suffix, which Debian reads
+  as a packaging revision (the build script strips a revision when it derives the
+  binary version).
+- The release tag is `zelcore-v` plus the version, `zelcore-v0.6.0+zelcore.1`, so
+  `git tag -a "zelcore-v$(jq -r .version configs/environ.json)"` names it
+  one-to-one. `+` is a legal character in a git ref and matches the `zelcore-v*`
+  tag ruleset.
+
 Create a `zelcore-v*` tag only after review and qualification of the exact source
 revision. Matching tags are immutable after creation: prohibit updates and
 deletion with no bypass actors, while permitting initial creation. If a release

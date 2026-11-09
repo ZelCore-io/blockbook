@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"text/template"
 
 	"github.com/trezor/blockbook/common"
 )
+
+var forkVersionRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+\+zelcore\.[1-9][0-9]*$`)
 
 func TestResolveBuildEnvDefaultsToDev(t *testing.T) {
 	t.Setenv(buildEnvVar, "")
@@ -1015,5 +1018,28 @@ func TestElectrumHTTPServiceConfiguration(t *testing.T) {
 				t.Fatalf("service has %q: %s", tc.absent, service)
 			}
 		})
+	}
+}
+
+// The fork must never ship a version that equals an upstream trezor/blockbook version, so
+// configs/environ.json carries "<upstream base>+zelcore.<N>" (see docs/fork-release-policy.md).
+func TestEnvironVersionIsForkVersion(t *testing.T) {
+	config, err := LoadConfig(filepath.Join("..", "..", "configs"), "bitcoin_signet")
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if !forkVersionRE.MatchString(config.Env.Version) {
+		t.Fatalf("configs/environ.json version %q must match %s", config.Env.Version, forkVersionRE)
+	}
+
+	templ := config.ParseTemplate()
+	templ = template.Must(templ.ParseFiles(filepath.Join("..", "templates", "blockbook", "debian", "changelog")))
+	var out bytes.Buffer
+	if err := templ.ExecuteTemplate(&out, "main", config); err != nil {
+		t.Fatalf("ExecuteTemplate() error = %v", err)
+	}
+	want := "blockbook (" + config.Env.Version + ") unstable; urgency=medium"
+	if !strings.HasPrefix(out.String(), want) {
+		t.Fatalf("rendered changelog does not start with %q:\n%s", want, out.String())
 	}
 }

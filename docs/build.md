@@ -173,6 +173,8 @@ and revision both defined in coin definition file in *backend.version* and *back
 **blockbook versioning**
 
 Blockbook versioning is much simpler. There is only one version defined in *configs/environ.json*.
+In this fork it has the form `<upstream base>+zelcore.<N>` (for example `0.6.0+zelcore.1`), see
+[fork release policy](fork-release-policy.md#version-scheme).
 
 ### Back-end building
 

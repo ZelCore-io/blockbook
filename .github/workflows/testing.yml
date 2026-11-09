@@ -148,3 +148,8 @@ jobs:
         # Stdlib-only unit tests for the build/deploy plan scripts; without
         # this step a regression in .github/scripts ships with green CI.
         run: python3 -m unittest discover -s .github/scripts -p '*_test.py'
+
+      - name: Check fork version scheme
+        # <upstream base>+zelcore.<N> in configs/environ.json, kept by the deb build script,
+        # ordered correctly by dpkg (ubuntu-latest has dpkg).
+        run: contrib/scripts/test-build-deb-version.sh
