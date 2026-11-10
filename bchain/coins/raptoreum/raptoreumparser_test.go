@@ -138,9 +138,10 @@ func TestRaptoreum_ParseTxFromJson(t *testing.T) {
 	}{
 		// Output 0 is a P2PKH script followed by OP_ASSET_ID (0xbc) and the
 		// asset transfer; its RTM value is 0. Its descriptor is the whole
-		// script, as ElectrumX indexes it, so it is not an address of the owner.
+		// script, as ElectrumX indexes it (checked below), so the P2PKH
+		// recipient raptoreumd reports is shown but not searchable.
 		{"mint-asset-type10", "tx_ccc31c7a.json", mintTxid, 1, []int64{0, 499999929000},
-			[][]string{{}, {"RCFEV1U8e4QsM3dvcjmiL9zBjha387Q6uo"}}, []bool{false, true}},
+			[][]string{{"REpMfK38r8XTDd8FLeLafKMptxbh9wa4E9"}, {"RCFEV1U8e4QsM3dvcjmiL9zBjha387Q6uo"}}, []bool{false, true}},
 		{"future-type7", "tx_1366dc99.json", futureTxid, 2, []int64{108359256859490},
 			[][]string{{"RHMagXBeMGna229N3sNuLY3Uh8WumEKe1X"}}, []bool{true}},
 	}
@@ -177,6 +178,73 @@ func TestRaptoreum_ParseTxFromJson(t *testing.T) {
 				if !reflect.DeepEqual(addrs, tt.addresses[i]) || searchable != tt.searchable[i] {
 					t.Errorf("vout %d addresses = %v (searchable %v), want %v (%v)", i, addrs, searchable, tt.addresses[i], tt.searchable[i])
 				}
+			}
+		})
+	}
+}
+
+// TestRaptoreum_AssetTransferOutputScripts covers the display of addresses for
+// asset transfer scripts and the scripts which must not be taken for one.
+func TestRaptoreum_AssetTransferOutputScripts(t *testing.T) {
+	parser := rtmParser()
+	const (
+		hash     = "3cbd85e082c23c8835c13515437e0ac4d5700dd6"
+		assetTx  = "76a914" + hash + "88ac" + "bc" + "4c05" + "52746d4030"
+		plain    = "76a914" + hash + "88ac"
+		addr     = "REpMfK38r8XTDd8FLeLafKMptxbh9wa4E9"
+		opReturn = "6a0b68656c6c6f20776f726c64"
+	)
+	tests := []struct {
+		name       string
+		script     string
+		addresses  []string
+		searchable bool
+	}{
+		{"asset-transfer", assetTx, []string{addr}, false},
+		{"plain-p2pkh", plain, []string{addr}, true},
+		// OP_ASSET_ID without any asset data
+		{"asset-id-without-data", plain + "bc", nil, false},
+		// truncated inside the P2PKH part
+		{"truncated-p2pkh", "76a914" + hash[:30] + "bc4c0100", nil, false},
+		// wrong push length (0x13) before the hash
+		{"bad-push", "76a913" + hash[:38] + "88acbc4c0100", nil, false},
+		// OP_CHECKSIGVERIFY instead of OP_CHECKSIG
+		{"bad-last-opcode", "76a914" + hash + "88adbc4c0100", nil, false},
+		// OP_ASSET_ID not directly after the P2PKH part
+		{"asset-id-not-adjacent", plain + "51bc4c0100", nil, false},
+		// a different opcode after the P2PKH part
+		{"other-opcode-after-p2pkh", plain + "bd4c0100", nil, false},
+		// an asset script must start with the P2PKH part
+		{"asset-id-only", "bc4c0100", nil, false},
+		{"op-return", opReturn, []string{"OP_RETURN (hello world)"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			script, err := hex.DecodeString(tt.script)
+			if err != nil {
+				t.Fatal(err)
+			}
+			addrs, searchable, err := parser.GetAddressesFromAddrDesc(script)
+			if err != nil {
+				// malformed scripts may be refused, which also shows no address
+				if len(tt.addresses) != 0 {
+					t.Fatal(err)
+				}
+				return
+			}
+			if len(addrs) == 0 {
+				addrs = nil
+			}
+			if !reflect.DeepEqual(addrs, tt.addresses) || searchable != tt.searchable {
+				t.Errorf("addresses = %v (searchable %v), want %v (%v)", addrs, searchable, tt.addresses, tt.searchable)
+			}
+			// the descriptor of an output is always its whole script
+			desc, err := parser.GetAddrDescFromVout(&bchain.Vout{ScriptPubKey: bchain.ScriptPubKey{Hex: tt.script}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(desc, script) {
+				t.Errorf("descriptor = %x, want the whole script %s", desc, tt.script)
 			}
 		})
 	}
