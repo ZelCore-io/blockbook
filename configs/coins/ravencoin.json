@@ -57,7 +57,7 @@
     "insight_binding_template": "${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookInsight}}",
     "insight_ui": true,
     "explorer_url": "",
-    "additional_params": "",
+    "additional_params": "-enablesubnewtx",
     "block_chain": {
       "parse": true,
       "mempool_workers": 8,

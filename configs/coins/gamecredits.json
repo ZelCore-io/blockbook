@@ -50,7 +50,7 @@
     "internal_binding_template": ":{{.Ports.BlockbookInternal}}",
     "public_binding_template": ":{{.Ports.BlockbookPublic}}",
     "explorer_url": "https://gamecredits.network",
-    "additional_params": "",
+    "additional_params": "-enablesubnewtx",
     "block_chain": {
       "parse": true,
       "mempool_workers": 8,

@@ -45,7 +45,7 @@
         "public_binding_template": ":{{.Ports.BlockbookPublic}}",
         "insight_binding_template": "${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookInsight}}",
         "explorer_url": "",
-        "additional_params": "-resyncindexperiod=50000 -resyncmempoolperiod=3000",
+        "additional_params": "-resyncindexperiod=50000 -resyncmempoolperiod=3000 -enablesubnewtx",
         "block_chain": {
             "parse": true,
             "mempool_workers": 4,
