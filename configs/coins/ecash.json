@@ -49,7 +49,7 @@
         "internal_binding_template": ":{{.Ports.BlockbookInternal}}",
         "public_binding_template": ":{{.Ports.BlockbookPublic}}",
         "explorer_url": "",
-        "additional_params": "",
+        "additional_params": "-enablesubnewtx",
         "block_chain": {
             "parse": true,
             "subversion": "/Bitcoin ABC:0.27.3(EB32.0)/",

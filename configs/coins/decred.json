@@ -50,7 +50,7 @@
     "internal_binding_template": ":{{.Ports.BlockbookInternal}}",
     "public_binding_template": ":{{.Ports.BlockbookPublic}}",
     "explorer_url": "https://dcrdata.decred.org/",
-    "additional_params": "-resyncindexperiod=300111 -resyncmempoolperiod=60111",
+    "additional_params": "-resyncindexperiod=300111 -resyncmempoolperiod=60111 -enablesubnewtx",
     "block_chain": {
       "parse": true,
       "subversion":"/Decred dcrd:1.7.5",

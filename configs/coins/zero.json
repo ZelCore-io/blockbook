@@ -56,7 +56,7 @@
     "insight_binding_template": "${BLOCKBOOK_INSIGHT_HOST}:{{.Ports.BlockbookInsight}}",
     "insight_ui": true,
     "explorer_url": "",
-    "additional_params": "-resyncindexperiod=60017 -resyncmempoolperiod=10000",
+    "additional_params": "-resyncindexperiod=60017 -resyncmempoolperiod=10000 -enablesubnewtx",
     "block_chain": {
       "parse": true,
       "mempool_workers": 4,
